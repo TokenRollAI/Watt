@@ -17,11 +17,11 @@ Watt 项目稳定文档的索引。启动阅读顺序见 [startup.md](startup.md
 
 ### architecture/ —— 执行流、所有权边界、不变量成因
 
-- [architecture/execution-model.md](architecture/execution-model.md)：五 fabric、执行模型 5 决策、调度器三件套、runtime 自研执行形状、预算防护、直连会话路径。
+- [architecture/execution-model.md](architecture/execution-model.md)：五 fabric、执行模型 5 决策、调度器三件套、runtime 自研执行形状、预算防护、直连会话路径（`apps/agent-gateway`）、多 agent 编排 Worker（`apps/research-team`，已改为 Manager 产 PlanScript + Script Runner 确定性重放形态）、Workers 出口需带 key 的搜索后端与 QuickJS WASM 需部署时预编译两条平台约束。
 
 ### guides/ —— 可重复工作流
 
-- （暂空：项目尚处实现起步期，无已固化的可重复工作流。见 [memory/doc-gaps.md](memory/doc-gaps.md)。）
+- [guides/next-phase-handoff.md](guides/next-phase-handoff.md)：实现阶段里程碑路线图（M1–M4）、模块依赖图与并行分工规约、决策边界。M1 五包已完成。
 
 ### reference/ —— 稳定查表事实与契约
 
@@ -42,6 +42,9 @@ Watt 项目稳定文档的索引。启动阅读顺序见 [startup.md](startup.md
 | 为什么 DO 不能 await 模型调用 | must/core-invariants.md → architecture/execution-model.md |
 | PlanScript 如何执行 / 重放 / 计量 | architecture/execution-model.md |
 | Run Coordinator / Script Runner / Dispatcher 各管什么 | architecture/execution-model.md |
+| 多 subagent 调研团队如何编排（Manager 产 PlanScript + 确定性重放）/ 为何搜索后端要带 key | architecture/execution-model.md（多 agent 编排 Worker 一节） |
+| QuickJS WASM 在 Cloudflare Workers 怎么加载（部署时预编译 / setQuickJSVariant 注入） | architecture/execution-model.md（QuickJS 平台约束一节）；指针：`packages/plan-script/src/sandbox.ts`、`apps/research-team/src/driver.ts` |
+| 下一步做什么 / 里程碑路线与分工 | guides/next-phase-handoff.md |
 | 某个 ID 的语法 / schema 字段 / Host 函数签名 | reference/protocol-contracts.md（完整规范在 `docs/protocol-v1.md`） |
 | V1 不做什么 | overview/project-overview.md |
 | 某个决策的理由与弃用候选 | memory/decisions/ |

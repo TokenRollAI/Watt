@@ -12,6 +12,7 @@
 - 涉及架构设计、调度、执行流 → [architecture/execution-model.md](architecture/execution-model.md)
 - 涉及 `packages/protocol` 的 schema / ID / 契约 → [reference/protocol-contracts.md](reference/protocol-contracts.md)
 - 需要项目边界与 V1 范围 → [overview/project-overview.md](overview/project-overview.md)
+- 想知道下一步做什么 / 里程碑分工 → [guides/next-phase-handoff.md](guides/next-phase-handoff.md)
 - 想知道"为什么这样定" → [memory/decisions/](memory/decisions/)
 
 完整文档地图见 [index.md](index.md)。

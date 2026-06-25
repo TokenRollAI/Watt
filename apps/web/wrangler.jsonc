@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watt-web",
+  "account_id": "0cb9b897010bc426cd8bf33d8c052d11",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "RESEARCH_TEAM_URL": "https://watt-research-team.shuaiqijianhao.workers.dev"
+  }
+}

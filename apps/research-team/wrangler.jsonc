@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watt-research-team",
+  "account_id": "0cb9b897010bc426cd8bf33d8c052d11",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // DEEPSEEK_API_KEY 走 `wrangler secret put`，不入仓库。
+  "vars": {
+    "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+    "MODEL_ID": "deepseek/deepseek-chat"
+  }
+}
