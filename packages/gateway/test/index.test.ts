@@ -32,19 +32,21 @@ describe('GET /healthz', () => {
 });
 
 describe('POST /channels/:channelId/inbound', () => {
-  it('returns 501 with a bare WattError body (placeholder)', async () => {
+  it('returns 404 bare WattError for an unknown channel (real inbound endpoint)', async () => {
+    // Phase 2：占位已替换为真实端点；未配置的 channel → 404 not_found（见 http/inbound.ts）。
+    // 全链集成用例在 integration-event-flow.test.ts。
     const res = await SELF.fetch('https://gateway.test/channels/feishu-main/inbound', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hello: 'world' }),
     });
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(404);
     const body = (await res.json()) as {
       code: string;
       message: string;
       retryable: boolean;
     };
-    expect(body.code).toBe('unavailable');
+    expect(body.code).toBe('not_found');
     expect(typeof body.message).toBe('string');
     expect(body.message.length).toBeGreaterThan(0);
     expect(body.retryable).toBe(false);

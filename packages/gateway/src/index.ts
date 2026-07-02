@@ -6,6 +6,7 @@ import pkg from '../package.json' with { type: 'json' };
 import type { Bindings } from './env.ts';
 import { defaultConsumerDeps, handleQueue } from './event/consumer.ts';
 import type { AuthVars } from './http/auth.ts';
+import { inboundRoutes } from './http/inbound.ts';
 import { oauthRoutes } from './http/oauth.ts';
 import { platformRoutes } from './http/routes.ts';
 
@@ -32,34 +33,23 @@ app.get('/healthz', (c) => {
 });
 
 /**
- * POST /channels/:channelId/inbound — 通用入站占位。
- * 飞书走 WebSocket push 型不经此入口（DOD §2）；此处仅为通用 webhook
- * ChannelAdapter 保留，Phase 2（Event Gateway）实现。
+ * POST /channels/:channelId/inbound — 通用 webhook 入站（Phase 2 / Event Gateway）。
+ * 无认证（验签即认证，§2.1）；飞书走 WebSocket push 型不经此入口。实现见 http/inbound.ts。
+ * 显式注册在规范树占位与认证中间件之前（此路径不经 platform 认证）。
  */
-app.post('/channels/:channelId/inbound', (c) => {
-  // 未实现占位规范（Proto §0.2 补充 + §11.3 传输绑定）：501 + 裸 WattError body，
-  // code 'unavailable'、retryable false；7 码不扩容，无信封。
-  const body: WattError = {
-    code: 'unavailable',
-    message:
-      'Inbound channel ingress is not implemented yet (Phase 2 / Event Gateway). ' +
-      'Feishu uses WebSocket push and does not use this endpoint.',
-    retryable: false,
-  };
-  return c.json(body, 501);
-});
+app.route('/', inboundRoutes());
 
 /**
- * 规范树占位（§11.3a）：这些子树在宪法里声明存在，但 Phase 1 尚未落地对应模块。
+ * 规范树占位（§11.3a）：这些子树在宪法里声明存在，但对应模块尚未落地。
  * 显式注册在业务路由之前、且**不经认证中间件**（未实现的路径认证无意义，501 优先于 401）——
  * 否则 `/htbp/platform/*` 会先被 platformRoutes 的认证中间件拦成 401。
  * 命中 → 501 unavailable、retryable:false（"重试无意义，需等实现落地"，Proto §0.2 补充）。
+ * 注意：`/htbp/platform/event` 已在 Phase 2 落地（platformRoutes），从此表移除。
  */
 const SPEC_TREE_PREFIXES = [
   '/htbp/platform/agent',
   '/htbp/platform/task',
   '/htbp/platform/scheduler',
-  '/htbp/platform/event',
   '/htbp/tools',
   '/htbp/context',
 ];

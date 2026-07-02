@@ -13,8 +13,8 @@
  * action：List/Get → 'read'；Write/Update/Delete → 'manage'（§6.1 action 集合）。
  */
 
-import type { Policy } from '@watt/core';
-import { policySchema } from '@watt/core';
+import type { EventInput, Policy, Subscription } from '@watt/core';
+import { channelConfigSchema, policySchema, subscriptionSchema } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
 import { Authorizer } from '../authz/authorizer.ts';
@@ -23,11 +23,16 @@ import { jwksResponse, loadPlatformKeys } from '../authz/keys.ts';
 import { type ListOptions, PolicyStore } from '../authz/policy-store.ts';
 import { ensureSeedPolicy } from '../authz/seed.ts';
 import type { Bindings } from '../env.ts';
+import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/channel-store.ts';
+import { publish } from '../event/event-bus.ts';
+import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
 import { type AuthVars, authMiddleware } from './auth.ts';
 import { forbiddenResponse, wattErrorResponse } from './errors.ts';
 
 const RES_POLICY = 'platform://policy';
 const RES_AUDIT = 'platform://audit';
+const RES_EVENT = 'platform://event';
+const RES_CHANNEL = 'platform://channel';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -209,5 +214,203 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     return c.json({ items: [] });
   });
 
+  // ── POST /htbp/platform/event → EventStore + EventBus + EventRouter（§2.3/§2.4）─
+  // tool → action（§6.4d）：List/Get/ListSubscriptions=read；Publish/Subscribe/Unsubscribe=manage。
+  // Publish 的出站 event:// write 二次判定在 event-bus publish 内部（对 type=outbound.message）。
+  const EVENT_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    ListSubscriptions: 'read',
+    Publish: 'manage',
+    Subscribe: 'manage',
+    Unsubscribe: 'manage',
+  };
+  app.post('/htbp/platform/event', async (c) => {
+    const claims = c.get('claims');
+    const store = new PolicyStore(c.env.DB_POLICIES);
+    const authorizer = new Authorizer(store);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? EVENT_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_EVENT, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://event');
+    }
+
+    const router = c.env.EVENT_ROUTER.get(c.env.EVENT_ROUTER.idFromName('router'));
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as EventListOptions;
+        const page = await new EventStore(c.env.DB_EVENTS).list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const eventId = args.eventId;
+        if (typeof eventId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'eventId is required', false));
+        }
+        const event = await new EventStore(c.env.DB_EVENTS).get(eventId);
+        if (isWattError(event)) return wattErrorResponse(c, event);
+        return c.json({ event });
+      }
+      case 'Publish': {
+        const parsed = eventInputForPublish(args.event);
+        if (isWattError(parsed)) return wattErrorResponse(c, parsed);
+        const result = await publish(parsed, {
+          store: new EventStore(c.env.DB_EVENTS),
+          authorizer,
+          queue: {
+            async send(event) {
+              await c.env.QUEUE_EVENTS.send(event);
+            },
+          },
+          claims,
+          genId: () => crypto.randomUUID(),
+          now: () => new Date().toISOString(),
+          genTraceId: () => crypto.randomUUID(),
+          traceId: c.req.header('X-Watt-Trace'),
+        });
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json(result);
+      }
+      case 'Subscribe': {
+        const parsed = subscriptionSchema.safeParse(args.subscription);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid subscription: ${parsed.error.message}`, false),
+          );
+        }
+        const out = await router.subscribe(parsed.data as Subscription);
+        return c.json(out);
+      }
+      case 'Unsubscribe': {
+        const id = args.subscriptionId;
+        if (typeof id !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'subscriptionId is required', false),
+          );
+        }
+        await router.unsubscribe(id);
+        return c.json({ deleted: true });
+      }
+      case 'ListSubscriptions': {
+        const opts = (args.opts ?? {}) as { limit?: number };
+        const page = await router.listSubscriptions(opts);
+        return c.json(page);
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/channel → ChannelRegistry 四动词（§2.2）────────
+  // tool → action：List/Get=read；Write/Update=manage。
+  const CHANNEL_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Update: 'manage',
+  };
+  app.post('/htbp/platform/channel', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const channels = new ChannelStore(c.env.DB_EVENTS);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? CHANNEL_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_CHANNEL, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://channel');
+    }
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as ChannelListOptions;
+        const page = await channels.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const channelId = args.channelId;
+        if (typeof channelId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'channelId is required', false),
+          );
+        }
+        const config = await channels.get(channelId);
+        if (isWattError(config)) return wattErrorResponse(c, config);
+        return c.json({ channel: config });
+      }
+      case 'Write': {
+        const parsed = channelConfigSchema.safeParse(args.channel);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid channel config: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await channels.write(parsed.data);
+        return c.json({ channel: written });
+      }
+      case 'Update': {
+        const channelId = args.channelId;
+        if (typeof channelId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'channelId is required', false),
+          );
+        }
+        const result = await channels.update(channelId, (args.patch ?? {}) as never);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ channel: result });
+      }
+    }
+  });
+
   return app;
+}
+
+/** Publish 入参校验：event 必须是 EventInput（不含 id/traceId/occurredAt，平台补齐）。 */
+function eventInputForPublish(raw: unknown): EventInput | WattError {
+  if (typeof raw !== 'object' || raw === null) {
+    return wattError('invalid_argument', 'event is required', false);
+  }
+  return raw as EventInput;
 }

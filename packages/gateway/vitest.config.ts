@@ -34,6 +34,8 @@ export default defineConfig({
           WATT_ADMIN_PRINCIPAL: testKey.adminPrincipal,
           TEST_MIGRATIONS: migrations,
           TEST_MIGRATIONS_EVENTS: migrationsEvents,
+          // webhook adapter 验签 secret（inbound 集成测试；channel settings.verifySecretRef 指向此名）。
+          WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
         },
       },
     }),
