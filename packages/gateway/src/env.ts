@@ -9,6 +9,11 @@
  */
 
 import type { D1Database, Fetcher, KVNamespace, Queue, R2Bucket } from '@cloudflare/workers-types';
+import type { EventRouter } from './event/event-router.ts';
+
+// DurableObjectNamespace 用 tsconfig types 里的 @cloudflare/workers-types ambient global 声明
+// （非 import 版本），与 vitest-pool-workers 的 runInDurableObject 期望的 DurableObjectStub
+// 同源，避免 import 版本与 ambient 版本的 Disposable 分支类型冲突。
 
 export interface Bindings {
   // D1
@@ -24,6 +29,8 @@ export interface Bindings {
   R2_ARTIFACTS: R2Bucket;
   // Queues
   QUEUE_EVENTS: Queue;
+  // Durable Objects（M1 Event Bus 订阅表 + Session Mapper，Phase 2）
+  EVENT_ROUTER: DurableObjectNamespace<EventRouter>;
   // Vectorize（类型宽松，本 Phase 不用）
   VECTORIZE_CONTEXT: Fetcher;
 
