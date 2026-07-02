@@ -1,21 +1,22 @@
 # 当前项目状态快照
 
-> 本文档随轮次更新。最后更新：2026-07-02（Round 7，Phase 1 关门）。
+> 本文档随轮次更新。最后更新：2026-07-02（Round 8，Phase 2 项 1 完成）。
 
 ## 阶段
 
 - 规格真源：`Docs/{Vision,Architecture,Proto,Plugin,Reference}.md` + `DOD.md`（验收）+ `LOOP.md`（执行契约）。
 - Phase 0 已关门（2026-07-02 Round 3）；**Phase 1 已关门**（2026-07-02 Round 7：质量关口 1 BLOCKER + 8 MAJOR + 4 MINOR 全修，DoD 全链重跑，证据 `PROGRESS.md` Round 7）。
-- **当前进度：Phase 2（Event Gateway）**。注意 Queue consumer 绑定在 Phase 2 才做。DOD.md Phase 1 附有"已知跳过清单"（KV 判定缓存 / agent token 数据面 / ~help·~skill 延后 / cursor 分页）。
+- **当前进度：Phase 2（Event Gateway）**，项 1 已勾（Round 8），下一目标项 2。注意 Queue consumer 绑定在 Phase 2 才做。DOD.md Phase 1 附有"已知跳过清单"（KV 判定缓存 / agent token 数据面 / ~help·~skill 延后 / cursor 分页）。
 - Phase 路线：0 骨架/部署管道 → 1 Auth+Event 信封 → 2 Event Gateway → 3 Context Layer → 4 Tool+Agent Runtime → 5 Task+Scheduler → 6 飞书+Observability+Management → 7 六条 E2E 验收（详见 [../overview/project-overview.md](../overview/project-overview.md)）。
 
-## 源码现状（Round 7 后，测试共 181 个：shared 6 + core 95 + cli 33 + gateway 47；core 覆盖率 100% 门禁挂 verify）
+## 源码现状（Round 8 后，测试共 226 个：shared 6 + core 140 + cli 33 + gateway 47；core 覆盖率 100% 门禁挂 verify）
 
 - `packages/shared` — `WattError`（规范 7 码，裸 body 契约见 [../memory/decisions/bare-watterror-body.md](../memory/decisions/bare-watterror-body.md)）。
 - `packages/core`（@watt/core，平台核心纯逻辑，零 Cloudflare 依赖）：
   - `src/authz/` — `authorize()` §6.4c 四步判定（过期优先于 approved 的判定次序有测试锁死）+ subject 匹配 + 工具动作映射（unknown tool 先查 TOOL_ACTIONS 表再鉴权，read-only 得 400 非 403）。
   - `src/event/` — Event 信封（128KB 上限、normalizeEvent、DedupeStore 接口）。
   - `src/auth/` — `jwt.ts`（jose Ed25519 sign/verify/JWKS，密钥注入）+ `device-flow.ts`（RFC 8628 grant 状态机 / token exchange + `normalizeUserCode`（RFC 8628 §6.1 大小写/连字符归一化），存储依赖注入）。均为纯逻辑，测试无需 workerd。
+  - `src/eventbus/` — 订阅匹配与出入站纯逻辑（Round 8 新增）：`types.ts`（Subscription/OutboundMessage zod）、`matches.ts`（订阅匹配：全 AND、缺省跳过、type 后缀通配 `"*"`/`"im.*"` 前缀含点）、`instance-key.ts`（instanceBy 三态 → SpawnRequest.instanceKey 幂等键；session 态缺 session → invalid_argument，doc-gap #23）、`inbound.ts`（processInbound：Verify 失败 permission_denied 拒收短路）、`outbound.ts`（outbound.message → `event://<channel>/<target>` write + authorize() 组合）。
 - `packages/gateway`（Hono Worker）：
   - `src/authz/` — `policy-store.ts`（D1 四动词 + Delete；`list` 遵守 §0.2/§6.2：接受 ListOptions（filter.subject、limit 默认 50 钳 200、非法 filter 键 400），返回 Page `{items}`，cursor 延后见 doc-gap #22）、`identity-mapper.ts`、`seed.ts`（幂等语义：get 不存在才 write / resolvePrincipal 无角色才 bind；isolate 级 Promise once-guard，失败置回 null 可重试，导出 `resetSeedGuardForTests`）、`device-store.ts`（KV 双索引 + expirationTtl + `delete` 双 key：device_code 一次性消费为 best-effort，严格原子需 DO/D1）、`keys.ts`。
   - `src/http/` — `auth.ts`（认证中间件，401 裸 WattError）、`errors.ts`（WattError↔HTTP 映射）、`routes.ts`（JWKS 公开 + `/htbp/platform/{whoami,policy,audit}`）、`oauth.ts`（device flow 三端点）。
