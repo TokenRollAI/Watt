@@ -60,8 +60,8 @@
 
 **DoD**：
 - [x] 单测：订阅匹配（type 通配/AND 语义/session）、instanceBy 三态路由、Verify 失败拒收、出站鉴权点（`event://` write）。（2026-07-02 Round 8：core 新增 45 测试，`pnpm verify` 226 tests 全绿，覆盖率 100% 保持）
-- [ ] 集成：POST 一个 webhook → `watt event tail` 可见规约后的 Event → 订阅的 sink 收到投递；同 dedupeKey 重发 → 返回原 eventId 且只投递一次。
-- [ ] 部署后冒烟：真实 URL 上完成上述闭环。
+- [x] 集成：POST 一个 webhook → `watt event tail` 可见规约后的 Event → 订阅的 sink 收到投递；同 dedupeKey 重发 → 返回原 eventId 且只投递一次。（2026-07-02 Round 9：`packages/gateway/test/integration-event-flow.test.ts` 全链 4 tests 绿；`pnpm verify` 314 tests）
+- [x] 部署后冒烟：真实 URL 上完成上述闭环。（2026-07-02 Round 9：workers.dev 上 channel set → 签名 inbound 200 / 错签名 403 → event tail/get 可见 → webhook.site sink 收到投递 → 同 delivery-id 重发返回原 eventId 且 sink 计数仍为 1）
 
 ## 5. Phase 3 — Context Layer（M3）
 

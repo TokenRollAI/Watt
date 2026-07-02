@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：Phase 1 已关门（2026-07-02 Round 7）→ **Phase 2（Event Gateway）**
-- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 项 1（Round 8）
+- **当前 Phase**：**Phase 2（Event Gateway）三项 DoD 全勾（Round 8/9）**，待关门（质量关口 review + 沉淀）
+- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 全部三项（Round 8 项 1、Round 9 项 2/3）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染，CF 边缘正常——验证/E2E 用 workers.dev URL 或 DoH）
-- **下一目标**：Phase 2 / DoD 项 2（集成：POST webhook → event tail 可见 → sink 收到投递；dedupeKey 幂等）——前置调研报告见 `.llmdoc-tmp/investigations/phase2-event-gateway-integration.md`
+- **下一目标**：Phase 2 关门（重跑全部 DoD + 质量关口 Workflow + llmdoc 沉淀 + Docs 漂移回查，见 guides/phase-gate-workflow.md）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,18 @@
 ---
 
 # 轮次记录
+
+## Round 9 — 2026-07-02
+- 目标：Phase 2 / DoD 项 2（集成全链）+ 项 3（部署冒烟）
+- 动作：按 Round 8 调研报告拆 5 子块，4 个 worker 分两波并行落地：
+  - **子块 B（存储）**：`migrations-events/0001_event_gateway.sql`（events 表 + 5 索引 + channels 表，挂 watt-events 库）；DB_EVENTS 加 migrations_dir；vitest.config/apply-migrations 三件套连带；deploy-all 加第二条 `d1 migrations apply watt-events --remote`；`event-store.ts`（list/get/put/findByDedupeKey，复用 policy-store 的 ListOptions/Page 模式）；`channel-store.ts`（ChannelConfig 四动词，schema 在 core eventbus/types.ts）。
+  - **子块 C（webhook adapter）**：core `eventbus/hmac.ts`（WebCrypto HMAC-SHA256 + 常量时间比较，`sha256=<hex>`）；gateway `event/adapters/webhook.ts`（§2.1 全四义务：Verify 对 bodyRaw 原文验签、Decode 产 webhook.received 义务字段 + dedupeKey 取 `x-watt-delivery-id`、Encode/Send fetch 注入）。
+  - **子块 D（Router DO + consumer）**：`event-router.ts`（首个 DO：原生 DurableObject + ctx.storage.sql，订阅表 + session_instances 粘性映射；RPC subscribe/unsubscribe/listSubscriptions/matchSubscriptions（复用 core matchesSubscription）；单例 idFromName('router')）；`event-bus.ts` publish 服务（authorizeOutbound → normalizeEvent → 128KB 校验 → dedupe 幂等短路 → EventStore.put → Queue send）；`consumer.ts` queue handler（webhook sink fetch 投递 ack/retry；agent/task sink 占位记映射留 Phase 4/5）；wrangler.jsonc 加 durable_objects + DO migrations(new_sqlite_classes) + queues.consumers（无 DLQ，调研已定）；入口改 `export default {fetch, queue}` + export EventRouter。
+  - **子块 E（路由 + CLI + 集成）**：`/htbp/platform/event`（List/Get/Publish/Subscribe/Unsubscribe/ListSubscriptions）与 `/htbp/platform/channel`（四动词）真实路由（501 占位移除，过认证）；`http/inbound.ts` 真实化 `/channels/:id/inbound`（无认证验签即认证：404 未知 channel / 403 disabled / 501 非 webhook adapter / 403 错签名 / secret 走 settings.verifySecretRef 引用）；CLI `watt event tail|get|subs`（tail = 轮询 List + occurredAt 游标 + --once）与 `watt channel list|set`；集成测试 `integration-event-flow.test.ts` 全链。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**314 tests**：shared 6 + core 156 + cli 41 + gateway 111；core 覆盖率 100%：247/247 语句、164/164 分支）；集成测试单独重跑 4 tests 绿（订阅→inbound→留痕→投递→dedupe 幂等 + 403/404/disabled 三向）；**部署冒烟（项 3，workers.dev 真实 URL）**：`pnpm deploy:all` exit 0（watt-events migrations 生效、DO EventRouter + Queue consumer 双绑定上线）→ sign-admin-token --rotate → whoami admin → wrangler secret put WEBHOOK_SECRET_SMOKE → `watt channel set smoke-hook` → 正确 HMAC POST inbound 200 `{eventIds:[c6c07d00]}` / 错签名 403 permission_denied → `watt event tail --once` 与 `event get` 可见规约 Event（type webhook.received、dedupeKey webhook:smoke-hook:smoke-d1）→ Subscribe webhook sink（webhook.site）→ 新事件 inbound → **sink 收到投递（count=1，事件 id 一致）** → 同 delivery-id 重发 → 返回原 eventId 且 **sink count 仍为 1（只投递一次）** → Unsubscribe 清理。
+- 勾选：Phase 2 项 2、项 3 → **Phase 2 三项全勾**（关门待做）。
+- 沉淀：本轮暂记 PROGRESS，待关门轮统一 /llmdoc:update（DO 首次引入的接线知识、HTBP Subscribe 参数形状 `{subscription}`、webhook adapter 实现自由决策——header 名 x-watt-signature / x-watt-delivery-id、session scope 用 channelId、payload parse 失败降级 {text}——均需 recorder 收录 + doc-gaps 候选）。
+- 遗留：Phase 2 关门（质量关口 5 维 review + 对抗核查 + Docs 漂移回查）是下一轮唯一目标；agent/task sink 只存映射/占位（Phase 4/5 接上）；订阅匹配拉全表过滤（量级小，注释已声明扩展点）；`E2E_WEBHOOK_SINK_URL` 仍空（冒烟用了临时 webhook.site，不阻塞）。
 
 ## Round 8 — 2026-07-02
 - 目标：Phase 2 / DoD 项 1（单测：订阅匹配（type 通配/AND 语义/session）、instanceBy 三态路由、Verify 失败拒收、出站鉴权点（`event://` write））
