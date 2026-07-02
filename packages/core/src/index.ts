@@ -1,0 +1,80 @@
+// @watt/core — 平台核心纯逻辑（判定算法 + Event 信封 + JWT 签发/验签）。无 Cloudflare 绑定、无 I/O。
+
+// 设备授权 device flow（§6.5d，RFC 8628 最小子集）
+export {
+  type CreateDeviceGrantInput,
+  type CreateDeviceGrantResult,
+  createDeviceGrant,
+  DEVICE_CODE_EXPIRES_IN_SEC,
+  DEVICE_CODE_INTERVAL_SEC,
+  DEVICE_GRANT_TYPE,
+  type DeviceAuthorizeResponse,
+  type DeviceGrant,
+  type DeviceGrantStatus,
+  evaluateTokenExchange,
+  generateDeviceCode,
+  generateUserCode,
+  isDeviceGrantExpired,
+  type NowSecFn,
+  normalizeUserCode,
+  type OAuthErrorBody,
+  type OAuthErrorCode,
+  oauthError,
+  type RandomBytesFn,
+  type TokenExchangeOutcome,
+} from './auth/device-flow.ts';
+
+// JWT（§6.4a / §6.5a / §11.2）
+export {
+  buildJwks,
+  DEFAULT_AGENT_TOKEN_TTL_SEC,
+  DEFAULT_USER_TOKEN_TTL_SEC,
+  exportJWK,
+  type IssueAgentTokenInput,
+  type IssueUserTokenInput,
+  importPrivateJwk,
+  importPublicJwk,
+  type JWK,
+  JWT_ALG,
+  JWT_CRV,
+  type NowFn,
+  type PrivateKeyMaterial,
+  type PublicKeyMaterial,
+  type SigningKey,
+  signAgentToken,
+  signUserToken,
+  type TokenMeta,
+  type VerifiedToken,
+  verifyToken,
+} from './auth/jwt.ts';
+
+// 判定算法（§6.4c）
+export { type AuthorizeInput, authorize } from './authz/authorize.ts';
+export {
+  actionMatches,
+  grantsCover,
+  policyAllows,
+  resourceMatches,
+  subjectMatches,
+} from './authz/match.ts';
+export { toolActionFor } from './authz/tool-action.ts';
+export {
+  DEFAULT_DEDUPE_WINDOW_MS,
+  type DedupeRecord,
+  type DedupeResult,
+  type DedupeStore,
+  InMemoryDedupeStore,
+  type ResolveDedupeInput,
+  resolveDedupe,
+} from './event/dedupe.ts';
+
+// Event 信封（§1 / §2.3）
+export {
+  EVENT_MAX_BYTES,
+  eventByteSize,
+  type NormalizeDeps,
+  normalizeEvent,
+  validateEventSize,
+} from './event/envelope.ts';
+// 类型层
+export * from './types.ts';

@@ -1,0 +1,9 @@
+{
+  "privateJwk": {
+    "crv": "Ed25519",
+    "d": "Ti84pL59BZUVWP1d4j8CgjiOqGQnUdXFLEhxIwxnZCM",
+    "x": "v3okkiMdRKgkQVn3y_4z1c3SSgiOF6WMR_990uFx8Pw",
+    "kty": "OKP"
+  },
+  "adminPrincipal": "user:test-admin"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "watt-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "watt": "./src/bin.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@watt/core": "workspace:*",
+    "@watt/shared": "workspace:*",
+    "commander": "14.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "vitest": "4.1.9"
+  }
+}

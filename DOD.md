@@ -33,11 +33,11 @@
 **范围**：monorepo（pnpm workspaces）；`watt-gateway` Worker 骨架（health 路由；`POST /channels/<id>/inbound` 通用入站占位——飞书已决定走 WebSocket push 型，webhook 入口仅为通用 ChannelAdapter 保留）；wrangler.jsonc（DO/D1/KV/R2/Queues 绑定占位）；Vitest 配置；`pnpm verify` / `pnpm deploy:all` / `scripts/smoke.ts`；`.dev.vars` 从 `.env` 生成；**CLI 骨架**（`packages/cli`：命令框架、`--json` 全局开关、`WATT_BASE_URL`/`WATT_TOKEN` 读取、`watt status` 打 healthz）。
 
 **DoD**：
-- [ ] `pnpm verify` 本地绿（哪怕只有 1 个占位测试）。
-- [ ] `pnpm deploy:all` 部署到 `CLOUDFLARE_ACCOUNT_ID` 指定账户成功。
-- [ ] `curl ${WATT_BASE_URL}/healthz` 返回 200 + 版本号。
-- [ ] `watt status` 对部署环境返回健康摘要（`--json` 可解析）。
-- [ ] 附B 清单中的资源（D1/KV/R2/Queues）已由脚本创建并绑定（`wrangler d1 list` 等可见）。
+- [x] `pnpm verify` 本地绿（哪怕只有 1 个占位测试）。（2026-07-02 Round 1：typecheck+lint+test 全绿，19 tests passed，证据见 PROGRESS.md）
+- [x] `pnpm deploy:all` 部署到 `CLOUDFLARE_ACCOUNT_ID` 指定账户成功。（2026-07-02 Round 2：exit 0，10 个绑定挂载，workers.dev + custom domain watt.pdjjq.org 双 URL）
+- [x] `curl ${WATT_BASE_URL}/healthz` 返回 200 + 版本号。（2026-07-02 Round 2：`{"ok":true,"version":"0.1.0","service":"watt-gateway"}`；注：watt.pdjjq.org 在 CF 边缘 200（DoH 验证），本机 ISP DNS 污染需 DoH/代理，workers.dev URL 直连可用）
+- [x] `watt status` 对部署环境返回健康摘要（`--json` 可解析）。（2026-07-02 Round 2：exit 0，`--json` 输出 JSON.parse 通过）
+- [x] 附B 清单中的资源（D1/KV/R2/Queues）已由脚本创建并绑定（`wrangler d1 list` 等可见）。（2026-07-02 Round 2：`pnpm provision` 幂等脚本创建 D1×4/KV×2/R2×2/Queue×1/Vectorize×1，各 list 命令均可见，绑定回填 wrangler.jsonc）
 
 ## 3. Phase 1 — Auth 内核 + Event 信封（横切地基）
 
@@ -46,9 +46,11 @@
 **范围**：Event 信封类型 + 尺寸/去重规则（§1）；JWT 签发/验签（Agent/user/plugin token，§6.4/§6.5）；`Authorizer.Check/CheckBatch`（含 chain 衰减、cron 段、§6.4c 四步算法）；`PolicyStore`（D1）+ KV 判定缓存；种子 Policy 引导（§6.5c）；`IdentityMapper`（含 `ResolvePrincipal`）；WattError↔HTTP 映射中间件；**CLI**：`watt login`（device flow）/ `watt whoami` / `watt policy list|add|rm` / `watt audit list`（audit 的数据面 Phase 6 才完整，此处先通接口）。
 
 **DoD**：
-- [ ] 判定算法单测覆盖：principal 允许/拒绝、role 匹配、agent 定义上限、链衰减（含 `cron:<jobId>` 段、job 禁用→deny）、user token 无 agent 段路径、deny 优先——**每条 §6.4c 规则至少一个正/反用例**。
-- [ ] Event 信封单测：>128 KB 拒收、dedupeKey 幂等、`Omit` 字段由平台补齐。
-- [ ] 集成：种子引导后，`watt login` 完成设备授权 → `watt whoami` 显示 `WATT_ADMIN_PRINCIPAL` + role:admin → `watt policy list` 返回种子 Policy；无 token 调用返回 401。
+- [x] 判定算法单测覆盖：principal 允许/拒绝、role 匹配、agent 定义上限、链衰减（含 `cron:<jobId>` 段、job 禁用→deny）、user token 无 agent 段路径、deny 优先——**每条 §6.4c 规则至少一个正/反用例**。（2026-07-02 Round 4：@watt/core 49 个 authz 测试，100% 分支覆盖门禁入 verify，红→绿过程留痕 PROGRESS）
+- [x] Event 信封单测：>128 KB 拒收、dedupeKey 幂等、`Omit` 字段由平台补齐。（2026-07-02 Round 4：16 个 event 测试含 128KB 边界、时间窗、不覆写已有 principal）
+- [x] 集成：种子引导后，`watt login` 完成设备授权 → `watt whoami` 显示 `WATT_ADMIN_PRINCIPAL` + role:admin → `watt policy list` 返回种子 Policy；无 token 调用返回 401。（2026-07-02 Round 6：真实部署环境主 assistant 独立复跑全链——login 轮询→admin approve(user code TZR9KPQD)→credentials 0600→whoami `user:djj`+`admin`→policy list 见 `seed-admin-allow-all`→无 token 401 裸 WattError；证据 PROGRESS Round 6）
+
+**Phase 1 已知跳过清单**（有意延后，非缺陷）：① KV 判定缓存（代码注释已声明，量级需要时再开）；② agent token 数据面（§6.4c 步骤 2/3 的 agentDefs/instances 真实取数）留 Phase 4/5；③ `/htbp/*` 节点的 `~help`/`~skill` 与根渐进发现（§11.3a）统一延后——platform 子树最小 ~help 随 Phase 3 Help DSL parser 落地，通用 ~help 生成归上游 tool-bridge（Phase 4，LOOP §2.1 上游通道）；④ Page<T> 的 cursor 分页（§0.2 可选字段，List 返回 `{items}` 省略之）。
 
 ## 4. Phase 2 — Event Gateway（M1）
 
@@ -123,6 +125,7 @@
 **E2E 通过 = 项目 Done。** 之后进入维护态：新能力（如 §8.1 动态编排）走同样的 Phase→DoD→E2E 流程增量推进。
 
 **已知外部前置（2026-07-02 状态，全部实测）**：
+- **Cloudflare 凭据验证判据**：`CLOUDFLARE_API_TOKEN` 是 Account-scoped token，验证一律用 `wrangler whoami`（或 `GET /accounts`）；**勿用 `/user/tokens/verify`**——该端点是 user-scoped，对 Account API Token 必然误报 `Invalid API Token`，不能作为凭据失效的判据。
 - **模型渠道 ✅**：两条路径均已验证——a) 中转直连 `https://llm.fantacy.live`（Anthropic Messages 格式）；b) **AI Gateway custom provider**：`https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/watt-gateway/custom-tipsy/messages`，`glm-5.2` 与 `minimax-m3` 都通。三个易错点：模型 ID 必须小写；custom provider 调用要加 `custom-` 前缀；该 provider 的 base_url 已含 `/v1`，路径写 `/messages`（写 `/v1/messages` 会 404）。请求头需 `cf-aig-authorization`（gateway 开了 authentication）+ `x-api-key`。M8 规范路径直接用 gateway，Case 5 的 analytics/缓存指标有原生数据源。
 - **飞书 ✅（WebSocket 方案）**：接入方式定为**长连接 push 型**（飞书后台订阅方式选"使用长连接接收事件"，无需 inbound URL）。凭据、机器人激活、测试群（"Tipsy Agent Infra"，chat_id 已入 `.env`）、出站发消息全部实测通过（message_id: `om_x100b6b5c9a5f80acb04e3815478c406`）。实现注意：WSClient 是 Node SDK，不能跑在 Workers isolate——连接进程放 Container，开发期用 `watt channel connect` 在本地承载。webhook 型保留为备用（用户后续可能配置回调 URL）。
 - **E2E-4 双账号对照**：仍按前述决定降级为 API 模拟身份，真实双账号后补。

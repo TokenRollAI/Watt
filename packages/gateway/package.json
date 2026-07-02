@@ -1,0 +1,26 @@
+{
+  "name": "@watt/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@watt/core": "workspace:*",
+    "@watt/shared": "workspace:*",
+    "hono": "4.12.27",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.0",
+    "@cloudflare/workers-types": "4.20260702.1",
+    "vitest": "4.1.9",
+    "wrangler": "4.107.0"
+  }
+}

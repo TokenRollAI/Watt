@@ -1,0 +1,24 @@
+{
+  "name": "@watt/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@watt/shared": "workspace:*",
+    "jose": "^6.2.3",
+    "zod": "4.1.11"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.9",
+    "vitest": "4.1.9"
+  }
+}

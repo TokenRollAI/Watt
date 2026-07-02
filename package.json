@@ -1,0 +1,30 @@
+{
+  "name": "watt",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --stream typecheck && tsc --noEmit -p scripts/tsconfig.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "pnpm -r --stream test",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test",
+    "gen-dev-vars": "node scripts/gen-dev-vars.mjs",
+    "gen-jwt-keys": "node scripts/gen-jwt-keys.mjs",
+    "provision": "node scripts/provision.mjs",
+    "migrate": "pnpm --filter @watt/gateway exec wrangler d1 migrations apply watt-policies --remote",
+    "deploy:all": "node scripts/deploy-all.mjs",
+    "smoke": "node scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2",
+    "@types/node": "24.3.0",
+    "jose": "^6.2.3",
+    "typescript": "5.9.3",
+    "wrangler": "4.107.0"
+  }
+}

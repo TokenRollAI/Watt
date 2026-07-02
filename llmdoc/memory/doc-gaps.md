@@ -1,0 +1,44 @@
+# 文档缺口清单（doc-gaps）
+
+> 归并自 bootstrap 阶段五份调查报告（`.llmdoc-tmp/investigations/`）。优先级：P1 = 应修 Docs（影响执行正确性/会踩坑）；P2 = 应修 Docs（一致性/完整性）；P3 = 记录即可（已知留白/实现自由/非 MVP）。处理后请更新状态列。
+
+## P1 — 需修 Docs（易踩坑）
+
+| # | 缺口 | 位置 | 处置 | 状态 |
+|---|---|---|---|---|
+| 1 | **Flue 归属勘误**：早期讨论误将 Flue 归为 TokenRollAI，实为 `withastro/flue`；`TokenRollAI/flue` 不存在 | Docs/Reference.md | **已核实无需回写**：Reference.md §1 已含勘误声明（"早期讨论曾误将 flue 归于 TokenRollAI…本文以 withastro/flue 为准"）；LOOP/DOD/Architecture 等仅提 "Flue" 名称、无错误归属。决策记录 [decisions/flue-attribution.md](decisions/flue-attribution.md) | ✅ 已解决（2026-07-02 Round 1 间隙核实） |
+| 2 | **Cloudflare 凭据验证判据**：token 为 Account-scoped，`/user/tokens/verify` 会误报 Invalid，脚本用它作健康检查会误判凭据失效阻塞 Phase 0 | DOD.md §9 | **已回写**：DOD §9 已知外部前置补一行"凭据验证判据"。同时在 must/current-state.md 有记录 | ✅ 已回写（2026-07-02） |
+
+## P2 — 需修 Docs（一致性/完整性）
+
+| # | 缺口 | 位置 | 处置 | 状态 |
+|---|---|---|---|---|
+| 3 | Architecture §0 概览表 M10 落地只写 "Pages + Agent 实例"，遗漏第三入口 Watt CLI（正文与附B 均有） | Docs/Architecture.md §0 | 需修 Docs：§0 表补 CLI 或加注"见 M10 正文" | 待回写 |
+| 4 | M10 命令表自称"节选"，无完整 CLI 命令真源；DOD 靠各 Phase 分散验收。核对策略：M10 命令族为上界、DOD 为下界 | Docs/Architecture.md M10 | 需修 Docs：补一份完整 `watt` 命令↔Proto 接口映射表 | 待回写 |
+| 5 | Reference.md 未覆盖 4 个实现层 npm 依赖（`@larksuiteoapi/node-sdk`/`jose`/`Hono`/`zod`）的落点定义 | Docs（实现层文档） | 需修 Docs（实现层补齐；Reference 可不改）。当前落点已记 reference/external-facts.md | 待回写 |
+| 6 | **Proto §6.4c 步骤 2 交叉引用错位**：正文写"见 e"，但 §6.4 只有 a–d；纯人类判定实际在 §6.5b | Docs/Proto.md §6.4c | 需修 Docs：改引用为 §6.5b | ✅ 已回写（2026-07-02：§6.4c 步骤 2 改"见 §6.5b"） |
+| 7 | **cron grants 疑似矛盾**：`CronJob.action` 仅 `script` 分支有 `grants`，但 §6.4c 步骤 3 要求系统段 `cron:<jobId>` 取 `action.grants` 作上限——`kind:'agent'`/`'publish'` 的 job 缺省行为（空集 deny？不追加段？）未定义 | Docs/Proto.md §6.4c / §7 | 需修 Docs：明确非 script 动作的系统段规则 | ✅ 已回写（2026-07-02：§6.4c 步骤 3 明确 script 取 grants、agent/publish 不追加上限、禁用/删除→deny） |
+| 17 | **inbound 占位错误码超出 WattError 7 码**（Round 1，需决策）：gateway 占位曾返回 501 + 规范外 code `unimplemented` | Docs/Proto.md §0.2 / packages/gateway | 已决策：7 码不扩容；Proto §0.2 增补"未认证 401→permission_denied""未实现 501→unavailable"两条规范性补充；实现与测试同步改为 `unavailable`，verify 绿 + 部署后 curl 验证 501/unavailable | ✅ 已解决（2026-07-02） |
+
+## P3 — 仅记录（已知留白/实现自由/非 MVP）
+
+| # | 缺口 | 处置 |
+|---|---|---|
+| 8 | `E2E_FEISHU_ADMIN_OPEN_ID`/`E2E_FEISHU_EMPLOYEE_OPEN_ID` 空——E2E-4 已明确降级为 API 模拟身份，真实双账号后补 | 仅记录（已接受，不阻塞） |
+| 18 | **Event dedupe 时间窗口径不一**（Round 4）：phase1 调研报告建议 5min，实现取 24h（`packages/core/src/event/dedupe.ts`，可注入参数，注释已声明理由：覆盖渠道重投最坏窗）。回写 Docs 时统一口径为 24h 默认 | 待回写 Proto §1（低优先，实现已自声明） |
+| 19 | **Event principal 补齐语义**（Round 4）：Proto 未明确平台补齐 principal 时是否覆盖调用方显式传入值。实现选「已有 principal 不覆写，仅缺省且有 channelUser+resolver 时补齐」（`normalizeEvent`）。需 Docs 定夺 | 待回写 Proto §1 |
+| 20 | **链段实例→def 解析接口缺失**（Round 4）：§6.4c 步骤 3「实例 ID 段取其 agent_def.grants」，但 Proto 未定义由实例 ID 反查 agent_def 的接口（claims 只带当前段）。实现以注入 `instances: Record<instanceId, defName>` map 建模；真实取数应来自 AgentRuntime 实例目录（Phase 4 落地时定） | 待回写 Proto §3/§6（Phase 4 前须收口） |
+| 9 | `OPENAI_API_KEY` 与 `ANTHROPIC_API_KEY` 同 key 复用——E2E-5"新渠道"语义可能不足，待 Phase 6 确认 | 仅记录 |
+| 10 | 非交互 CI 如何拿 CLI token（device flow 需人工） | ✅ 已解决（2026-07-02 Round 6：Proto §6.5d 规范性补充——device flow 三端点 + 非交互用 `WATT_TOKEN` env（sign-admin-token.mjs 离线签发），实现与集成验收已通过） |
+| 11 | `ExpectSpec.schema` 重试次数 N 无默认上下限（Proto §3.2）；`ExpectSpec.timeoutMs` 缺省值与 Workflows 24h 默认/365 天上限关系未收口（§3.4）；Event `dedupeKey` 去重时间窗无基线（§1/§2.3） | 仅记录（实现自由但缺基线，实现时自定并声明） |
+| 12 | `PrincipalRef` 与 `agent:` 前缀边界含糊（§0.3：`agent:<def>` 可作 principal 时与 `agent` 链字段语义重叠未澄清） | 仅记录 |
+| 13 | external harness 走 MCP 的传输绑定半缺口（§3.1 `protocol:'mcp'` vs §11.3/§11.4 未展开 agent-harness 的 MCP 细节） | 仅记录 |
+| 14 | `TaskDefinition`/`checkpoints` 声明来源未定义（checkpoint 名由部署的 Workflows 代码定义，属"代码部署产物"边界外，可能有意留白） | 仅记录 |
+| 15 | `AgentRuntime.Interrupt` 标注为非 MVP（Dashboard 干预预留，六 Case 不依赖）——实现优先级可缓 | 仅记录 |
+| 16 | Proto §8.1 动态编排全节为非规范性预留（additive-only）——后续若见相关代码应视为超前实现 | 仅记录 |
+| 21 | **HTBP 节点 `~help`/`~skill` 延后**（Phase 1 关门，2026-07-02）：Proto §11.3a 要求每个 HTBP 节点响应 `GET ~help`/`~skill`，Phase 1 的 platform 子树未实现。已决策统一延后：platform 子树最小 ~help 随 Phase 3 Help DSL parser 落地；通用 ~help 生成归上游 tool-bridge（Phase 4，见 loop-contract §2.1 上游通道）。未知路径当前由 gateway notFound 兜底返回 404/501 裸 WattError | 仅记录（有意延后，已入 PROGRESS 关门记录） |
+| 22 | **Page<T> cursor 分页延后**（Phase 1 关门，2026-07-02）：§0.2 Page<T> 含可选 cursor；Phase 1 PolicyStore.List 返回 `{items}` 省略 cursor（limit 默认 50、上限 200 已按 §6.2 实现），cursor 分页留待数据量需要时的后续 Phase 补 | 仅记录（cursor 为可选字段，省略不违反契约） |
+
+## 报告事实漂移订正（勿改 Docs）
+
+- `FEISHU_ENCRYPT_KEY`：delivery 报告曾记"空"，followup 复查 `.env` 为非空。以当前 `.env` 为准。

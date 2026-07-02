@@ -1,0 +1,15 @@
+packages:
+  - "packages/*"
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - sharp
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - '@cloudflare/vitest-pool-workers@0.18.0'
+  - '@cloudflare/workers-types@4.20260702.1'
+  - miniflare@4.20260701.0
+  - wrangler@4.107.0

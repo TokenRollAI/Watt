@@ -404,6 +404,8 @@ Case 6 中 Manage Agent 正是先 `ContextProvider.Write` 存脚本、再调用 
 
 ## 附B. 部署拓扑（Cloudflare 资源清单）
 
+> 资源命名约定（2026-07-02 Phase 0 落地）：云上资源统一 `watt-` 前缀（账户内有其他项目资源，避免混淆）；D1 按模块 ownership 拆多库。实际创建由幂等脚本 `pnpm provision` 负责。
+
 ```
 workers:
   watt-gateway        # M1 Ingress + M5 中间件 + Platform API 路由
@@ -423,10 +425,12 @@ containers:
 workflows:
   watt-task           # M7
 storage:
-  R2: context-objects / artifacts        # M3 object provider（S3 兼容）
-  D1: policies / providers / audit / events   # M5 / M8 / M9 / M1 EventStore（留痕，建议 30 天保留期）
-  KV: authz-cache / tenants              # M5
-  Vectorize: context-index               # M3 vector provider
+  R2: watt-context-objects / watt-artifacts            # M3 object provider（S3 兼容）
+  D1: watt-policies / watt-providers / watt-audit / watt-events   # M5 / M8 / M9 / M1 EventStore（留痕，建议 30 天保留期）
+  KV: watt-authz-cache / watt-tenants                  # M5
+  Vectorize: watt-context-index                        # M3 vector provider（1024 维 bge-m3, cosine）
+queues:
+  watt-events                                          # M1 EventBus
 gateway:
   AI Gateway: 全部 LLM 流量               # M8 / M9
 pages:

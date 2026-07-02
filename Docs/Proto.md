@@ -53,6 +53,10 @@ interface WattError {
 
 **WattError ↔ HTTP 映射（规范性）**：`not_found`→404、`permission_denied`→403、`invalid_argument`→400、`conflict`→409、`rate_limited`→429、`unavailable`→503、`internal`→500。`retryable=true` 仅允许出现在 `rate_limited` / `unavailable` / `internal` 上；平台对 429 与 5xx 且 `retryable=true` 的响应按指数退避重试。
 
+**未认证（规范性补充，2026-07-02）**：缺失或无法验签的 token 属**认证层**失败，发生在进入 `Authorizer.Check` 之前——返回 HTTP **401**，body 复用 `WattError` 形状且 `code: 'permission_denied'`、`retryable: false`（7 码集合不为此扩容：403 与 401 的区分由 HTTP 状态码承担，`code` 语义均为"无权访问"）。
+
+**未实现占位（规范性补充，2026-07-02）**：尚未落地的路由/能力返回 HTTP **501**，body 复用 `WattError` 形状且 `code: 'unavailable'`、`retryable: false`（同上原则：7 码不扩容，501/503 的区分由 HTTP 状态码承担；`retryable: false` 表示"重试无意义，需等实现落地"，是 `unavailable` 允许 `retryable=false` 的合法取值）。
+
 ### 0.3 调用上下文（所有接口隐式携带）
 
 每个调用在传输层携带 `CallContext`，实现方**不得**要求调用方在参数中重复传递身份：
@@ -702,8 +706,8 @@ interface IdentityMapper {
 **c) 判定算法（`Check` 的规范展开）**：对 `(resource, action)`——
 
 1. 求 principal 许可：以 `sub` + `roles` 匹配的 Policy 集合判定（deny 优先）；
-2. 求 Agent 定义上限：`AgentRegistry.Get(agent_def).grants` 是否覆盖该 `(resource, action)`；claims 无 `agent_*` 段（纯人类/服务调用，见 e）时跳过 2/3；
-3. 沿 `chain` 逐个链段重复步骤 2：实例 ID 段取其 `agent_def.grants`；**系统段 `cron:<jobId>`** 取 `Scheduler.Get(jobId).action.grants` 作为该环上限（job 已删除或禁用 → 该环视为空集 → deny）；
+2. 求 Agent 定义上限：`AgentRegistry.Get(agent_def).grants` 是否覆盖该 `(resource, action)`；claims 无 `agent_*` 段（纯人类/服务调用，见 §6.5b）时跳过 2/3；
+3. 沿 `chain` 逐个链段重复步骤 2：实例 ID 段取其 `agent_def.grants`；**系统段 `cron:<jobId>`**——job 的 `action.kind === 'script'` 时取 `Scheduler.Get(jobId).action.grants` 作为该环上限；`kind` 为 `'agent'` / `'publish'` 时该段**不追加上限**（这两类动作没有 `grants` 字段，其衰减由后续链段——agent 定义上限、事件出站鉴权——承担）；job 已删除或禁用 → 该环视为空集 → deny；
 4. 全部环节允许才 `allow`——即"只衰减"公式 `P(principal) ∩ P(agent) ∩ P(ancestors)` 的可执行形式。
    实现可用 KV 缓存各段结果；任何 Policy/grants 变更使相关缓存失效。
 
@@ -718,6 +722,14 @@ interface IdentityMapper {
 **b) 判定路径**：user token 调用时 `CallContext.agent` 缺省，判定算法（§6.4c）只执行步骤 1（`P(principal)`），无衰减环节——人类的权限就是 Policy 赋予的权限。
 
 **c) 引导（bootstrap）**：部署时以配置（环境变量/wrangler secret）声明初始 admin principal；平台内置一条种子 Policy `{ subject: "role:admin", resource: "*", actions: ["*"], effect: "allow" }` 并将初始 principal 绑定 `admin` 角色——由此 Case 5/6 的 "admin 登录 Dashboard" 在默认拒绝模型下可完成第一次授权，后续角色/Policy 全部经 `PolicyStore` 管理。
+
+**d) CLI 设备授权（规范性补充，2026-07-02）**：`watt login` 走 **RFC 8628 Device Authorization Grant** 的最小子集，端点挂平台根：
+
+- `POST /oauth/device/authorize` → `{ device_code, user_code, verification_uri, expires_in, interval }`（无认证；user_code 8 位大写字母数字，`expires_in` 默认 600s，`interval` 默认 5s）；
+- 人类在 `verification_uri`（Dashboard 页面；Dashboard 未上线前允许 admin 用已有 token 调 `POST /oauth/device/approve` `{ user_code, principal }` 代替）完成确认；
+- `POST /oauth/token` `{ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code }` → 未确认 `{ error: "authorization_pending" }`（HTTP 400，RFC 8628 §3.5 形状，此处遵循 OAuth 错误形状而非 WattError——OAuth 端点整体在 WattError 契约之外）；已确认 → `{ access_token: <user token>, token_type: "Bearer", expires_in }`。
+- **device_code 一次性使用（2026-07-02 补充，对齐 RFC 8628 单次授权语义）**：换取成功后 grant 即被消费（存储删除），同一 `device_code` 再次请求 → `{ error: "invalid_grant" }`。`user_code` 匹配对大小写鲁棒（服务端归一化为大写再查）。
+- 非交互环境（CI/loop）不走 device flow：直接以 `WATT_TOKEN` 环境变量提供 token（本地用平台私钥离线签发）。
 
 ---
 
