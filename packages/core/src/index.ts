@@ -76,8 +76,14 @@ export {
   normalizeEvent,
   validateEventSize,
 } from './event/envelope.ts';
-
+export {
+  type BodyBytes,
+  computeSignature,
+  timingSafeEqual,
+  verifySignature,
+} from './eventbus/hmac.ts';
 // Event Gateway（§2.1–2.3）：订阅匹配 / instanceBy 路由 / 入站管线 / 出站鉴权
+export { WATT_HMAC } from './eventbus/hmac-constants.ts';
 export {
   type InboundAdapter,
   type InboundResult,
