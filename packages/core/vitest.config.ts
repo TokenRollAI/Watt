@@ -8,7 +8,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       // 只统计被测的纯逻辑源文件；类型/schema/桶文件按需纳入。
-      include: ['src/authz/**/*.ts', 'src/event/**/*.ts', 'src/auth/**/*.ts'],
+      include: [
+        'src/authz/**/*.ts',
+        'src/event/**/*.ts',
+        'src/eventbus/**/*.ts',
+        'src/auth/**/*.ts',
+      ],
       exclude: ['src/**/*.test.ts', 'src/**/index.ts'],
       thresholds: {
         branches: 100,
