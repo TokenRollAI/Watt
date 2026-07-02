@@ -1,7 +1,9 @@
 import { Command } from 'commander';
 import { auditList, formatAuditListHuman } from './audit.ts';
+import { channelList, channelSet, formatChannelListHuman } from './channel.ts';
 import { credentialsPath, type FsDeps, requireBaseUrl, requireToken } from './client.ts';
 import { CliError, readEnv } from './env.ts';
+import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
@@ -197,6 +199,124 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       if (asJson()) out(JSON.stringify(result));
       else out(formatAuditListHuman(result));
     });
+
+  const event = program.command('event').description('Inspect the event stream (Event Gateway)');
+  event
+    .command('tail')
+    .description('Poll EventStore.List and stream events (M10: tail = 轮询 List)')
+    .option('--type <type>', 'filter by event type (exact match)')
+    .option('--channel <channel>', 'filter by source channel')
+    .option('--session <session>', 'filter by session')
+    .option('--since <iso8601>', 'start cursor (inclusive occurredAt)')
+    .option('--interval <seconds>', 'poll interval in seconds', '5')
+    .option('--once', 'fetch a single round then exit', false)
+    .action(
+      async (cmdOpts: {
+        type?: string;
+        channel?: string;
+        session?: string;
+        since?: string;
+        interval: string;
+        once?: boolean;
+      }) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const intervalMs = Math.max(1, Number.parseInt(cmdOpts.interval, 10) || 5) * 1000;
+        const emit = (e: EventView) => out(asJson() ? JSON.stringify(e) : formatEventLine(e));
+        await eventTail(
+          base,
+          token,
+          {
+            type: cmdOpts.type,
+            channel: cmdOpts.channel,
+            session: cmdOpts.session,
+            since: cmdOpts.since,
+          },
+          emit,
+          { fetch: opts.fetch, sleep: opts.sleep, intervalMs, once: cmdOpts.once },
+        );
+      },
+    );
+  event
+    .command('get')
+    .description('Get a single event by id (EventStore.Get)')
+    .argument('<id>', 'event id')
+    .action(async (id: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const ev = await eventGet(base, token, id, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(ev));
+      else out(formatEventLine(ev));
+    });
+  event
+    .command('subs')
+    .description('List subscriptions (EventBus.ListSubscriptions)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const subs = await eventSubs(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(subs));
+      else if (!subs.length) out('(no subscriptions)');
+      else
+        for (const s of subs)
+          out(`${s.id ?? '-'}\t${JSON.stringify(s.match)}\t${JSON.stringify(s.sink)}`);
+    });
+
+  const channel = program
+    .command('channel')
+    .description('Manage channel configuration (ChannelRegistry)');
+  channel
+    .command('list')
+    .description('List channels (ChannelRegistry.List)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const channels = await channelList(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(channels));
+      else out(formatChannelListHuman(channels));
+    });
+  channel
+    .command('set')
+    .description('Create or update a channel (ChannelRegistry.Write, upsert)')
+    .argument('<id>', 'channel id')
+    .requiredOption('--adapter <adapter>', 'channel adapter, e.g. webhook')
+    .option('--settings <json>', 'settings as a JSON object', '{}')
+    .option('--enabled', 'enable the channel', true)
+    .option('--no-enabled', 'disable the channel')
+    .option('--default-agent <agent>', 'default agent definition name')
+    .action(
+      async (
+        id: string,
+        cmdOpts: { adapter: string; settings: string; enabled: boolean; defaultAgent?: string },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        let settings: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(cmdOpts.settings);
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            throw new Error('not an object');
+          }
+          settings = parsed as Record<string, unknown>;
+        } catch {
+          throw new CliError('--settings must be a JSON object', 2);
+        }
+        const written = await channelSet(
+          base,
+          token,
+          {
+            id,
+            adapter: cmdOpts.adapter,
+            enabled: cmdOpts.enabled,
+            settings,
+            defaultAgent: cmdOpts.defaultAgent,
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(written));
+        else out(`Set channel ${written.id}`);
+      },
+    );
 
   let exitCode = 0;
   try {
