@@ -59,7 +59,7 @@
 **范围**：Ingress Worker（`/channels/<id>/inbound` 分发、直接 API Publish）；`EventBus`（Queues + Router DO：订阅表、session 粘性、三类订阅建立规则）；`EventStore`（D1）；`ChannelRegistry`；内置 webhook ChannelAdapter（验签透传 `bodyRaw`）；§1.1 human-in-the-loop 内置路由（task.checkpoint→出站卡片、im.action→Signal 的桩，Task 侧 Phase 5 接上）；**CLI**：`watt event tail|get|subs` / `watt channel list|set`。
 
 **DoD**：
-- [ ] 单测：订阅匹配（type 通配/AND 语义/session）、instanceBy 三态路由、Verify 失败拒收、出站鉴权点（`event://` write）。
+- [x] 单测：订阅匹配（type 通配/AND 语义/session）、instanceBy 三态路由、Verify 失败拒收、出站鉴权点（`event://` write）。（2026-07-02 Round 8：core 新增 45 测试，`pnpm verify` 226 tests 全绿，覆盖率 100% 保持）
 - [ ] 集成：POST 一个 webhook → `watt event tail` 可见规约后的 Event → 订阅的 sink 收到投递；同 dedupeKey 重发 → 返回原 eventId 且只投递一次。
 - [ ] 部署后冒烟：真实 URL 上完成上述闭环。
 

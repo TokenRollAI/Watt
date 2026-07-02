@@ -38,6 +38,7 @@
 | 16 | Proto §8.1 动态编排全节为非规范性预留（additive-only）——后续若见相关代码应视为超前实现 | 仅记录 |
 | 21 | **HTBP 节点 `~help`/`~skill` 延后**（Phase 1 关门，2026-07-02）：Proto §11.3a 要求每个 HTBP 节点响应 `GET ~help`/`~skill`，Phase 1 的 platform 子树未实现。已决策统一延后：platform 子树最小 ~help 随 Phase 3 Help DSL parser 落地；通用 ~help 生成归上游 tool-bridge（Phase 4，见 loop-contract §2.1 上游通道）。未知路径当前由 gateway notFound 兜底返回 404/501 裸 WattError | 仅记录（有意延后，已入 PROGRESS 关门记录） |
 | 22 | **Page<T> cursor 分页延后**（Phase 1 关门，2026-07-02）：§0.2 Page<T> 含可选 cursor；Phase 1 PolicyStore.List 返回 `{items}` 省略 cursor（limit 默认 50、上限 200 已按 §6.2 实现），cursor 分页留待数据量需要时的后续 Phase 补 | 仅记录（cursor 为可选字段，省略不违反契约） |
+| 23 | **instanceBy='session' 但 event.session 缺失行为未定义**（Round 8）：Proto §2.3 未定义该组合。实现取显式 `invalid_argument` 错误、不静默 fallback（`packages/core/src/eventbus/instance-key.ts` 注释声明理由），由订阅建立时保证 session 存在。另两项实现声明：type 通配 `"*"` 全通配合法；`"im.*"` 前缀含点故不匹配裸 `"im"` | 待回写 Proto §2.3（低优先，实现已自声明+测试锁定） |
 
 ## 报告事实漂移订正（勿改 Docs）
 

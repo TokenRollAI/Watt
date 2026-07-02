@@ -5,9 +5,9 @@
 ## 当前状态
 
 - **当前 Phase**：Phase 1 已关门（2026-07-02 Round 7）→ **Phase 2（Event Gateway）**
-- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）
+- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 项 1（Round 8）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染，CF 边缘正常——验证/E2E 用 workers.dev URL 或 DoH）
-- **下一目标**：Phase 2 / DoD 项 1（订阅匹配、instanceBy 路由、Verify 拒收、出站鉴权点单测）
+- **下一目标**：Phase 2 / DoD 项 2（集成：POST webhook → event tail 可见 → sink 收到投递；dedupeKey 幂等）——前置调研报告见 `.llmdoc-tmp/investigations/phase2-event-gateway-integration.md`
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 8 — 2026-07-02
+- 目标：Phase 2 / DoD 项 1（单测：订阅匹配（type 通配/AND 语义/session）、instanceBy 三态路由、Verify 失败拒收、出站鉴权点（`event://` write））
+- 动作：worker 落地 `packages/core/src/eventbus/`（纯逻辑零 Cloudflare 依赖，test-first 分 3 批 commit）：`types.ts`（Subscription/SubscriptionMatch/SubscriptionSink/OutboundMessage zod 层）；`matches.ts`（match 全 AND、缺省字段跳过、type 后缀通配——`"*"` 全通配合法、`"im.*"` 前缀含点不匹配裸 `"im"`）；`instance-key.ts`（singleton→definition 键 / event→event.id 键 / session→definition+session 键，key 即 §3.2 SpawnRequest.instanceKey 幂等键；**session 态缺 event.session → 显式 invalid_argument 不 fallback**，doc-gap #23）；`inbound.ts`（processInbound：Verify false → permission_denied 拒收短路不 Decode；边界止于 Decode，补齐/Publish 留项 2）；`outbound.ts`（outboundAccessRequest：outbound.message → `event://<channel>/<target>` + 'write'，payload 畸形 → invalid_argument；authorizeOutbound 与 §6.4c authorize() 组合）。并行派 investigator 产出项 2/3 前置调研（Queue consumer 接线/Router DO 选型/EventStore schema/webhook adapter/CLI/sink 边界）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` → exit 0（**226 tests**：shared 6 + core 140(+45) + cli 33 + gateway 47；core 覆盖率 100% 保持：Statements 213/213、Branches 148/148）；契约核对：主 assistant 逐文件对照 Proto §2.1/§2.3 原文核读 4 个实现文件，无偏离；无接口面/HTTP 变更故 CLI 不需生长；纯逻辑无部署项。
+- 勾选：Phase 2 项 1。
+- 沉淀：doc-gaps 新增 #23（instanceBy session 缺失行为 + type 通配两项实现声明）；investigator 调研报告落 `.llmdoc-tmp/investigations/phase2-event-gateway-integration.md`（项 2 拆分依据）。
+- 遗留：项 2 依赖较重（Queue consumer 绑定 + Router 订阅存储 + EventStore migrations + 内置 webhook adapter + `/htbp/platform/event` 路由 + `watt event/channel` CLI），大概率拆两轮：先服务端管线（inbound→Publish→Queue consumer→EventStore/投递），再 CLI+集成闭环；deploy-all migrations 步骤硬编码 watt-policies 单库——watt-events 加 migrations 时必须同步扩展（Round 7 遗留注释已标）。
 
 ## Round 7 — 2026-07-02（Phase 1 关门轮）
 - 目标：Phase 1 关门——质量关口确认项全修 + DoD 重跑 + 文档回写
