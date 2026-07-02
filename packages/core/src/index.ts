@@ -76,5 +76,39 @@ export {
   normalizeEvent,
   validateEventSize,
 } from './event/envelope.ts';
+
+// Event Gateway（§2.1–2.3）：订阅匹配 / instanceBy 路由 / 入站管线 / 出站鉴权
+export {
+  type InboundAdapter,
+  type InboundResult,
+  processInbound,
+  type RawInbound,
+} from './eventbus/inbound.ts';
+export { type InstanceKeyResult, resolveInstanceKey } from './eventbus/instance-key.ts';
+export { matchesSubscription } from './eventbus/matches.ts';
+export {
+  authorizeOutbound,
+  type OutboundAccessRequest,
+  type OutboundRequestResult,
+  outboundAccessRequest,
+} from './eventbus/outbound.ts';
+export {
+  type ActionButton,
+  actionButtonSchema,
+  type ChannelConfig,
+  channelConfigSchema,
+  type InstanceBy,
+  instanceBySchema,
+  type MessageContent,
+  messageContentSchema,
+  type OutboundMessage,
+  outboundMessageSchema,
+  type Subscription,
+  type SubscriptionMatch,
+  type SubscriptionSink,
+  subscriptionMatchSchema,
+  subscriptionSchema,
+  subscriptionSinkSchema,
+} from './eventbus/types.ts';
 // 类型层
 export * from './types.ts';
