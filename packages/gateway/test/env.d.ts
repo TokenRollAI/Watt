@@ -11,6 +11,7 @@ declare global {
       WATT_JWT_PRIVATE_JWK: string;
       WATT_ADMIN_PRINCIPAL: string;
       TEST_MIGRATIONS: D1Migration[];
+      TEST_MIGRATIONS_EVENTS: D1Migration[];
     }
   }
 }

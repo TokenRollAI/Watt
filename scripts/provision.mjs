@@ -332,9 +332,12 @@ function bindingsBlock(d1Ids, kvIds, vectorizeReady) {
     lines.push(
       d1Ready
         .map((n) => {
-          // watt-policies 承载 Auth 内核 migrations（Proto §6.2/§6.3）；用 wrangler 原生
-          // d1 migrations 机制，migrations_dir 指向 packages/gateway/migrations（binding 侧相对路径）。
-          const migrations = n === 'watt-policies' ? ', "migrations_dir": "migrations"' : '';
+          // 承载 wrangler 原生 d1 migrations 的库需指定 migrations_dir（binding 侧相对路径）：
+          //   watt-policies -> migrations（Auth 内核，Proto §6.2/§6.3）
+          //   watt-events   -> migrations-events（Event Gateway，Proto §2.4/§2.2）
+          // 新增含 migrations 的库时在此登记，否则重跑 provision 会抹掉 migrations_dir（§14 金标准）。
+          const migrationsDir = D1_MIGRATIONS_DIRS[n];
+          const migrations = migrationsDir ? `, "migrations_dir": "${migrationsDir}"` : '';
           return `    { "binding": "${d1Binding(n)}", "database_name": "${n}", "database_id": "${d1Ids[n]}"${migrations} }`;
         })
         .join(',\n'),
@@ -421,6 +424,11 @@ function writeBindings(d1Ids, kvIds, vectorizeReady) {
 
 // ---- 资源名常量 ------------------------------------------------------------------
 const D1_NAMES = ['watt-policies', 'watt-providers', 'watt-audit', 'watt-events'];
+// 承载 wrangler 原生 d1 migrations 的库 → migrations_dir（bindingsBlock 回填用；见 §14）。
+const D1_MIGRATIONS_DIRS = {
+  'watt-policies': 'migrations',
+  'watt-events': 'migrations-events',
+};
 const KV_AUTHZ_CACHE = 'watt-authz-cache';
 const KV_TENANTS = 'watt-tenants';
 const R2_NAMES = ['watt-context-objects', 'watt-artifacts'];

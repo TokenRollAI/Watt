@@ -55,6 +55,24 @@ steps.push({
   ],
 });
 
+// watt-events：Event Gateway 存储层（EventStore + ChannelRegistry，Proto §2.4/§2.2）。
+// 同 watt-policies 幂等；migrations_dir=migrations-events（wrangler.jsonc DB_EVENTS 绑定）。
+steps.push({
+  name: 'apply D1 migrations (watt-events)',
+  cmd: [
+    'pnpm',
+    '--filter',
+    '@watt/gateway',
+    'exec',
+    'wrangler',
+    'd1',
+    'migrations',
+    'apply',
+    'watt-events',
+    '--remote',
+  ],
+});
+
 steps.push({
   name: 'deploy watt-gateway',
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],

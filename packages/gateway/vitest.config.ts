@@ -19,6 +19,7 @@ const testKey = JSON.parse(readFileSync(testKeyPath, 'utf8')) as {
 };
 
 const migrations = await readD1Migrations(resolve(here, 'migrations'));
+const migrationsEvents = await readD1Migrations(resolve(here, 'migrations-events'));
 
 export default defineConfig({
   test: {
@@ -32,6 +33,7 @@ export default defineConfig({
           WATT_JWT_PRIVATE_JWK: JSON.stringify(testKey.privateJwk),
           WATT_ADMIN_PRINCIPAL: testKey.adminPrincipal,
           TEST_MIGRATIONS: migrations,
+          TEST_MIGRATIONS_EVENTS: migrationsEvents,
         },
       },
     }),
