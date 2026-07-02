@@ -77,10 +77,26 @@
   "queues": {
     "producers": [
       { "binding": "QUEUE_EVENTS", "queue": "watt-events" }
+    ],
+    "consumers": [
+      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3 }
     ]
   },
   "vectorize": [
     { "binding": "VECTORIZE_CONTEXT", "index_name": "watt-context-index" }
   ]
   // <<< provision:bindings <<<
+  ,
+  // Durable Objects（marker 段外——DO 绑定不是 provision 管的 storage 资源，故手写在此，
+  // provision 重跑只覆写 marker 段内内容，不触碰此处）。M1 EventRouter：订阅表 + Session Mapper。
+  "durable_objects": {
+    "bindings": [
+      { "name": "EVENT_ROUTER", "class_name": "EventRouter" }
+    ]
+  },
+  // DO SQLite 迁移（与 D1 的 migrations_dir 是不同概念：此顶层 migrations 键声明 SQLite-backed
+  // DO class）。首次引入 EventRouter class → new_sqlite_classes。
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["EventRouter"] }
+  ]
 }

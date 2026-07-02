@@ -366,6 +366,14 @@ function bindingsBlock(d1Ids, kvIds, vectorizeReady) {
   lines.push('  "queues": {');
   lines.push('    "producers": [');
   lines.push('      { "binding": "QUEUE_EVENTS", "queue": "watt-events" }');
+  lines.push('    ],');
+  // consumer 段（M1 EventBus 分发，Phase 2）：同 Worker 既产又消 watt-events。
+  // 与 producers 同属 queues 对象（JSON 键唯一，故 consumer 配置必须在此生成而非 marker 段外）。
+  // DLQ 暂不配（调研已定，留 Phase 6 可观测轮补）；重试耗尽后消息丢弃。
+  lines.push('    "consumers": [');
+  lines.push(
+    '      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3 }',
+  );
   lines.push('    ]');
   lines.push(vectorizeReady ? '  },' : '  }');
 

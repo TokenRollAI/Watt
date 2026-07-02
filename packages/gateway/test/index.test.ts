@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import app from '../src/index.ts';
+import { app } from '../src/index.ts';
 
 /**
  * Gateway 穿透测试（unit + 第一条 integration：HTTP 进 → 响应出）。

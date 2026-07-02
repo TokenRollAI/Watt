@@ -4,9 +4,15 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import pkg from '../package.json' with { type: 'json' };
 import type { Bindings } from './env.ts';
+import { defaultConsumerDeps, handleQueue } from './event/consumer.ts';
 import type { AuthVars } from './http/auth.ts';
 import { oauthRoutes } from './http/oauth.ts';
 import { platformRoutes } from './http/routes.ts';
+
+// MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types）。
+
+// EventRouter DO（M1 订阅表 + Session Mapper）从入口 export，供 wrangler DO 绑定实例化。
+export { EventRouter } from './event/event-router.ts';
 
 /**
  * watt-gateway Worker。
@@ -109,4 +115,17 @@ app.onError((err, c) => {
   return c.json(body, 500);
 });
 
-export default app;
+/**
+ * Worker 入口导出（§11.3 传输绑定 + §2.3 EventBus consumer）。
+ * - fetch：Hono app（HTTP 面）。
+ * - queue：watt-events 消费分发（consumer.ts）。
+ * app 亦具名导出，供测试在 matcher 构建前挂测试专用路由（§toolchain-pitfalls 24）。
+ */
+export { app };
+
+export default {
+  fetch: app.fetch,
+  async queue(batch: MessageBatch<unknown>, env: Bindings): Promise<void> {
+    await handleQueue(batch, defaultConsumerDeps(env));
+  },
+};
