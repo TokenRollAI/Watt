@@ -19,6 +19,7 @@ import { childEnvWithCfCreds } from './lib/env.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skipProvision = process.argv.includes('--skip-provision');
+const skipDashboard = process.argv.includes('--skip-dashboard');
 
 // fix 5：注入 CF 凭据（缺失即 fail-fast），供 provision + wrangler deploy 复用。
 const childEnv = childEnvWithCfCreds('deploy-all');
@@ -139,6 +140,34 @@ steps.push({
   name: 'deploy watt-gateway',
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
 });
+
+// watt-dashboard（M10 Management）：静态 React SPA 部署到 Cloudflare Pages。可选（--skip-dashboard 跳过）。
+// 先 `pnpm --filter @watt/dashboard build`（Vite → packages/dashboard/dist）再 `wrangler pages deploy`。
+// Pages 项目 watt-dashboard 首次部署时 wrangler 会交互式提示创建——CI/非交互场景须先 `wrangler pages
+//   project create watt-dashboard --production-branch main`（见报告部署待办）。gateway CORS 已放行 *.pages.dev。
+if (!skipDashboard) {
+  steps.push({
+    name: 'build watt-dashboard (Vite static SPA)',
+    cmd: ['pnpm', '--filter', '@watt/dashboard', 'build'],
+  });
+  steps.push({
+    name: 'deploy watt-dashboard (Cloudflare Pages)',
+    cmd: [
+      'pnpm',
+      '--filter',
+      '@watt/dashboard',
+      'exec',
+      'wrangler',
+      'pages',
+      'deploy',
+      'dist',
+      '--project-name',
+      'watt-dashboard',
+    ],
+  });
+} else {
+  console.log('deploy-all: --skip-dashboard set, skipping dashboard build + Pages deploy.');
+}
 
 for (const step of steps) {
   console.log(`\n=== ${step.name} ===`);
