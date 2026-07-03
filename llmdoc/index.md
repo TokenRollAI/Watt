@@ -29,6 +29,7 @@
 - [memory/decisions/resource-naming-and-provision.md](memory/decisions/resource-naming-and-provision.md) — 云资源 `watt-` 前缀、D1 多库拆分、Vectorize 1024 维 bge-m3、`pnpm provision` 幂等方案（2026-07-02 Round 2）。
 - [memory/decisions/bare-watterror-body.md](memory/decisions/bare-watterror-body.md) — 错误 body = 裸 WattError 无信封；401/501 复用 7 码不扩容（2026-07-02 Round 3）。
 - [memory/decisions/auth-implementation.md](memory/decisions/auth-implementation.md) — Phase 1 Auth 选型：Ed25519+jose+JWKS、私钥生命周期与轮换签发模式、device grants 存 KV、OAuth 端点 WattError 豁免边界、CLI 未认证退出码分层、KV 判定缓存跳过（2026-07-02 Round 5/6）。
+- [memory/decisions/model-call-sdk.md](memory/decisions/model-call-sdk.md) — 模型调用 SDK = Vercel AI SDK（ai@6 + @ai-sdk/anthropic@3，锁 v6 对齐 agents peer）；排除 pi SDK（Node-only 跑不进 workerd）；单次 generateText，schema 重试留 llm.ts；workerd 用 createAnthropic 工厂 + baseURL 补 /v1（2026-07-03）。
 - [memory/reflections/2026-07-02-round1-scaffold.md](memory/reflections/2026-07-02-round1-scaffold.md) — Round 1 worker 派发反思：prompt 三件套模板、Reflection Handoff、派发前 proto-map 自查指令契约细节。
 - [memory/reflections/2026-07-02-round7-phase1-gate.md](memory/reflections/2026-07-02-round7-phase1-gate.md) — Round 7 关门轮反思：派发检查清单（filter 名对照 package.json name、跨包契约改动先 grep 全部消费方、文件集预留连带改动报告出口）、独立 mock 掩盖跨包错配、deploy 后旧 isolate 误判、worker 有理偏离评审建议的良性案例。
 - [memory/reflections/2026-07-03-round10-phase2-gate.md](memory/reflections/2026-07-03-round10-phase2-gate.md) — Round 10 关门轮反思：并行 worker 共享工作树的类型契约耦合污染（git worktree 隔离验证自救）、4 维评审裁剪不降质（0 误报）、对抗核查价值=修严重度+补证据链、注释与死测试合谋锁 bug、代理环境 NODE_USE_ENV_PROXY 与 token 1h 有效期。

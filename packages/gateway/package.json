@@ -12,9 +12,11 @@
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.92",
     "@watt/core": "workspace:*",
     "@watt/shared": "workspace:*",
     "agents": "^0.17.3",
+    "ai": "^6.0.219",
     "hono": "4.12.27",
     "jose": "^6.2.3"
   },

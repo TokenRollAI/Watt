@@ -11,6 +11,12 @@
  *   schema 失败重试路径（toolchain-pitfalls §35，@llm 真实调用留 tag 集成测试）。
  *
  * §7 E2E 约定：断言协议事实（schema 合法的 agent.result），不断言 LLM 文本内容。
+ *
+ * 边界声明（LOOP 纪律 4）：本 harness = 单次模型调用 + expect.schema 校验重试（§3.2/§3.4），
+ *   **不是** agentic loop——重试是同一提示携带违规反馈重发，不是多轮工具调用循环。多轮工具调用
+ *   循环到来时（Phase 5+ deep-research 等）必须用成熟框架（Agents SDK AIChatAgent / Claude Agent SDK
+ *   / Flue），禁止在此文件自增 loop 或手拼多轮工具调度。模型调用本身经官方 @anthropic-ai/sdk
+ *   （见 anthropic-caller.ts），不手拼 HTTP。
  */
 
 import {
