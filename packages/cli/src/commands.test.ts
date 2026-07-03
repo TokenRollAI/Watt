@@ -192,6 +192,90 @@ describe('watt audit list', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out.join('\n'))).toEqual({ items: [] });
   });
+
+  it('sends filter args (principal/decision/limit) in the request body', async () => {
+    const calls: {
+      body: { arguments: { opts: { filter: Record<string, string>; limit?: number } } };
+    }[] = [];
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      calls.push({ body: JSON.parse(init.body as string) });
+      return jsonResponse({ items: [] });
+    }) as unknown as typeof globalThis.fetch;
+    const code = await run(
+      ['audit', 'list', '--principal', 'user:bob', '--decision', 'deny', '--limit', '10'],
+      { env: ENV, fetch, stdout: () => {} },
+    );
+    expect(code).toBe(0);
+    const opts = calls[0]?.body.arguments.opts;
+    expect(opts?.filter.principal).toBe('user:bob');
+    expect(opts?.filter.decision).toBe('deny');
+    expect(opts?.limit).toBe(10);
+  });
+
+  it('formats populated records (human) with decision + principal', async () => {
+    const out: string[] = [];
+    const record = {
+      id: 'r1',
+      at: '2026-07-03T10:00:00.000Z',
+      context: { principal: 'user:bob', roles: [], traceId: 't' },
+      resource: 'platform://policy',
+      action: 'manage',
+      decision: 'deny',
+    };
+    const code = await run(['audit', 'list'], {
+      env: ENV,
+      fetch: fixedFetch({ items: [record] }),
+      stdout: (l) => out.push(l),
+    });
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain('DENY');
+    expect(out.join('\n')).toContain('user:bob');
+    expect(out.join('\n')).toContain('platform://policy');
+  });
+});
+
+describe('watt metrics query', () => {
+  it('sends metric + resolved range; prints total (human)', async () => {
+    const calls: {
+      body: { arguments: { query: { metric: string; range: { from: string; to: string } } } };
+    }[] = [];
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      calls.push({ body: JSON.parse(init.body as string) });
+      return jsonResponse({ series: [{ labels: {}, points: [{ t: 'x', v: 465 }] }] });
+    }) as unknown as typeof globalThis.fetch;
+    const out: string[] = [];
+    const code = await run(['metrics', 'query', '--metric', 'tokens', '--range', '7d'], {
+      env: ENV,
+      fetch,
+      stdout: (l) => out.push(l),
+    });
+    expect(code).toBe(0);
+    const q = calls[0]?.body.arguments.query;
+    expect(q?.metric).toBe('tokens');
+    expect(typeof q?.range.from).toBe('string');
+    expect(typeof q?.range.to).toBe('string');
+    expect(out.join('\n')).toContain('465');
+  });
+
+  it('--json emits { series }; --group-by splits into comma dims', async () => {
+    const calls: { body: { arguments: { query: { groupBy?: string[] } } } }[] = [];
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      calls.push({ body: JSON.parse(init.body as string) });
+      return jsonResponse({
+        series: [{ labels: { model: 'glm-5.2' }, points: [{ t: 'x', v: 1 }] }],
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const out: string[] = [];
+    const code = await run(
+      ['--json', 'metrics', 'query', '--metric', 'tokens', '--group-by', 'model,provider'],
+      { env: ENV, fetch, stdout: (l) => out.push(l) },
+    );
+    expect(code).toBe(0);
+    expect(calls[0]?.body.arguments.query.groupBy).toEqual(['model', 'provider']);
+    expect(JSON.parse(out.join('\n'))).toEqual({
+      series: [{ labels: { model: 'glm-5.2' }, points: [{ t: 'x', v: 1 }] }],
+    });
+  });
 });
 
 describe('watt login --approve', () => {

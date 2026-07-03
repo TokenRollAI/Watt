@@ -108,8 +108,9 @@ describe('run() — watt status', () => {
     const code = await run(['--json', 'status'], { stdout: (l) => lines.push(l), fetch });
     delete process.env.WATT_BASE_URL;
     expect(code).toBe(0);
+    // R23：status --json 输出完整 StatusResult（含 raw + 可选 metrics）；无 token 时无 metrics 段。
     const parsed = JSON.parse(lines.join('\n'));
-    expect(parsed).toEqual({ ok: true, version: '0.1.0', service: 'watt-gateway' });
+    expect(parsed.raw).toEqual({ ok: true, version: '0.1.0', service: 'watt-gateway' });
   });
 
   it('exits non-zero when WATT_BASE_URL missing', async () => {
@@ -118,6 +119,31 @@ describe('run() — watt status', () => {
     const code = await run(['status'], { stderr: (l) => errs.push(l) });
     expect(code).toBe(2);
     expect(errs.join('\n')).toContain('WATT_BASE_URL');
+  });
+
+  it('with token: appends live metrics summary (instances/tasks/tokens)', async () => {
+    const lines: string[] = [];
+    // healthz + 3 metrics queries（agent_instances/tasks/tokens）——按调用序返回。
+    let n = 0;
+    const fetch = vi.fn(async (url: string) => {
+      n++;
+      if (String(url).endsWith('/healthz')) {
+        return jsonResponse({ ok: true, version: '0.1.0', service: 'watt-gateway' });
+      }
+      // metrics Query 返回单点 series（每个 metric 给不同值）。
+      const v = n === 2 ? 3 : n === 3 ? 5 : 42;
+      return jsonResponse({ series: [{ labels: {}, points: [{ t: 'x', v }] }] });
+    }) as unknown as typeof globalThis.fetch;
+    process.env.WATT_BASE_URL = 'https://x';
+    process.env.WATT_TOKEN = 'tok';
+    const code = await run(['status'], { stdout: (l) => lines.push(l), fetch });
+    delete process.env.WATT_BASE_URL;
+    delete process.env.WATT_TOKEN;
+    expect(code).toBe(0);
+    const text = lines.join('\n');
+    expect(text).toContain('agent instances');
+    expect(text).toContain('tasks');
+    expect(text).toContain('tokens today');
   });
 });
 

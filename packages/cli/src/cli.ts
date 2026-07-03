@@ -12,7 +12,13 @@ import {
 } from './agent.ts';
 import { auditList, formatAuditListHuman } from './audit.ts';
 import { channelList, channelSet, formatChannelListHuman } from './channel.ts';
-import { credentialsPath, type FsDeps, requireBaseUrl, requireToken } from './client.ts';
+import {
+  credentialsPath,
+  type FsDeps,
+  requireBaseUrl,
+  requireToken,
+  resolveToken,
+} from './client.ts';
 import {
   contextGet,
   contextList,
@@ -35,6 +41,7 @@ import {
 import { CliError, readEnv } from './env.ts';
 import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
+import { formatMetricsHuman, metricsQuery } from './metrics.ts';
 import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
 import {
   formatProviderListHuman,
@@ -207,10 +214,12 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
 
   program
     .command('status')
-    .description('GET <WATT_BASE_URL>/healthz and print a health summary')
+    .description('GET <WATT_BASE_URL>/healthz + live metrics summary (instances/tasks/tokens)')
     .action(async () => {
-      const result = await fetchStatus(env(), { fetch: opts.fetch });
-      if (asJson()) out(JSON.stringify(result.raw));
+      // token 可选：有 token 则附带实时指标汇总（DoD ③），无 token 仅 healthz。
+      const token = resolveToken(env(), credPath, opts.fs);
+      const result = await fetchStatus(env(), { fetch: opts.fetch }, token);
+      if (asJson()) out(JSON.stringify(result));
       else out(formatStatusHuman(result));
     });
 
@@ -347,14 +356,79 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
   const audit = program.command('audit').description('Inspect the audit log');
   audit
     .command('list')
-    .description('List audit records (platform://audit read; Phase 1: interface only)')
-    .action(async () => {
-      const base = requireBaseUrl(env());
-      const token = requireToken(env(), credPath, opts.fs);
-      const result = await auditList(base, token, { fetch: opts.fetch });
-      if (asJson()) out(JSON.stringify(result));
-      else out(formatAuditListHuman(result));
-    });
+    .description('List audit records (platform://audit read; §10 AuditLog.List)')
+    .option('--principal <principal>', 'filter by principal (exact)')
+    .option('--agent <instanceId>', 'filter by agent instance id (exact)')
+    .option('--resource <uri>', 'filter by resource URI (prefix)')
+    .option('--decision <allow|deny>', 'filter by decision')
+    .option('--limit <n>', 'max records (default 50, cap 200)')
+    .action(
+      async (cmdOpts: {
+        principal?: string;
+        agent?: string;
+        resource?: string;
+        decision?: string;
+        limit?: string;
+      }) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const result = await auditList(
+          base,
+          token,
+          {
+            principal: cmdOpts.principal,
+            agent: cmdOpts.agent,
+            resource: cmdOpts.resource,
+            decision: cmdOpts.decision,
+            ...(cmdOpts.limit !== undefined ? { limit: Number(cmdOpts.limit) } : {}),
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(result));
+        else out(formatAuditListHuman(result));
+      },
+    );
+
+  const metrics = program.command('metrics').description('Query platform metrics (§10 Metrics)');
+  metrics
+    .command('query')
+    .description('Query a metric over a time range (tokens/tasks/events/agent_instances/...)')
+    .requiredOption(
+      '--metric <name>',
+      'metric: tokens|cost|cache_hit_rate|agent_instances|tasks|events|tool_calls|authz_denials',
+    )
+    .option('--range <span>', 'relative range: 7d|24h|30m (default 7d)')
+    .option('--from <iso8601>', 'explicit range start (overrides --range with --to)')
+    .option('--to <iso8601>', 'explicit range end')
+    .option('--group-by <dims>', 'comma-separated: provider,model,agent,channel,day,hour')
+    .action(
+      async (cmdOpts: {
+        metric: string;
+        range?: string;
+        from?: string;
+        to?: string;
+        groupBy?: string;
+      }) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const result = await metricsQuery(
+          base,
+          token,
+          {
+            metric: cmdOpts.metric,
+            range: cmdOpts.range,
+            from: cmdOpts.from,
+            to: cmdOpts.to,
+            ...(cmdOpts.groupBy !== undefined
+              ? { groupBy: cmdOpts.groupBy.split(',').map((s) => s.trim()) }
+              : {}),
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(result));
+        else out(formatMetricsHuman(cmdOpts.metric, result));
+      },
+    );
 
   const event = program.command('event').description('Inspect the event stream (Event Gateway)');
   event
