@@ -25,6 +25,7 @@
  *    未来扩 metrics.read 等按同一 Check 门控接线。
  */
 
+import { RpcTarget } from 'cloudflare:workers';
 import {
   authorize,
   type SchedulerCronJob as CronJob,
@@ -97,61 +98,75 @@ export async function runScriptAction(args: RunScriptArgs): Promise<unknown> {
  * 构造 watt binding（§7 能力表）——每次 publish 过 core authorize（cron 链段判定，§6.4c 步骤 3）。
  * authorize 的 cronJobs 索引直接以本 job 播种（claims.chain=[cron:<jobId>]，上限=job.action.grants），
  * 无需外查 Scheduler.Get——本 job 就是链上唯一 cron 段，自足。
+ *
+ * 必须是 RpcTarget（Cap'n Web）：LOADER 的 env 注入跨 isolate 传递——plain object 的闭包函数
+ * 不可 structured-clone（部署冒烟实测 "could not be cloned"），RpcTarget 实例经 RPC stub 代理方法调用。
  */
+class WattBindingRpc extends RpcTarget implements WattScriptBinding {
+  constructor(
+    private readonly env: Bindings,
+    private readonly job: CronJob,
+    private readonly claims: TokenClaims,
+  ) {
+    super();
+  }
+
+  async publish(ev: { type: string; payload?: unknown; session?: string }) {
+    const { env, job, claims } = this;
+    // 出站资源派生：脚本 publish 视为平台事件出站——按 §6.4c 以 event:// 出站面判定。
+    // 最小实现：对 publish 能力做 platform://event 'manage' 的 Check（与平台 event Publish 同权面），
+    //   cron 链段上限=job.action.grants（core authorize 步骤 3 据 cronJobs[jobId] 求该环上限）。
+    const store = new PolicyStore(env.DB_POLICIES);
+    const candidates = await store.resolveCandidatePolicies(claims);
+    const decision = authorize({
+      claims,
+      resource: 'platform://event',
+      action: 'manage',
+      policies: candidates,
+      agentDefs: {},
+      // cron 链段判定：本 job 播种进 cronJobs 索引（chain=[cron:<jobId>]）。
+      cronJobs: { [job.id]: job },
+      instances: {},
+    });
+    if (!decision.allow) {
+      throw wattError(
+        'permission_denied',
+        decision.reason ?? `script publish denied for cron:${job.id}`,
+        false,
+      );
+    }
+    const { Authorizer } = await import('../authz/authorizer.ts');
+    const authorizer = new Authorizer(store);
+    const result = await publish(
+      {
+        source: { kind: 'cron', ref: job.id },
+        type: ev.type,
+        payload: ev.payload,
+        session: ev.session,
+        principal: claims.sub,
+      },
+      {
+        store: new EventStore(env.DB_EVENTS),
+        authorizer,
+        queue: { send: async (event) => void (await env.QUEUE_EVENTS.send(event)) },
+        claims,
+        genId: () => crypto.randomUUID(),
+        now: () => new Date().toISOString(),
+        genTraceId: () => crypto.randomUUID(),
+      },
+    );
+    if ('code' in result) throw new Error(`script publish failed: ${result.message}`);
+    return { eventId: result.eventId };
+  }
+}
+
 function buildWattBinding(
   env: Bindings,
   job: CronJob,
   claims: TokenClaims,
   _grants: Grant[],
 ): WattScriptBinding {
-  return {
-    async publish(ev) {
-      // 出站资源派生：脚本 publish 视为平台事件出站——按 §6.4c 以 event:// 出站面判定。
-      // 最小实现：对 publish 能力做 platform://event 'manage' 的 Check（与平台 event Publish 同权面），
-      //   cron 链段上限=job.action.grants（core authorize 步骤 3 据 cronJobs[jobId] 求该环上限）。
-      const store = new PolicyStore(env.DB_POLICIES);
-      const candidates = await store.resolveCandidatePolicies(claims);
-      const decision = authorize({
-        claims,
-        resource: 'platform://event',
-        action: 'manage',
-        policies: candidates,
-        agentDefs: {},
-        // cron 链段判定：本 job 播种进 cronJobs 索引（chain=[cron:<jobId>]）。
-        cronJobs: { [job.id]: job },
-        instances: {},
-      });
-      if (!decision.allow) {
-        throw wattError(
-          'permission_denied',
-          decision.reason ?? `script publish denied for cron:${job.id}`,
-          false,
-        );
-      }
-      const { Authorizer } = await import('../authz/authorizer.ts');
-      const authorizer = new Authorizer(store);
-      const result = await publish(
-        {
-          source: { kind: 'cron', ref: job.id },
-          type: ev.type,
-          payload: ev.payload,
-          session: ev.session,
-          principal: claims.sub,
-        },
-        {
-          store: new EventStore(env.DB_EVENTS),
-          authorizer,
-          queue: { send: async (event) => void (await env.QUEUE_EVENTS.send(event)) },
-          claims,
-          genId: () => crypto.randomUUID(),
-          now: () => new Date().toISOString(),
-          genTraceId: () => crypto.randomUUID(),
-        },
-      );
-      if ('code' in result) throw new Error(`script publish failed: ${result.message}`);
-      return { eventId: result.eventId };
-    },
-  };
+  return new WattBindingRpc(env, job, claims);
 }
 
 /**
