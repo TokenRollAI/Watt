@@ -4,6 +4,7 @@ import type { AgentDefinition } from '@watt/core';
 import { agentResultEventName } from '@watt/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AgentRegistry } from '../src/agent/agent-registry.ts';
+import { AgentRuntime, defaultRuntimeDeps } from '../src/agent/agent-runtime.ts';
 import { defaultManagerDeps, TaskManager } from '../src/task/task-manager.ts';
 import { TaskStore } from '../src/task/task-store.ts';
 
@@ -116,6 +117,137 @@ describe('auto-delivery-lite: run → waiting_human → signal → resume → do
     });
     expect(res && 'code' in res && res.code).toBe('conflict');
   });
+
+  it('Signal with wrong checkpoint → invalid_argument (mismatch guard)', async () => {
+    const taskId = uniqTask('adl-mismatch');
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'user:alice');
+    await waitForCheckpoint(store, taskId, 'confirm-release');
+
+    // 传错 checkpoint（任务实际等 confirm-release）→ invalid_argument（不静默 sendEvent 到无 waiter 事件名）。
+    const res = await manager.signal(taskId, {
+      checkpoint: 'wrong-checkpoint',
+      decision: 'approve',
+    });
+    expect(res && 'code' in res && res.code).toBe('invalid_argument');
+    // 任务仍卡 waiting_human（未被误恢复）。
+    expect((await store.getInfo(taskId))?.state).toBe('waiting_human');
+
+    // 用正确 checkpoint 收尾（dispose 前让实例正常完成）。
+    await manager.signal(taskId, { checkpoint: 'confirm-release', decision: 'approve' });
+    await instance.waitForStatus('complete');
+  }, 15000);
+});
+
+describe('checkpoint timeout: waitForEvent 超时 → catch 落 failed（§3.4 checkpoint 超时语义）', () => {
+  it('auto-delivery-lite human checkpoint timeout → task failed (not stuck waiting_human)', async () => {
+    const taskId = uniqTask('adl-timeout');
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    // create 前预设：强制 await-release-confirmation 的 waitForEvent 立即超时。
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-release-confirmation' });
+    });
+    await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'user:alice');
+
+    // catch 落库 failed 后 return 失败结果 → 实例干净 complete（非 errored）。
+    await instance.waitForStatus('complete');
+    const info = await store.getInfo(taskId);
+    expect(info?.state).toBe('failed');
+    // pendingCheckpoint 已清（不卡 waiting_human）。
+    const detail = await store.getDetail(taskId);
+    if ('code' in detail) throw new Error('detail not_found');
+    expect(detail.pendingCheckpoint).toBeUndefined();
+  }, 15000);
+
+  it('deep-research human checkpoint timeout → task failed', async () => {
+    const taskId = uniqTask('dr-human-timeout');
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-plan-confirmation' });
+    });
+    await manager.write({ definition: 'deep-research', input: { topic: 'x' }, taskId }, 'user:bob');
+
+    await instance.waitForStatus('complete');
+    expect((await store.getInfo(taskId))?.state).toBe('failed');
+  }, 15000);
+
+  it('deep-research fan-in: one agent-result timeout → research step failed, task still done', async () => {
+    const taskId = uniqTask('dr-fanin-timeout');
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    // 预设：第一个 fan-in waitForEvent（await-research-0）超时；第二个（await-research-1）正常收结果。
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-research-0' });
+    });
+    await manager.write({ definition: 'deep-research', input: { topic: 'x' }, taskId }, 'user:bob');
+
+    await waitForCheckpoint(store, taskId, 'confirm-plan');
+    await manager.signal(taskId, { checkpoint: 'confirm-plan', decision: 'approve' });
+
+    const cids = (await instance.waitForStepResult({
+      name: 'dispatch-research-agents',
+    })) as string[];
+    expect(cids).toHaveLength(2);
+    // 只回送第二个 correlation 的结果（第一个走 forceEventTimeout）。
+    await instance.modify(async (m) => {
+      const cid1 = cids[1];
+      if (cid1 === undefined) throw new Error('missing cid');
+      const type = agentResultEventName(cid1);
+      if (typeof type !== 'string') throw new Error('bad event name');
+      await m.mockEvent({ type, payload: { status: 'result', output: { ok: true } } });
+    });
+
+    await instance.waitForStatus('complete');
+    // fan-in 未因单个超时中断：整体 done；只有一个成功结果计入 count。
+    const output = (await instance.getOutput()) as { count: number };
+    expect(output.count).toBe(1);
+    const detail = await store.getDetail(taskId);
+    if ('code' in detail) throw new Error('detail not_found');
+    expect(detail.state).toBe('done');
+    // research-0 记为 failed step（超时），research-1 为 done。
+    const r0 = detail.steps.find((s) => s.name === 'research-0');
+    const r1 = detail.steps.find((s) => s.name === 'research-1');
+    expect(r0?.state).toBe('failed');
+    expect(r1?.state).toBe('done');
+  }, 15000);
+});
+
+describe('Write atomicity: WATT_TASK.create failure compensates the orphan pending row (§8)', () => {
+  it('deletes the pending row so a same-taskId retry does not hit conflict', async () => {
+    const taskId = uniqTask('write-comp');
+    const store = new TaskStore(env.DB_EVENTS);
+    // 注入一个 WATT_TASK.create 抛错的 env（其余绑定透传），验证补偿删除。
+    const failingEnv = {
+      ...env,
+      WATT_TASK: {
+        create: async () => {
+          throw new Error('workflow create boom');
+        },
+        get: env.WATT_TASK.get.bind(env.WATT_TASK),
+      },
+    } as unknown as typeof env;
+    const manager = new TaskManager({
+      env: failingEnv,
+      genId: () => crypto.randomUUID(),
+      now: () => new Date().toISOString(),
+    });
+
+    const res = await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'u');
+    expect(res && 'code' in res && res.code).toBe('internal');
+    // 孤儿 pending 行已补偿删除 → 同 taskId 可安全重试（不恒 conflict）。
+    expect(await store.getInfo(taskId)).toBeNull();
+  });
 });
 
 describe('Cancel: run → waiting → cancel → terminated (§8 / §3.4 规则 4)', () => {
@@ -136,6 +268,79 @@ describe('Cancel: run → waiting → cancel → terminated (§8 / §3.4 规则 
     expect(cancelled?.state).toBe('cancelled');
     expect(cancelled?.note).toContain('no longer needed');
   }, 15000);
+
+  it('cascades terminate to task-derived agent sub-instances (task:<id># prefix)', async () => {
+    const taskId = uniqTask('cancel-cascade');
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+    const runtime = new AgentRuntime(defaultRuntimeDeps(env));
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    await manager.write({ definition: 'deep-research', input: { topic: 'x' }, taskId }, 'user:bob');
+    // 进 waiting_human → approve → 派发 N 个 task:<id>#research-* 子实例（进 fan-in waiting）。
+    await waitForCheckpoint(store, taskId, 'confirm-plan');
+    await manager.signal(taskId, { checkpoint: 'confirm-plan', decision: 'approve' });
+    await instance.waitForStepResult({ name: 'dispatch-research-agents' });
+
+    // 子实例已登记（listInstances 全列可见前缀 task:<id>#）。
+    const prefix = `task:${taskId}#`;
+    const before = (await runtime.listInstances()).items.filter((i) =>
+      i.instanceId.startsWith(prefix),
+    );
+    expect(before.length).toBeGreaterThan(0);
+
+    const res = await manager.cancel(taskId);
+    expect(res).toBeUndefined();
+    // 级联后：所有 task:<id># 子实例索引 state=terminated（§3.4 规则 4）。
+    const after = (await runtime.listInstances()).items.filter((i) =>
+      i.instanceId.startsWith(prefix),
+    );
+    for (const inst of after) expect(inst.state).toBe('terminated');
+  }, 15000);
+
+  it('done/failed → conflict; repeat cancel on cancelled → idempotent success (§8 terminal guard)', async () => {
+    const store = new TaskStore(env.DB_EVENTS);
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const now = '2026-07-03T00:00:00.000Z';
+
+    // done → conflict（不覆写终态）。
+    const doneId = uniqTask('cancel-done');
+    await store.create({
+      taskId: doneId,
+      definition: 'deep-research',
+      state: 'done',
+      createdBy: 'u',
+      now,
+    });
+    const doneRes = await manager.cancel(doneId);
+    expect(doneRes && 'code' in doneRes && doneRes.code).toBe('conflict');
+    expect((await store.getInfo(doneId))?.state).toBe('done');
+
+    // failed → conflict。
+    const failedId = uniqTask('cancel-failed');
+    await store.create({
+      taskId: failedId,
+      definition: 'deep-research',
+      state: 'failed',
+      createdBy: 'u',
+      now,
+    });
+    const failedRes = await manager.cancel(failedId);
+    expect(failedRes && 'code' in failedRes && failedRes.code).toBe('conflict');
+
+    // cancelled → 幂等成功（无 error）。
+    const cancelledId = uniqTask('cancel-cancelled');
+    await store.create({
+      taskId: cancelledId,
+      definition: 'deep-research',
+      state: 'cancelled',
+      createdBy: 'u',
+      now,
+    });
+    const idemRes = await manager.cancel(cancelledId);
+    expect(idemRes).toBeUndefined();
+    expect((await store.getInfo(cancelledId))?.state).toBe('cancelled');
+  });
 });
 
 describe('deep-research fan-in: waiting → approve → agent results → summarize → done (§3.4 规则 1)', () => {

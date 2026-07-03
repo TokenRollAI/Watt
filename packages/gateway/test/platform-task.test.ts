@@ -1,11 +1,12 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-import { env, SELF } from 'cloudflare:test';
+import { env, introspectWorkflowInstance, SELF } from 'cloudflare:test';
 import type { AgentDefinition } from '@watt/core';
 import { importPrivateJwk, signUserToken, type TokenMeta } from '@watt/core';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AgentRegistry } from '../src/agent/agent-registry.ts';
 import { resetSeedGuardForTests } from '../src/authz/seed.ts';
 import { PLATFORM_KID } from '../src/env.ts';
+import { TaskStore } from '../src/task/task-store.ts';
 import {
   TEST_ADMIN_PRINCIPAL,
   TEST_JWT_AUDIENCE,
@@ -170,6 +171,33 @@ describe('POST /htbp/platform/task — Update / Cancel / Signal (§8)', () => {
     expect(res.status).toBe(409);
     expect(((await res.json()) as { code: string }).code).toBe('conflict');
   });
+
+  it('Signal on a waiting task → { signalled:true } (200, 响应形状真源)', async () => {
+    const token = await signAdmin();
+    const taskId = 'rt-sig-ok';
+    const store = new TaskStore(env.DB_EVENTS);
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    await call(token, 'Write', { request: { definition: 'auto-delivery-lite', taskId } });
+    // 轮询等任务进 waiting_human（以状态表为真源，§8 引擎驱动状态）。
+    let waiting = false;
+    for (let i = 0; i < 30; i++) {
+      const detail = await store.getDetail(taskId);
+      if (!('code' in detail) && detail.state === 'waiting_human') {
+        waiting = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(waiting).toBe(true);
+
+    const res = await call(token, 'Signal', {
+      taskId,
+      signal: { checkpoint: 'confirm-release', decision: 'approve' },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { signalled: boolean }).toEqual({ signalled: true });
+    await instance.waitForStatus('complete');
+  }, 15000);
 });
 
 describe('POST /htbp/platform/task — authz + protocol (§6.4d / §11.3)', () => {

@@ -237,6 +237,83 @@ describe('SchedulerHub — Trigger full chain (fired → action → completed) (
     expect(scriptOut.items.length).toBe(1);
   });
 
+  it('script action: grants NOT covering → watt.publish denied, completed ok:false, no event out', async () => {
+    const stub = await hub(hubName());
+    // §7"权限只能衰减"负路径：cron 链段上限=job.action.grants（core authorize 步骤 3）。
+    // 即便 createdBy=admin（principal 面全通），script 声明的 grants 收窄后 publish 必须被拒——
+    //   这是 BLOCKER 修复的实证：旧 authorize 早返回令此路径错误 allow。
+    const captured: { ran: boolean; err?: string } = { ran: false };
+    const fakeRunner: ScriptRunner = {
+      async run(ctx: ScriptRunContext) {
+        captured.ran = true;
+        try {
+          await ctx.watt.publish({ type: 'script.out', payload: { ok: true } });
+        } catch (e) {
+          // WattError 是纯对象（{code,message,retryable}），跨 RPC 边界后非 Error 实例——
+          //   取 message/code 皆可；toJSON 兜底覆盖 Error 与纯对象两种形态。
+          captured.err =
+            e instanceof Error
+              ? e.message
+              : ((e as { message?: string; code?: string })?.message ??
+                (e as { code?: string })?.code ??
+                JSON.stringify(e));
+          throw e; // 抛出使 action 失败 → cron.completed ok:false 留痕。
+        }
+        return { done: true };
+      },
+    };
+    // script grants 只给 metrics.read — 不覆盖 watt.publish 的 platform://event manage。
+    const job = PUBLISH_JOB('t-script-deny', {
+      createdBy: env.WATT_ADMIN_PRINCIPAL,
+      action: {
+        kind: 'script',
+        scriptRef: 'context://automations/s2',
+        grants: [{ resources: ['platform://metrics'], actions: ['read'] }],
+      },
+    });
+    await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.writeJob(job);
+    });
+    const registry = env.CONTEXT_REGISTRY.get(env.CONTEXT_REGISTRY.idFromName('registry'));
+    await registry.write({ namespace: 'automations', provider: 'structured' });
+    const { StructuredContextProvider } = await import('../src/context/providers/structured.ts');
+    await new StructuredContextProvider(env.DB_CONTEXT, 'automations').write('s2', {
+      content: 'export default { async run() { return { ok: true }; } };',
+      contentType: 'text/javascript',
+    });
+    const { PolicyStore } = await import('../src/authz/policy-store.ts');
+    const { IdentityMapper } = await import('../src/authz/identity-mapper.ts');
+    const { ensureSeedPolicy } = await import('../src/authz/seed.ts');
+    await ensureSeedPolicy(
+      new PolicyStore(env.DB_POLICIES),
+      new IdentityMapper(env.DB_POLICIES),
+      env.WATT_ADMIN_PRINCIPAL,
+    );
+
+    const res = await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.triggerJob('t-script-deny');
+    });
+    // fired 恒发（Trigger 返回 fired eventId，不因 action 失败而失败）。
+    expect('code' in res).toBe(false);
+    expect(captured.ran).toBe(true);
+    // publish 被 Authorizer.Check（cron 链段）拒 → permission_denied。
+    expect(captured.err).toMatch(/permission_denied|denied|grant exceeded/i);
+
+    const store = new EventStore(env.DB_EVENTS);
+    const completed = (await store.list({ filter: { type: 'cron.completed' } })) as {
+      items: { payload: { ok: boolean; actionKind: string } }[];
+    };
+    const rec = completed.items.find((e) => e.payload.actionKind === 'script');
+    expect(rec?.payload.ok).toBe(false); // action 失败留痕。
+    // 目标事件未发出（publish 被拒）。
+    const scriptOut = (await store.list({ filter: { type: 'script.out' } })) as {
+      items: unknown[];
+    };
+    expect(scriptOut.items.length).toBe(0);
+  });
+
   it('Trigger works on a disabled job (manual backfill, enabled unrelated)', async () => {
     const stub = await hub(hubName());
     await runInDurableObject(stub, (h: SchedulerHub) =>

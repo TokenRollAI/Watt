@@ -56,6 +56,8 @@ export async function executeCronAction(args: ExecuteArgs): Promise<ExecuteResul
   const scheduledAt = new Date().toISOString();
 
   // ① cron.fired（恒发）——source.kind='cron'（§1 EventSource），留痕 + 入队。
+  // payload 的 `trigger` 字段为 additive 扩展（§7 规范 payload={jobId,scheduledAt,actionKind}），
+  //   仅为留痕区分 scheduled/manual 补跑，不改事件形状契约，订阅方可安全忽略。
   const firedEvent = normalizeEvent(
     {
       source: { kind: 'cron', ref: job.id },

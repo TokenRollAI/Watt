@@ -115,6 +115,11 @@ export class TaskStore {
     return row === null ? null : rowToInfo(row);
   }
 
+  /** 删除任务行（Write 补偿：WATT_TASK.create 失败后清孤儿 pending 行，避免同 id 重试恒 conflict）。 */
+  async delete(taskId: string): Promise<void> {
+    await this.db.prepare('DELETE FROM tasks WHERE task_id = ?').bind(taskId).run();
+  }
+
   /** 读 TaskDetail（不存在 → not_found）。 */
   async getDetail(taskId: string): Promise<TaskDetail | WattError> {
     const row = await this.row(taskId);

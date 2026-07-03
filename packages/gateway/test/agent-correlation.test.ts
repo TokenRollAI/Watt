@@ -1,10 +1,14 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-import { env, runInDurableObject } from 'cloudflare:test';
+import { env, introspectWorkflowInstance, runInDurableObject } from 'cloudflare:test';
+import type { AgentDefinition } from '@watt/core';
 import { getAgentByName } from 'agents';
 import { describe, expect, it } from 'vitest';
 import type { AgentCorrelation } from '../src/agent/agent-correlation.ts';
 import type { AgentInstance, AgentInstanceRpc } from '../src/agent/agent-instance.ts';
+import { AgentRegistry } from '../src/agent/agent-registry.ts';
 import { EventStore } from '../src/event/event-store.ts';
+import { defaultManagerDeps, TaskManager } from '../src/task/task-manager.ts';
+import { TaskStore } from '../src/task/task-store.ts';
 
 /**
  * AgentCorrelation DO 单测（Proto §3.4 correlation 等待表 + §3.2 实例索引）。
@@ -326,4 +330,102 @@ describe('AgentCorrelation platform-issued failed delivery (§3.4 BLOCKER 端到
     await corr.failProducer(terminatedWaiter);
     expect(await corr.resolve(cid)).toBeNull(); // 已 settled（等待方消失，不代发）。
   });
+});
+
+/**
+ * MAJOR 端到端（§3.4 规则 1/3，task waiter）：emitFailed 的 task waiter 分支必须经 deliverTaskResult
+ * 归并投递到 Workflow 实例 waitForEvent（agentResultEventName(cid)，payload.status='failed'），
+ * 而非旧占位（console.log + return true 视为已投递）。此前占位使 §3.4 规则 3/4 代发的 agent.failed
+ * 从不到达 Task 的 waitForEvent（任务只能等自身超时）。
+ *
+ * 用真实 deep-research Workflow（fan-in 逐 correlationId waitForEvent）：跑到 fan-in、拿 dispatch step
+ * 产出的真实 correlationId（AgentRuntime.spawn(taskWaiter) 已把它们 register 到单例 correlation DO，
+ * waiter.kind='task'、waiter.id=taskId），再用同一单例 correlation.expireNow 强制过期代发 timeout
+ * failed，断言 Workflow 收到归并 failed（fan-in 记 failed step、以 status='failed' 完成）+ EventStore
+ * 留痕 reason='timeout' + correlation settle（幂等）。
+ */
+const ECHO_DEF: AgentDefinition = {
+  name: 'echo',
+  description: 'echo test agent for task workflow steps',
+  runtime: 'light',
+  entry: { kind: 'do-class', className: 'AgentInstance' },
+  grants: [],
+  contextNamespaces: [],
+  toolScopes: [],
+};
+
+/** 轮询 TaskStore 等任务进 waiting_human@checkpoint（引擎在 waitForEvent hibernate，状态表为真源）。 */
+async function waitForCheckpoint(
+  store: TaskStore,
+  taskId: string,
+  checkpoint: string,
+): Promise<void> {
+  for (let i = 0; i < 30; i++) {
+    const detail = await store.getDetail(taskId);
+    if (
+      !('code' in detail) &&
+      detail.state === 'waiting_human' &&
+      detail.pendingCheckpoint?.checkpoint === checkpoint
+    ) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error(`task ${taskId} did not reach waiting_human@${checkpoint}`);
+}
+
+describe('AgentCorrelation task-waiter failed delivery (§3.4 规则 1/3 MAJOR 端到端)', () => {
+  it('expireNow: task waiter Workflow receives merged failed via deliverTaskResult (not the old placeholder)', async () => {
+    // registry 需有 echo（deep-research 的 agent step 派发 echo）。
+    await new AgentRegistry(env.DB_PROVIDERS).write(ECHO_DEF);
+    const taskId = `test-task-corr-fail-${waiterSeq++}`;
+    const manager = new TaskManager(defaultManagerDeps(env));
+    const store = new TaskStore(env.DB_EVENTS);
+    const corr = realCorrelation();
+
+    await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    const info = await manager.write(
+      { definition: 'deep-research', input: { topic: 'x' }, taskId },
+      'user:carol',
+    );
+    if ('code' in info) throw new Error(`write failed: ${info.message}`);
+
+    // 1) 进 waiting_human（confirm-plan）→ approve → 派发 N agent（step.do 内 spawn echo + correlation
+    //    register waiter.kind='task'、waiter.id=taskId）。
+    await waitForCheckpoint(store, taskId, 'confirm-plan');
+    await manager.signal(taskId, { checkpoint: 'confirm-plan', decision: 'approve' });
+
+    // 2) 取 dispatch step 产出的真实 correlationIds（fan-in 正 waitForEvent 等它们）。
+    const cids = (await instance.waitForStepResult({
+      name: 'dispatch-research-agents',
+    })) as string[];
+    expect(cids).toHaveLength(2);
+
+    // 3) 用同一单例 correlation DO 强制过期代发 timeout failed（nowMs 取远未来越过 5min timeout）：
+    //    task waiter 分支经 deliverTaskResult → env.WATT_TASK.get(taskId).sendEvent(agentResultEventName)。
+    const settled = await corr.expireNow(Date.now() + 24 * 60 * 60 * 1000);
+    for (const cid of cids) expect(settled).toContain(cid);
+
+    // 4) Workflow 收到归并 failed → fan-in 记 failed step → 以 status='failed' 完成（无 result 汇总）。
+    await instance.waitForStatus('complete');
+    const output = (await instance.getOutput()) as { count: number };
+    expect(output.count).toBe(0); // 两个 correlation 均 failed，无 result 进 outputs。
+    const done = await store.getInfo(taskId);
+    expect(done?.state).toBe('done');
+
+    // 5) EventStore 留痕：两条 agent.failed（reason='timeout'，correlationId 匹配）。
+    const eventStore = new EventStore(env.DB_EVENTS);
+    const page = await eventStore.list({ filter: { type: 'agent.failed' } });
+    if ('code' in page) throw new Error(page.message);
+    for (const cid of cids) {
+      const trace = page.items.find(
+        (e) => (e.payload as { correlationId?: string }).correlationId === cid,
+      );
+      expect(trace).toBeDefined();
+      expect((trace?.payload as { reason?: string }).reason).toBe('timeout');
+    }
+
+    // 6) 幂等：真实结果晚到 → resolve 返 null（已 settled，规则 3）。
+    for (const cid of cids) expect(await corr.resolve(cid)).toBeNull();
+  }, 20000);
 });

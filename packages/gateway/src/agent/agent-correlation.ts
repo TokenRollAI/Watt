@@ -16,8 +16,8 @@
  *   被判 drop-duplicate 丢弃，等待方永远收不到超时/终止通知。故本 DO **先读 waiter、直投其实例
  *   onEvent（AGENT_INSTANCE stub），投递成功后才 settle**（timeout 投递失败不 settle，留下次
  *   alarm 重试；terminated 投递失败仍 settle 但留痕审计——无 alarm 复扫，尽力交付防僵尸）。
- *   同时经 EventStore.put 留痕（对齐 publishOutcome，§2.4）。task waiter 走 Phase 5 Workflows
- *   waitForEvent（此处占位记 console 并 settle）。
+ *   同时经 EventStore.put 留痕（对齐 publishOutcome，§2.4）。task waiter 经 deliverTaskResult 归并
+ *   投递到 Workflow 实例 waitForEvent（agentResultEventName(cid)，payload.status='failed'，2026-07-03 MAJOR）。
  *
  * 用原生 DurableObject + ctx.storage.sql（非 Agents SDK）：correlation 表是纯路由协调，
  * 无 Agent 的 state 广播/WS/schedule 语义——与 EventRouter 同源选型（调研报告问题 2）。
@@ -32,6 +32,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Event } from '@watt/core';
 import { getAgentByName } from 'agents';
 import type { Bindings } from '../env.ts';
+import { deliverTaskResult } from '../task/task-events.ts';
 import type { AgentInstance, AgentInstanceRpc } from './agent-instance.ts';
 
 // DurableObjectState / SqlStorageValue / Queue 用 @cloudflare/workers-types ambient global。
@@ -64,9 +65,11 @@ export interface InstanceRow extends Record<string, SqlStorageValue> {
 /**
  * DO env 中 correlation 代发所需的绑定：
  * - AGENT_INSTANCE：直投等待方实例 onEvent（agent waiter，规则 1/2 定向回送，BLOCKER 修正）；
+ * - WATT_TASK：直投 task 等待方 Workflow 实例 waitForEvent（task waiter，§3.4 规则 1/3/4，
+ *   经 deliverTaskResult 归并 agentResultEventName——绕开 QUEUE 自吞，2026-07-03 MAJOR 修正）；
  * - DB_EVENTS：EventStore.put 留痕（§2.4，对齐 publishOutcome）。
  */
-type CorrelationEnv = Pick<Bindings, 'AGENT_INSTANCE' | 'DB_EVENTS'>;
+type CorrelationEnv = Pick<Bindings, 'AGENT_INSTANCE' | 'WATT_TASK' | 'DB_EVENTS'>;
 
 const AGENT_FAILED_TYPE = 'agent.failed';
 
@@ -378,7 +381,8 @@ export class AgentCorrelation extends DurableObject {
   /**
    * 构造一个 agent.failed 事件并**直投等待方**（source.kind='system'，平台代发）。返回是否投递成功。
    * agent waiter → AGENT_INSTANCE stub.onEvent({event})（绕开 QUEUE→routeResult→resolve 的自吞路径）；
-   * task waiter → Phase 5 Workflows waitForEvent（占位记 console，视为已投递）。
+   * task waiter → deliverTaskResult 归并投递到 Workflow 实例 waitForEvent（agentResultEventName(cid)，
+   *   payload {status:'failed', error:reason}）；投递成功 return true，失败 return false（同 agent 纪律）。
    * 无论投递成败均先 EventStore.put 留痕（§2.4，对齐 publishOutcome；put 失败不阻塞投递）。
    */
   private async emitFailed(
@@ -410,13 +414,26 @@ export class AgentCorrelation extends DurableObject {
       });
     }
     if (row.waiter_kind === 'task') {
-      // Task 等待方 → Phase 5 Workflows waitForEvent（占位）；视为已投递（不阻塞 settle）。
-      console.log('correlation: task waiter failed delivery deferred to Phase 5', {
-        correlationId: row.correlation_id,
-        waiter: row.waiter_id,
-        reason,
-      });
-      return true;
+      // Task 等待方 → 归并投递到 Workflow 实例的 waitForEvent（§3.4 规则 1，task waiter）：
+      // env.WATT_TASK.get(waiterId).sendEvent({ type: agentResultEventName(cid), payload:{status:'failed', error:reason} }）。
+      // 与 agent waiter 同纪律：投递成功才 return true（settle）；失败 return false（timeout 留 alarm
+      // 重试；terminated 无 alarm 复扫仍尽力交付——由 failProducer 决定成败后一律 settle）。
+      // 绕开 QUEUE→routeResult 自吞路径（否则 hasPending=true + resolve=null 被判 drop-duplicate 丢弃）。
+      try {
+        await deliverTaskResult(this.correlationEnv, row.waiter_id, row.correlation_id, {
+          status: 'failed',
+          error: reason,
+        });
+        return true;
+      } catch (err) {
+        console.error('correlation: emitFailed task waiter delivery failed', {
+          correlationId: row.correlation_id,
+          waiter: row.waiter_id,
+          reason,
+          err: String(err),
+        });
+        return false;
+      }
     }
     // agent 等待方 → 直投其实例 onEvent（规则 1/2 定向回送，绕开 QUEUE 自吞）。
     try {

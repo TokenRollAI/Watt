@@ -39,23 +39,29 @@ export function authorize(input: AuthorizeInput): AccessDecision {
     return { allow: false, reason: 'principal not permitted' };
   }
 
-  // 无 agent 段（user/service 直调，§6.5b）→ 只走步骤 1。
-  // 判据 = claims 无 agent_def 段（对应 CallContext.agent 缺省，§6.4a/§6.5a）。
-  if (claims.agent_def === undefined) {
+  // 纯直调 token（user/service，§6.5a/§6.5b）→ 只走步骤 1，跳过 2/3。
+  // 纯直调的判据（§6.5a）= 既无 `agent_*` 段**也无** `chain` 段。
+  // 注意：cron 触发构造的 claims 无 agent_def 但带 `chain=['cron:<jobId>']`（§7 步骤 3），
+  //   不属纯直调——必须进入步骤 3 的链段扫描，cron 段以 job.action.grants 为上限（§6.4c 步骤 3）。
+  const chain = claims.chain ?? [];
+  if (claims.agent_def === undefined && chain.length === 0) {
     return { allow: true };
   }
 
   // ── 步骤 2：当前 Agent 定义上限 ──────────────────────────────────────
-  const currentDef = agentDefs[claims.agent_def];
-  if (currentDef === undefined) {
-    return { allow: false, reason: `agent definition not found: ${claims.agent_def}` };
-  }
-  if (!grantsCover(currentDef.grants, resource, action)) {
-    return { allow: false, reason: 'agent definition grant exceeded' };
+  // 仅当 claims 带 agent_def 段时才有"当前 Agent 定义"可校验；无 agent_def（纯 cron 链，
+  //   principal 为 service:scheduler / user，无 agent 实例宿主）时步骤 2 无对象，直接进步骤 3。
+  if (claims.agent_def !== undefined) {
+    const currentDef = agentDefs[claims.agent_def];
+    if (currentDef === undefined) {
+      return { allow: false, reason: `agent definition not found: ${claims.agent_def}` };
+    }
+    if (!grantsCover(currentDef.grants, resource, action)) {
+      return { allow: false, reason: 'agent definition grant exceeded' };
+    }
   }
 
   // ── 步骤 3：沿 chain 逐段衰减（根→当前）─────────────────────────────
-  const chain = claims.chain ?? [];
   for (const seg of chain) {
     if (seg.startsWith(CRON_SEGMENT_PREFIX)) {
       const jobId = seg.slice(CRON_SEGMENT_PREFIX.length);

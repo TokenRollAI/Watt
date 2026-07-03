@@ -486,6 +486,120 @@ describe('step 3: cron:<jobId> system segment', () => {
   });
 });
 
+// ═══ 步骤 3：纯 cron 链（无 agent_def，principal=service:scheduler）═══════
+//
+// cron script 触发的 claims（actions.ts resolveCronClaims）= { sub, roles, chain:['cron:<jobId>'] }，
+// **无 agent_def / agent_inst**。§6.5a 定义纯直调 token = 无 agent_* **且无 chain** 段；
+// 带 chain 的 cron claims 不属纯直调，必须进步骤 3 的链段扫描，cron 段上限 = job.action.grants。
+// 早返回捷径若只判 agent_def===undefined（旧行为），会在步骤 1 后直接 allow，
+// 令 grants=[] 的 script job 也能 publish（§7"权限只能衰减"失效）——本 describe 锁定修复。
+
+describe('step 3: pure cron chain (no agent_def, chain=[cron:<jobId>])', () => {
+  const allowAll = policy({ subject: '*', resource: '*', actions: ['*'], effect: 'allow' });
+  // 纯 cron claims：principal 面放行（步骤 1 allow），衰减全靠 cron 段的 grants。
+  function cronClaims(jobId: string): TokenClaims {
+    return { sub: 'service:scheduler', roles: [], chain: [`cron:${jobId}`] };
+  }
+
+  it('J1 grants cover resource/action → allow (chain scan runs despite no agent_def)', () => {
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [allowAll],
+      agentDefs: {},
+      cronJobs: {
+        'job-1': scriptJob('job-1', true, [
+          { resources: ['platform://event'], actions: ['manage'] },
+        ]),
+      },
+      instances: {},
+    });
+    expect(d.allow).toBe(true);
+  });
+
+  it('J2 grants do NOT cover → deny (cron script grant exceeded)', () => {
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [allowAll],
+      agentDefs: {},
+      cronJobs: {
+        'job-1': scriptJob('job-1', true, [
+          { resources: ['platform://metrics'], actions: ['read'] }, // 不覆盖 event/manage
+        ]),
+      },
+      instances: {},
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/cron script grant exceeded/i);
+  });
+
+  it('J3 empty grants → deny (attenuation: script may not exceed its declared grants)', () => {
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [allowAll],
+      agentDefs: {},
+      cronJobs: { 'job-1': scriptJob('job-1', true, []) }, // grants=[] → 什么都不能
+      instances: {},
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/cron script grant exceeded/i);
+  });
+
+  it('J4 job disabled → deny (empty set)', () => {
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [allowAll],
+      agentDefs: {},
+      cronJobs: {
+        'job-1': scriptJob('job-1', false, [
+          { resources: ['*'], actions: ['*'] }, // 即便 grants 全覆盖，禁用仍拒
+        ]),
+      },
+      instances: {},
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/disabled|deleted/i);
+  });
+
+  it('J5 cronJobs index missing the job → deny (deleted)', () => {
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [allowAll],
+      agentDefs: {},
+      cronJobs: {}, // 索引缺 job → 视为已删除
+      instances: {},
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/disabled|deleted/i);
+  });
+
+  it('J6 principal deny short-circuits before chain scan', () => {
+    // 步骤 1 拒绝时不进步骤 3——principal 面收窄即失效（无僵尸授权）。
+    const d = authorize({
+      claims: cronClaims('job-1'),
+      resource: 'platform://event',
+      action: 'manage',
+      policies: [], // principal 无授权
+      agentDefs: {},
+      cronJobs: {
+        'job-1': scriptJob('job-1', true, [{ resources: ['*'], actions: ['*'] }]),
+      },
+      instances: {},
+    });
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/principal/i);
+  });
+});
+
 // ═══ 步骤跳过：user token 无 agent 段 ════════════════════════════════════
 
 describe('user token path (no agent segment → step 1 only, §6.5b)', () => {

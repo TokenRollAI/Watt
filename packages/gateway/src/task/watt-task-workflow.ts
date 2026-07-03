@@ -147,11 +147,23 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
       });
     });
 
-    // 2) 等人类确认（显式短超时，§3.4）。
-    const signal = await step.waitForEvent<SignalEventPayload>('await-plan-confirmation', {
-      type: eventNameOrThrow(taskSignalEventName(checkpoint)),
-      timeout: HUMAN_CHECKPOINT_TIMEOUT,
-    });
+    // 2) 等人类确认（显式短超时，§3.4）。超时 → catch 落 failed + clearCheckpoint（§3.4 checkpoint
+    //    超时语义：不放任实例 errored 而卡 waiting_human），return 失败结果使实例干净 complete。
+    let signal: { payload: SignalEventPayload };
+    try {
+      signal = await step.waitForEvent<SignalEventPayload>('await-plan-confirmation', {
+        type: eventNameOrThrow(taskSignalEventName(checkpoint)),
+        timeout: HUMAN_CHECKPOINT_TIMEOUT,
+      });
+    } catch (_err) {
+      await step.do('checkpoint-timeout-plan', async () => {
+        const now = new Date().toISOString();
+        await store.clearCheckpoint(params.taskId, now);
+        await store.setState(params.taskId, 'failed', now, 'checkpoint-timeout');
+        return { timedOut: true };
+      });
+      return { timedOut: true, checkpoint };
+    }
     // 恢复：清 checkpoint → running。reject → 直接中止为 cancelled（决策语义由模板解释，§signal.ts）。
     const decision = signal.payload.decision;
     await step.do('resume-after-confirmation', async () => {
@@ -184,14 +196,35 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
     });
 
     // 4) fan-in：逐 correlationId 等结果（agentResultEventName 归并 result/failed，payload.status 分支）。
+    //    单个 correlation 超时 → catch 记 failed step（appendStep state:'failed'）继续收其余，不中断整体
+    //    （§3.4 规则 3 平台代发 failed 语义；超时与结果二选一，故 record-research-<i> 步名不冲突）。
     const outputs: (Primitive | FlatRecord)[] = [];
     for (let i = 0; i < correlationIds.length; i++) {
       const cid = correlationIds[i];
       if (cid === undefined) continue;
-      const result = await step.waitForEvent<AgentResultEventPayload>(`await-research-${i}`, {
-        type: eventNameOrThrow(agentResultEventName(cid)),
-        timeout: AGENT_RESULT_TIMEOUT,
-      });
+      let result: { payload: AgentResultEventPayload };
+      try {
+        result = await step.waitForEvent<AgentResultEventPayload>(`await-research-${i}`, {
+          type: eventNameOrThrow(agentResultEventName(cid)),
+          timeout: AGENT_RESULT_TIMEOUT,
+        });
+      } catch (_err) {
+        await step.do(`record-research-${i}`, async () => {
+          const now = new Date().toISOString();
+          await store.appendStep(
+            params.taskId,
+            {
+              name: `research-${i}`,
+              state: 'failed',
+              startedAt: now,
+              output: { reason: 'timeout' },
+            },
+            now,
+          );
+          return { recorded: true, timedOut: true };
+        });
+        continue;
+      }
       await step.do(`record-research-${i}`, async () => {
         const now = new Date().toISOString();
         const state = result.payload.status === 'result' ? 'done' : 'failed';
@@ -269,11 +302,23 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
       });
     });
 
-    // 4) 等人类确认。
-    const signal = await step.waitForEvent<SignalEventPayload>('await-release-confirmation', {
-      type: eventNameOrThrow(taskSignalEventName(checkpoint)),
-      timeout: HUMAN_CHECKPOINT_TIMEOUT,
-    });
+    // 4) 等人类确认。超时 → catch 落 failed + clearCheckpoint（§3.4 checkpoint 超时语义），
+    //    return 失败结果使实例干净 complete（不放任 errored 而卡 waiting_human）。
+    let signal: { payload: SignalEventPayload };
+    try {
+      signal = await step.waitForEvent<SignalEventPayload>('await-release-confirmation', {
+        type: eventNameOrThrow(taskSignalEventName(checkpoint)),
+        timeout: HUMAN_CHECKPOINT_TIMEOUT,
+      });
+    } catch (_err) {
+      await step.do('checkpoint-timeout-release', async () => {
+        const now = new Date().toISOString();
+        await store.clearCheckpoint(params.taskId, now);
+        await store.setState(params.taskId, 'failed', now, 'checkpoint-timeout');
+        return { timedOut: true };
+      });
+      return { timedOut: true, checkpoint };
+    }
     await step.do('resume-after-release', async () => {
       await store.clearCheckpoint(params.taskId, new Date().toISOString());
     });

@@ -8,13 +8,15 @@ import {
 } from 'cloudflare:test';
 import type { Event, Subscription } from '@watt/core';
 import { getAgentByName } from 'agents';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentInstance, AgentInstanceRpc } from '../src/agent/agent-instance.ts';
+import { PolicyStore } from '../src/authz/policy-store.ts';
 import { defaultAgentDeliverer } from '../src/event/agent-deliverer.ts';
 import { ChannelStore } from '../src/event/channel-store.ts';
 import {
   type AgentDeliverer,
   type ConsumerDeps,
+  defaultTaskSignaler,
   handleQueue,
   noopAgentDeliverer,
   type TaskSignaler,
@@ -23,6 +25,7 @@ import {
 import type { EventQueueSender } from '../src/event/event-bus.ts';
 import type { EventRouter } from '../src/event/event-router.ts';
 import { EventStore } from '../src/event/event-store.ts';
+import { TaskStore } from '../src/task/task-store.ts';
 
 // DurableObjectStub 用 ambient global（与 env.EVENT_ROUTER.get 返回同源）。
 
@@ -64,14 +67,14 @@ function memQueue(): EventQueueSender & { sent: Event[] } {
   };
 }
 
-/** 记录 TaskSignaler 调用（im.action 规则断言用）。 */
+/** 记录 TaskSignaler 调用（im.action 规则断言用；含 principal 透传断言）。 */
 function recordingSignaler(): TaskSignaler & {
-  calls: Array<{ taskId: string; checkpoint: string; decision: string }>;
+  calls: Array<{ taskId: string; checkpoint: string; decision: string; principal?: string }>;
 } {
   return {
     calls: [],
-    async signal(taskId, args) {
-      this.calls.push({ taskId, checkpoint: args.checkpoint, decision: args.decision });
+    async signal(taskId, args, principal) {
+      this.calls.push({ taskId, checkpoint: args.checkpoint, decision: args.decision, principal });
     },
   };
 }
@@ -367,11 +370,40 @@ describe('Queue consumer HITL 内置路由 (§1.1 system subscriber)', () => {
 
     expect(result.explicitAcks).toContain('a1');
     expect(signaler.calls).toHaveLength(1);
-    expect(signaler.calls[0]).toEqual({
+    expect(signaler.calls[0]).toMatchObject({
       taskId: 'task-1',
       checkpoint: 'confirm-release',
       decision: 'approve',
     });
+  });
+
+  it('im.action passes event.principal through to the signaler (§2.3 平台补齐)', async () => {
+    const stub = freshRouterStub();
+    const signaler = recordingSignaler();
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, signaler });
+
+    const batch = createMessageBatch(QUEUE, [
+      {
+        id: 'a3',
+        timestamp: new Date(),
+        body: E({
+          type: 'im.action',
+          principal: 'user:alice',
+          payload: {
+            actionId: 'confirm-release:approve',
+            signal: { taskId: 'task-1', checkpoint: 'confirm-release', decision: 'approve' },
+          },
+        }),
+        attempts: 1,
+      },
+    ]);
+    const ctx = createExecutionContext();
+    await handleQueue(batch, deps);
+    await getQueueResult(batch, ctx);
+
+    // principal 从 event.principal 取并透传给 signaler（defaultTaskSignaler 据此做 Check + Signal）。
+    expect(signaler.calls).toHaveLength(1);
+    expect(signaler.calls[0]?.principal).toBe('user:alice');
   });
 
   it('im.action without a signal does not invoke the signaler', async () => {
@@ -567,5 +599,153 @@ describe('Queue consumer real AgentDeliverer wiring (§3.4)', () => {
 
     expect(result.retryMessages.map((r: { msgId: string }) => r.msgId)).toContain('r2');
     expect(result.explicitAcks).not.toContain('r2');
+  });
+});
+
+/**
+ * defaultTaskSignaler 生产实现（§1.1 规则 2 闭环）——真实 Authorizer/PolicyStore/IdentityMapper/
+ * TaskManager 路径。此前 consumer 测试全注入 recordingSignaler 且丢弃 principal，生产四条分支零覆盖：
+ *   ① principal 缺省 → 拒绝，不调 TaskManager.Signal；
+ *   ② Check deny（无匹配 allow policy，默认 deny）→ 拒绝，不调 Signal；
+ *   ③ Check allow → 调 TaskManager.Signal（用不存在的 taskId：signal 内 getDetail 先返 not_found，
+ *      不碰 WATT_TASK.sendEvent；据 'rejected by TaskManager' 日志证明 Signal 确被调用到）；
+ *   ④ principal 透传见上方 recordingSignaler 用例（consumer 把 event.principal 传给 signaler）。
+ * 分支判定用 console.error 日志（defaultTaskSignaler 各分支消息互斥）+ D1 policy 副作用交叉验证。
+ */
+describe('defaultTaskSignaler production wiring (§1.1 规则 2, four branches)', () => {
+  async function clearPolicies(): Promise<void> {
+    await env.DB_POLICIES.prepare('DELETE FROM policies').run();
+    await env.DB_POLICIES.prepare('DELETE FROM identity_mappings').run();
+  }
+
+  it('denies (and does not call Signal) when principal is undefined', async () => {
+    await clearPolicies();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const signaler = defaultTaskSignaler(env);
+      await signaler.signal(
+        'any-task',
+        { checkpoint: 'confirm-release', decision: 'approve' },
+        undefined,
+      );
+      // principal 缺省分支：记 'no principal'，未走到 authorizer/manager。
+      const denied = spy.mock.calls.find((c) =>
+        String(c[0]).includes('im.action signal denied (no principal)'),
+      );
+      expect(denied).toBeDefined();
+      // 未走到 authorizer/TaskManager 分支（无这些日志）。
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('denied by authorizer'))).toBe(false);
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('rejected by TaskManager'))).toBe(
+        false,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('denies when the authorizer denies (no matching allow policy → default deny)', async () => {
+    await clearPolicies(); // 无 policy → Authorizer 默认 deny。
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const signaler = defaultTaskSignaler(env);
+      await signaler.signal(
+        'task-deny',
+        { checkpoint: 'confirm-release', decision: 'approve' },
+        'user:nobody',
+      );
+      // Check deny 分支：记 'denied by authorizer'，未走到 TaskManager。
+      expect(
+        spy.mock.calls.some((c) => String(c[0]).includes('im.action signal denied by authorizer')),
+      ).toBe(true);
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('rejected by TaskManager'))).toBe(
+        false,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('calls TaskManager.Signal when the authorizer allows (Check → Signal reached)', async () => {
+    await clearPolicies();
+    // allow policy：user:alice 对 task://* 的 signal 动作放行（subject 直接匹配 principal）。
+    await new PolicyStore(env.DB_POLICIES).write({
+      id: 'allow-signal',
+      subject: 'user:alice',
+      resource: 'task://*',
+      actions: ['signal'],
+      effect: 'allow',
+    });
+    // 确保目标任务不存在 → TaskManager.signal 内 getDetail 返 not_found（不碰 WATT_TASK.sendEvent）。
+    await env.DB_EVENTS.prepare('DELETE FROM tasks WHERE task_id = ?').bind('task-allow').run();
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const signaler = defaultTaskSignaler(env);
+      await signaler.signal(
+        'task-allow',
+        { checkpoint: 'confirm-release', decision: 'approve' },
+        'user:alice',
+      );
+      // Check allow → 未记 'denied by authorizer'；确实调到 TaskManager.signal（not_found → 记
+      // 'rejected by TaskManager' code=not_found），证明 Check 通过后 Signal 被调。
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('denied by authorizer'))).toBe(false);
+      const rejected = spy.mock.calls.find((c) =>
+        String(c[0]).includes('im.action signal rejected by TaskManager'),
+      );
+      expect(rejected).toBeDefined();
+      expect((rejected?.[1] as { code?: string }).code).toBe('not_found');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reaches TaskManager.Signal and resumes a real waiting task (Check allow → conflict-free Signal)', async () => {
+    await clearPolicies();
+    await new PolicyStore(env.DB_POLICIES).write({
+      id: 'allow-signal-2',
+      subject: 'user:alice',
+      resource: 'task://*',
+      actions: ['signal'],
+      effect: 'allow',
+    });
+    // 建一个 waiting_human task（不启 Workflow）+ 匹配 checkpoint：signal 走 checkpoint 校验后到
+    // sendEvent；此处只断言"Check 通过 + Signal 被调进 TaskManager"——用 checkpoint mismatch 让
+    // signal 在 sendEvent 之前返 invalid_argument（不碰不存在的 WATT_TASK 实例）。
+    const store = new TaskStore(env.DB_EVENTS);
+    const taskId = 'task-waiting-signal';
+    await env.DB_EVENTS.prepare('DELETE FROM tasks WHERE task_id = ?').bind(taskId).run();
+    await store.create({
+      taskId,
+      definition: 'auto-delivery-lite',
+      state: 'running',
+      createdBy: 'user:alice',
+      now: '2026-07-03T00:00:00.000Z',
+    });
+    await store.setCheckpoint(
+      taskId,
+      { checkpoint: 'confirm-release', prompt: 'p', requestedAt: '2026-07-03T00:00:00.000Z' },
+      '2026-07-03T00:00:00.000Z',
+    );
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const signaler = defaultTaskSignaler(env);
+      // checkpoint 不符 → TaskManager.signal 返 invalid_argument（在 sendEvent 之前，不碰 Workflow）。
+      await signaler.signal(
+        taskId,
+        { checkpoint: 'wrong-checkpoint', decision: 'approve' },
+        'user:alice',
+      );
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('denied by authorizer'))).toBe(false);
+      const rejected = spy.mock.calls.find((c) =>
+        String(c[0]).includes('im.action signal rejected by TaskManager'),
+      );
+      expect(rejected).toBeDefined();
+      // Signal 被调进 TaskManager 且走到 checkpoint 校验（invalid_argument）——非 not_found，证明
+      // getDetail 命中了真实 waiting_human 行。
+      expect((rejected?.[1] as { code?: string }).code).toBe('invalid_argument');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
