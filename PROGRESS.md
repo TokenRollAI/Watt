@@ -17,6 +17,14 @@
 
 # 轮次记录
 
+## Round 11 — 2026-07-03（Phase 3 Round A：core 纯逻辑）
+- 目标：Phase 3 / DoD 项 1 纯逻辑面 + 项 3 parser（按调研报告 Round A 拆分）
+- 动作：investigator 先产出 `.llmdoc-tmp/investigations/phase3-context-layer.md`（规范面清单/存储选型/DO 设计/Help DSL/三轮拆分）；据其发现先修宪法：Architecture 附B 增补 watt-context D1（M3 structured）与 watt-events-dlq。worker 落地 `packages/core/src/context/`（零 Cloudflare 依赖，test-first）：`types.ts`（NamespaceMount/ContextEntryMeta/ContextEntry/ContextPatch/ContextEntryInput zod）、`resolve.ts`（context:// URI 解析 + namespace 最长前缀段边界匹配）、`ttl.ts`（isExpired 纯判定，无 ttl 永不过期）、`verbs.ts`（checkIfVersion→conflict / requireExisting→not_found / applyPatch metadata 浅合并+content 替换）、`help.ts`（generateContextHelp + parseHelpDsl 最小 parser——doc-gap #21 parser 部分收口）。
+- 验证（主 assistant 亲自跑）：`pnpm --filter @watt/core exec vitest run --coverage` → 213 tests 绿，覆盖率 100%（326/326 语句、220/220 分支）；`pnpm verify` exit 0（**404 tests**：shared 6 + core 213 + cli 41 + gateway 144）；tsc noEmit 0 错。
+- 勾选：无（项 1 需 gateway I/O 面合体后整体验收）。
+- 沉淀：调研报告落 `.llmdoc-tmp/`；附B 增补已 commit（1afd688）。
+- 遗留：Round B（gateway：ContextRegistry DO + object/structured/vector 三 provider + watt-context 库接线 + AI 绑定 + HTBP context 子树路由 + 权限拦截）；Round C（CLI 六命令 + 部署冒烟 + 关门）。
+
 ## Round 10 — 2026-07-03（Phase 2 关门轮）
 - 目标：Phase 2 关门——质量关口 Workflow + 确认项全修 + DoD 重跑 + 沉淀
 - 动作：
