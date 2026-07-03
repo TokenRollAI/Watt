@@ -21,7 +21,7 @@
 
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText } from 'ai';
-import type { ModelCaller, ModelCallRequest } from './types.ts';
+import type { ModelCaller, ModelCallRequest, ModelCallResult } from './types.ts';
 
 /** 默认中转基址（external-facts / .env ANTHROPIC_BASE_URL）——不含 /v1。 */
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://llm.fantacy.live';
@@ -56,8 +56,8 @@ export function createAnthropicCaller(opts: {
     ...(opts.fetchImpl !== undefined ? { fetch: opts.fetchImpl } : {}),
   });
   return {
-    async call(req: ModelCallRequest): Promise<string> {
-      const { text } = await generateText({
+    async call(req: ModelCallRequest): Promise<ModelCallResult> {
+      const { text, usage } = await generateText({
         model: provider(req.model),
         maxOutputTokens: 1024,
         abortSignal: AbortSignal.timeout(timeoutMs),
@@ -67,7 +67,12 @@ export function createAnthropicCaller(opts: {
       if (typeof text !== 'string' || text.length === 0) {
         throw new Error('anthropic messages response missing content text');
       }
-      return text;
+      // AI SDK usage：inputTokens/outputTokens（ai@6）；缺省时省略（打点侧按 0 处理）。
+      const modelUsage =
+        usage !== undefined
+          ? { inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 }
+          : undefined;
+      return { text, ...(modelUsage !== undefined ? { usage: modelUsage } : {}) };
     },
   };
 }

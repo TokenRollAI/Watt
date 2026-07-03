@@ -201,18 +201,49 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
   private async runHarness(args: DeliverArgs, caller?: ModelCaller): Promise<HarnessOutcome> {
     if (this.state.harness === 'llm') {
       const modelCaller = caller ?? this.buildDefaultCaller();
-      return llmHarness(
+      const model = this.state.model ?? 'glm-5.2';
+      const usages: { inputTokens: number; outputTokens: number }[] = [];
+      const outcome = await llmHarness(
         {
           input: this.state.input ?? args.event.payload,
           schema: args.schema,
-          model: this.state.model ?? 'glm-5.2',
+          model,
           maxAttempts: args.maxAttempts,
         },
         modelCaller,
+        // Metrics 打点（§10）：每次模型调用产一条 usage，收集后统一写（重试多次则多行）。
+        (usage) => usages.push(usage),
       );
+      // usage 写在 onEvent 主路径内（onEvent 同步跑完才返回，见文件头执行语义）——await 保落库。
+      for (const usage of usages) await this.recordUsage(model, usage);
+      return outcome;
     }
     // echo（缺省）：回显 input（缺省事件 payload）。
     return echoHarness(this.state.input ?? args.event.payload);
+  }
+
+  /** 写一行 usage（D1 usage 表）+ AE 并行打点。best-effort：失败不阻塞 harness。 */
+  private async recordUsage(
+    model: string,
+    usage: { inputTokens: number; outputTokens: number },
+  ): Promise<void> {
+    const env = this.env as Bindings;
+    const record = {
+      // 中转直连为 Anthropic Messages 格式，provider 记 'anthropic'（未接 ModelRouter 前的实现声明）。
+      provider: 'anthropic',
+      model,
+      agentDef: this.state.definition,
+      instance: this.name,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    };
+    try {
+      const { UsageStore, writeUsageDataPoint } = await import('../metrics/usage-store.ts');
+      writeUsageDataPoint(env.AE_METRICS, record);
+      await new UsageStore(env.DB_AUDIT).write(record);
+    } catch (err) {
+      console.error('agent instance: usage record failed', { err: String(err) });
+    }
   }
 
   /** 从 env 构造真实 Anthropic caller（ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL）。 */

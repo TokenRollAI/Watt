@@ -25,7 +25,19 @@ export interface ModelCallRequest {
   model: string;
 }
 
-/** 模型调用抽象：输入请求 → 输出文本（Anthropic content[0].text）。 */
+/** 一次模型调用的 token 用量（Metrics 打点，§10）——AI SDK result.usage 投影。 */
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** 模型调用结果：输出文本 + 可选用量（Metrics 打点用；测试 fake 可省略 usage）。 */
+export interface ModelCallResult {
+  text: string;
+  usage?: ModelUsage;
+}
+
+/** 模型调用抽象：输入请求 → 输出文本（Anthropic content[0].text）+ 可选用量。 */
 export interface ModelCaller {
-  call(req: ModelCallRequest): Promise<string>;
+  call(req: ModelCallRequest): Promise<ModelCallResult>;
 }

@@ -25,7 +25,7 @@ import {
   shouldRetry,
   validateAgentOutput,
 } from '@watt/core';
-import type { HarnessOutcome, ModelCaller, ModelCallRequest } from './types.ts';
+import type { HarnessOutcome, ModelCaller, ModelCallRequest, ModelUsage } from './types.ts';
 
 /** llm harness 输入：spawn input + 可选 expect.schema + 模型名。 */
 export interface LlmHarnessInput {
@@ -73,10 +73,14 @@ function parseOutput(text: string): unknown {
 /**
  * 运行 llm harness。expect.schema 存在则校验 + 重试；耗尽 → invalid_output failed。
  * 模型调用抛错（网络/上游）→ failed(reason='error')——不重试（§3.4 平台不隐式重试模型错误）。
+ *
+ * onUsage：每次真实模型调用返回 usage 时回调（Metrics 打点，§10）——重试多次则回调多次
+ *   （每次模型调用各产一行 usage）。注入以便 agent-instance 写 usage 表 + AE 打点（测试可省略）。
  */
 export async function llmHarness(
   input: LlmHarnessInput,
   caller: ModelCaller,
+  onUsage?: (usage: ModelUsage) => void,
 ): Promise<HarnessOutcome> {
   const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   let lastViolations: SchemaViolation[] | undefined;
@@ -84,7 +88,9 @@ export async function llmHarness(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let text: string;
     try {
-      text = await caller.call(buildRequest(input, lastViolations));
+      const result = await caller.call(buildRequest(input, lastViolations));
+      text = result.text;
+      if (result.usage !== undefined && onUsage !== undefined) onUsage(result.usage);
     } catch (cause) {
       const msg = cause instanceof Error ? cause.message : String(cause);
       return { kind: 'failed', reason: 'error', errorMessage: `model call failed: ${msg}` };

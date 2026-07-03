@@ -21,7 +21,7 @@ describe('echo harness (§3.3)', () => {
 function fixedCaller(text: string): ModelCaller {
   return {
     async call() {
-      return text;
+      return { text };
     },
   };
 }
@@ -34,7 +34,7 @@ function sequenceCaller(texts: string[]): ModelCaller & { calls: ModelCallReques
     async call(req: ModelCallRequest) {
       const idx = calls.length;
       calls.push(req);
-      return texts[Math.min(idx, texts.length - 1)] as string;
+      return { text: texts[Math.min(idx, texts.length - 1)] as string };
     },
   };
 }
