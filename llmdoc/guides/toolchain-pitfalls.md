@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -171,3 +171,33 @@
 
 - typecheck 红时先判断归属：用 `git show HEAD:<file>` 对比基线，确认是自己的在途改动还是他人的——不要见红就修别人的文件。
 - **禁用 `git stash`**：会连带他人在途改动一起 stash 掉，恢复时产生冲突/丢改动。
+
+## 30. R2 list 默认不返回 customMetadata
+
+- `bucket.list()` 结果对象缺省不含 customMetadata——用 customMetadata 承载 meta 时，list 出来 meta 全空（Round 12 线上冒烟才暴露）。
+- 解法：`bucket.list({ include: ['customMetadata'] })`。**本包 workers-types 未收录该字段**，需类型拓宽（as 或局部接口扩展）才过 typecheck。
+
+## 31. DO RPC 联合返回类型经 type guard 后 narrow 成 never
+
+- DO RPC 方法返回联合类型（如 `Mount | WattError`）时，调用侧过 `isWattError()` guard 后另一分支被 narrow 成 `never`（Cloudflare RPC types 的已知问题——RPC stub 包装破坏了判别式收窄）。
+- 解法：guard 之后显式 `as` 标注目标类型，勿指望自动收窄。
+
+## 32. Vectorize 变更异步最终一致，read-after-write 不可靠
+
+- Vectorize upsert/delete 是**异步最终一致**：写后立即 query/getByIds 可能读不到（或读到旧值），List 语义无法可靠实现。
+- 解法：**不要把权威数据放 Vectorize metadata**——需要 read-after-write 语义就上 D1 sidecar（权威数据在 D1，Vectorize 只存 embedding+引用；gateway vector provider 即此架构，见 doc-gap #27①）。
+
+## 33. KV namespace list 在 https_proxy 下超时 → provision 误判走 create
+
+- 现象：带 `https_proxy` 环境跑 `pnpm provision`，`kv namespace list` 可能超时/空结果，脚本判定资源不存在走 create，报 already exists 假失败（Round 12 实测）。
+- 解法：**跑 provision 前 unset 代理**（provision 走 CF API 不需要本机代理；代理只在 curl workers.dev 验证时用，见 §28）。
+
+## 34. CLI/服务端响应形状以 gateway 路由测试为真源，禁双形态兜底
+
+- 教训：CLI 与 gateway "双方各按自己理解写"，独立 mock 全绿但线上错配——Phase 3 连出三次线上 bug（put 缺必填 contentType / cat 未解包 `{entry}` / put·patch 双形态兜底掩盖漂移）。
+- 纪律：响应形状**唯一真源 = gateway 路由测试锁定的形状**（Get→`{entry}`、Write/Update→`{meta}`、List→裸 Page、管理面 Write→`{mount}`）；CLI mock 必须照抄真源并在文件头声明出处；**禁止写"两种形状都能解"的兜底**——它只会把契约漂移从测试期推迟到线上。
+
+## 35. AI 绑定触发 vitest-pool-workers 远程代理会话
+
+- 现象：wrangler.jsonc 有 `"ai"` 绑定时，vitest-pool-workers 会尝试为 AI 起远程代理会话，多账户非交互环境必失败（`user account selection unavailable`）。
+- 解法：vitest.config 里 `remoteBindings: false`；vector provider 等对 AI 的调用走依赖注入 fake（测试从不读 env.AI），真实 embeddings 验证留部署后冒烟（Round 12 实测）。
