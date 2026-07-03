@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
 - **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R23（Observability 地基：AuditLog 数据面 + Metrics 打点/查询——调研报告 phase6-feishu-observability.md 已产出，五轮拆分 R23~R27）
+- **下一目标**：Phase 6 R24（飞书 ChannelAdapter：core 规约纯逻辑 + IdentityMapper 映射表 + 出站接线 + `watt channel connect`）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,16 @@
 ---
 
 # 轮次记录
+
+## Round 23 — 2026-07-03（Phase 6 R23：Observability 地基——AuditLog 数据面 + Metrics）
+- 目标：Phase 6 / DoD ③（metrics/status 真实）+ ⑤ 的审计基础（AuditLog 数据面从零到真实）
+- 动作：investigator 先产出 `.llmdoc-tmp/investigations/phase6-feishu-observability.md`（五轮拆分 R23~R27；关键发现：审计零数据面、Metrics 无打点、**出站到飞书群的平台内接线完全空白**、IdentityMapper.resolve 桩；AE 本地 writeDataPoint 是 no-op 只能 spy → token 用量走 D1 usage 聚合表本地可测；飞书 WSClient Node-only 必须 CLI 承载）。worker 落地（commits 43712fd 附近三连）：
+  - **AuditLog**：migrations-audit/0001（audit_records 表 + at/principal/decision 索引）；**Authorizer wrapper 单点 writeAudit**（17 个 Check 调用方不逐个改，PEP 横切收口；allow/deny 各一条，best-effort）；script-runner 绕过 wrapper 的判定点单独补 recordScriptAudit（判定不漏）；audit List(filter)+Get 真实查询；deploy-all/provision 同步 watt-audit migrations。
+  - **Metrics**：usage 表打点（llm harness 从 Vercel AI SDK result.usage 取数 → D1 + AE writeDataPoint 双写，AE 绑定 watt_metrics）；Metrics.Query 服务 + /htbp/platform/metrics（tokens/events/agent_instances/tasks/authz_denials 最小面，range + groupBy model/agent/day）；CLI `watt metrics query` + `watt status` 汇总（实例数/Task 数/今日 token）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**961 tests**：shared 6 + core 402 + cli 120 + gateway 433+1skip）；`pnpm deploy:all` exit 0（watt-audit migrations 线上应用）；**线上冒烟**：`watt audit list` 返回真实 AuditRecord（policy read/audit read 的 allow 各一条，context.principal=user:djj）；`watt metrics query --metric events --range 1d` v=44；**@llm 一次**（spawn smoke-llm → send → tokens 打点 22 → `--group-by model` labels={model:glm-5.2}）；`watt status` metrics{agentInstances:1,tasks:4,tokensToday:22}。
+- 勾选：无（DoD ③ 集成面已通待关门复验一并勾；⑤ 需 CLI 完备 + Dashboard 对等）。
+- 沉淀：AE 本地 no-op 坑待入 pitfalls；usage 表归属/status 聚合端点为实现声明候选。
+- 遗留：R24 飞书 adapter（入站 core 规约 + 出站接线 + connect CLI）；R25 @feishu 集成 + manage/cron；R26 Dashboard + plugin + CLI 完备；R27 关门。
 
 ## Round 22 — 2026-07-03（Phase 5 关门轮）
 - 目标：Phase 5 关门——4 维质量关口 workflow + 逐条对抗核查 + 确认项全修 + Docs 漂移回查 + 沉淀
