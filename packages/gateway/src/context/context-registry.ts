@@ -71,11 +71,11 @@ function computeExpiresAt(mountedAt: string, ttl: number | undefined): string | 
 
 export class ContextRegistry extends DurableObject {
   private readonly sql: DurableObjectState['storage']['sql'];
-  private readonly ctx: DurableObjectState;
+  private readonly storage: DurableObjectState['storage'];
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx as never, env as never);
-    this.ctx = ctx;
+    this.storage = ctx.storage;
     this.sql = ctx.storage.sql;
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS mounts (
@@ -219,10 +219,7 @@ export class ContextRegistry extends DurableObject {
       }
       live.push(row);
     }
-    const resolved = resolveMount(
-      uri,
-      live.map(rowToMount),
-    );
+    const resolved = resolveMount(uri, live.map(rowToMount));
     if ('code' in resolved) return resolved;
     return { provider: resolved.mount.provider, path: resolved.path };
   }
@@ -232,7 +229,7 @@ export class ContextRegistry extends DurableObject {
    * 只删 mounts 表挂载行，不清理 provider 存储条目（backlog，见文件头注释）。
    * 删后若仍有未来到期项，重设下一个 alarm。
    */
-  async alarm(): Promise<void> {
+  override async alarm(): Promise<void> {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
     this.sql.exec('DELETE FROM mounts WHERE expires_at IS NOT NULL AND expires_at <= ?', nowIso);
@@ -243,7 +240,7 @@ export class ContextRegistry extends DurableObject {
       )
       .toArray();
     if (next.length > 0 && next[0] !== undefined) {
-      await this.ctx.storage.setAlarm(Date.parse(next[0].expires_at));
+      await this.storage.setAlarm(Date.parse(next[0].expires_at));
     }
   }
 
@@ -254,9 +251,9 @@ export class ContextRegistry extends DurableObject {
   private async scheduleGc(expiresAt: string | null): Promise<void> {
     if (expiresAt === null) return;
     const at = Date.parse(expiresAt);
-    const existing = await this.ctx.storage.getAlarm();
+    const existing = await this.storage.getAlarm();
     if (existing === null || at < existing) {
-      await this.ctx.storage.setAlarm(at);
+      await this.storage.setAlarm(at);
     }
   }
 

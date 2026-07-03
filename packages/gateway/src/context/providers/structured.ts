@@ -17,15 +17,15 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import {
   applyPatch,
-  checkIfVersion,
   type ContextEntry,
   type ContextEntryInput,
   type ContextEntryMeta,
   type ContextPatch,
+  checkIfVersion,
   requireExisting,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
-import type { ListOptions, Page } from './provider.ts';
+import type { ListOptions, Page } from '../provider.ts';
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;

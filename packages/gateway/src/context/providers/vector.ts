@@ -19,14 +19,14 @@
 
 import {
   applyPatch,
-  checkIfVersion,
   type ContextEntry,
   type ContextEntryInput,
   type ContextEntryMeta,
   type ContextPatch,
+  checkIfVersion,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
-import type { ListOptions, Page } from './provider.ts';
+import type { ListOptions, Page } from '../provider.ts';
 
 /** content 存 vector metadata 的截断上限（Vectorize metadata 有大小限制，截断避免超限）。 */
 const CONTENT_SNIPPET_MAX = 2048;
@@ -61,7 +61,11 @@ function contextUri(namespace: string, path: string): string {
 }
 
 /** Vectorize metadata（全 string，对齐 VectorizeVectorMetadata 常用形态）→ ContextEntryMeta。 */
-function metaToEntryMeta(namespace: string, path: string, md: Record<string, string>): ContextEntryMeta {
+function metaToEntryMeta(
+  namespace: string,
+  path: string,
+  md: Record<string, string>,
+): ContextEntryMeta {
   let metadata: Record<string, string> = {};
   if (md.metadata !== undefined) {
     try {
@@ -118,7 +122,8 @@ export class VectorContextProvider {
     const conflict = checkIfVersion(currentVersion, input.ifVersion);
     if (conflict !== null) return conflict;
     const version = existing === null ? '1' : bumpVersion(currentVersion ?? '0');
-    const content = typeof input.content === 'string' ? input.content : JSON.stringify(input.content);
+    const content =
+      typeof input.content === 'string' ? input.content : JSON.stringify(input.content);
     const values = await this.embedder.embed(content);
     const md = this.buildMetadata(path, input.contentType, content, version, input.metadata ?? {});
     await this.index.upsert([{ id: this.id(path), values, metadata: md }]);
@@ -148,7 +153,8 @@ export class VectorContextProvider {
     };
     const merged = applyPatch(current, patch);
     const version = bumpVersion(md.version ?? '0');
-    const content = typeof merged.content === 'string' ? merged.content : JSON.stringify(merged.content);
+    const content =
+      typeof merged.content === 'string' ? merged.content : JSON.stringify(merged.content);
     const values = await this.embedder.embed(content);
     const newMd = this.buildMetadata(path, merged.contentType, content, version, merged.metadata);
     await this.index.upsert([{ id: this.id(path), values, metadata: newMd }]);
@@ -180,11 +186,7 @@ export class VectorContextProvider {
    * 返回 unavailable —— 调用方应改用 Search 做检索。
    */
   async list(_path: string, _opts?: ListOptions): Promise<Page<ContextEntryMeta> | WattError> {
-    return wattError(
-      'unavailable',
-      'vector provider does not support List; use Search',
-      false,
-    );
+    return wattError('unavailable', 'vector provider does not support List; use Search', false);
   }
 
   private async readOne(path: string): Promise<VectorRecord | null> {

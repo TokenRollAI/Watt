@@ -20,6 +20,7 @@ const testKey = JSON.parse(readFileSync(testKeyPath, 'utf8')) as {
 
 const migrations = await readD1Migrations(resolve(here, 'migrations'));
 const migrationsEvents = await readD1Migrations(resolve(here, 'migrations-events'));
+const migrationsContext = await readD1Migrations(resolve(here, 'migrations-context'));
 
 export default defineConfig({
   test: {
@@ -27,13 +28,23 @@ export default defineConfig({
   },
   plugins: [
     cloudflareTest({
+      // remoteBindings:false —— 禁用 vitest-pool-workers 的远程代理会话。默认 true 会为无本地
+      // 模拟器的绑定（Workers AI）起远程代理，触发多账户非交互选择失败。vector provider 走依赖
+      // 注入 fake（测试从不读 env.AI），故本地测试无需远程 AI；Vectorize 仅 WARNING（toolchain §10）。
+      remoteBindings: false,
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
+        // DB_CONTEXT（M3 structured provider）本地 D1：wrangler.jsonc 的 D1 marker 段由
+        // provision 生成、尚未含 DB_CONTEXT（避免占位 database_id 破坏部署）。测试侧用
+        // miniflare.d1Databases 直接注入本地 SQLite（id 任意值，本地不连远端）——本库测试
+        // 因此不依赖 wrangler.jsonc D1 绑定。部署前 team-lead 跑 provision 回填真实绑定。
+        d1Databases: { DB_CONTEXT: 'watt-context-local' },
         bindings: {
           WATT_JWT_PRIVATE_JWK: JSON.stringify(testKey.privateJwk),
           WATT_ADMIN_PRINCIPAL: testKey.adminPrincipal,
           TEST_MIGRATIONS: migrations,
           TEST_MIGRATIONS_EVENTS: migrationsEvents,
+          TEST_MIGRATIONS_CONTEXT: migrationsContext,
           // webhook adapter 验签 secret（inbound 集成测试；channel settings.verifySecretRef 指向此名）。
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
         },

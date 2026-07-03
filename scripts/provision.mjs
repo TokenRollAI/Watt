@@ -8,6 +8,7 @@
  * 附B storage 段真源：
  *   R2:        context-objects / artifacts        # M3 object provider
  *   D1:        policies / providers / audit / events   # M5 / M8 / M9 / M1 EventStore
+ *              + context                            # M3 structured provider（附B 未列 → 新建）
  *   KV:        authz-cache / tenants              # M5
  *   Vectorize: context-index                     # M3 vector provider
  *   Queues:    附B 未列名字，M1 EventBus 用 Queues → 建 watt-events（本轮只建资源
@@ -432,11 +433,12 @@ function writeBindings(d1Ids, kvIds, vectorizeReady) {
 }
 
 // ---- 资源名常量 ------------------------------------------------------------------
-const D1_NAMES = ['watt-policies', 'watt-providers', 'watt-audit', 'watt-events'];
+const D1_NAMES = ['watt-policies', 'watt-providers', 'watt-audit', 'watt-events', 'watt-context'];
 // 承载 wrangler 原生 d1 migrations 的库 → migrations_dir（bindingsBlock 回填用；见 §14）。
 const D1_MIGRATIONS_DIRS = {
   'watt-policies': 'migrations',
   'watt-events': 'migrations-events',
+  'watt-context': 'migrations-context',
 };
 const KV_AUTHZ_CACHE = 'watt-authz-cache';
 const KV_TENANTS = 'watt-tenants';

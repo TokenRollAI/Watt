@@ -7,8 +7,10 @@ import { beforeAll } from 'vitest';
  * applyD1Migrations 幂等（跟踪 d1_migrations 表），可安全在每个测试文件 setup 重复调用。
  *  - DB_POLICIES ← migrations/（Auth 内核，Proto §6.2/§6.3）
  *  - DB_EVENTS   ← migrations-events/（Event Gateway，Proto §2.4/§2.2）
+ *  - DB_CONTEXT  ← migrations-context/（Context Layer structured provider，Proto §4.1）
  */
 beforeAll(async () => {
   await applyD1Migrations(env.DB_POLICIES, env.TEST_MIGRATIONS);
   await applyD1Migrations(env.DB_EVENTS, env.TEST_MIGRATIONS_EVENTS);
+  await applyD1Migrations(env.DB_CONTEXT, env.TEST_MIGRATIONS_CONTEXT);
 });

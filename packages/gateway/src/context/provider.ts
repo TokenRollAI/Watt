@@ -13,12 +13,7 @@
  * 乐观并发：ifVersion 不匹配 → conflict（复用 core checkIfVersion）。
  */
 
-import type {
-  ContextEntry,
-  ContextEntryInput,
-  ContextEntryMeta,
-  ContextPatch,
-} from '@watt/core';
+import type { ContextEntry, ContextEntryInput, ContextEntryMeta, ContextPatch } from '@watt/core';
 import type { WattError } from '@watt/shared';
 
 /** Proto ListOptions（§0.2）——List/Search 整体入参对象（不平铺）。core 未导出，本地定义

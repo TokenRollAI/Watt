@@ -8,7 +8,15 @@
  * - WATT_JWT_ISSUER / WATT_JWT_AUDIENCE：可选，token 的 iss/aud（缺省用内置常量）。
  */
 
-import type { D1Database, Fetcher, KVNamespace, Queue, R2Bucket } from '@cloudflare/workers-types';
+import type {
+  Ai,
+  D1Database,
+  KVNamespace,
+  Queue,
+  R2Bucket,
+  VectorizeIndex,
+} from '@cloudflare/workers-types';
+import type { ContextRegistry } from './context/context-registry.ts';
 import type { EventRouter } from './event/event-router.ts';
 
 // DurableObjectNamespace 用 tsconfig types 里的 @cloudflare/workers-types ambient global 声明
@@ -21,6 +29,8 @@ export interface Bindings {
   DB_PROVIDERS: D1Database;
   DB_AUDIT: D1Database;
   DB_EVENTS: D1Database;
+  // M3 Context structured provider（附B 未列专库 → 新建独立库 watt-context，doc-gap 候选）。
+  DB_CONTEXT: D1Database;
   // KV
   KV_AUTHZ_CACHE: KVNamespace;
   KV_TENANTS: KVNamespace;
@@ -31,8 +41,12 @@ export interface Bindings {
   QUEUE_EVENTS: Queue;
   // Durable Objects（M1 Event Bus 订阅表 + Session Mapper，Phase 2）
   EVENT_ROUTER: DurableObjectNamespace<EventRouter>;
-  // Vectorize（类型宽松，本 Phase 不用）
-  VECTORIZE_CONTEXT: Fetcher;
+  // Durable Objects（M3 Context namespace 挂载注册表 + TTL，Phase 3）
+  CONTEXT_REGISTRY: DurableObjectNamespace<ContextRegistry>;
+  // Vectorize（M3 vector Context provider，1024 维 bge-m3 cosine）
+  VECTORIZE_CONTEXT: VectorizeIndex;
+  // Workers AI（M3 vector provider embeddings，@cf/baai/bge-m3）
+  AI: Ai;
 
   // secrets / vars
   WATT_JWT_PRIVATE_JWK?: string;

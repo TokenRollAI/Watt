@@ -73,6 +73,24 @@ steps.push({
   ],
 });
 
+// watt-context：Context Layer structured provider 存储（Proto §4.1）。
+// 同上幂等；migrations_dir=migrations-context（wrangler.jsonc DB_CONTEXT 绑定，provision 回填）。
+steps.push({
+  name: 'apply D1 migrations (watt-context)',
+  cmd: [
+    'pnpm',
+    '--filter',
+    '@watt/gateway',
+    'exec',
+    'wrangler',
+    'd1',
+    'migrations',
+    'apply',
+    'watt-context',
+    '--remote',
+  ],
+});
+
 steps.push({
   name: 'deploy watt-gateway',
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],

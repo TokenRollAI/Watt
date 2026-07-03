@@ -12,6 +12,8 @@ import { platformRoutes } from './http/routes.ts';
 
 // MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types）。
 
+// ContextRegistry DO（M3 namespace 挂载注册表 + TTL）从入口 export，供 wrangler DO 绑定实例化。
+export { ContextRegistry } from './context/context-registry.ts';
 // EventRouter DO（M1 订阅表 + Session Mapper）从入口 export，供 wrangler DO 绑定实例化。
 export { EventRouter } from './event/event-router.ts';
 

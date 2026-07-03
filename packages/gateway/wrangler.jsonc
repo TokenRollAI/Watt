@@ -64,7 +64,8 @@
     { "binding": "DB_POLICIES", "database_name": "watt-policies", "database_id": "b2a4d4c0-bd19-4c0d-83fb-7aea87c8a99b", "migrations_dir": "migrations" },
     { "binding": "DB_PROVIDERS", "database_name": "watt-providers", "database_id": "8bbfdb59-9ac7-4704-86fe-87283768d9ff" },
     { "binding": "DB_AUDIT", "database_name": "watt-audit", "database_id": "680912e5-0e16-4373-8fc2-b8716077dc28" },
-    { "binding": "DB_EVENTS", "database_name": "watt-events", "database_id": "ea3bf9f1-c37e-489c-8bca-2cd98af60b2a", "migrations_dir": "migrations-events" }
+    { "binding": "DB_EVENTS", "database_name": "watt-events", "database_id": "ea3bf9f1-c37e-489c-8bca-2cd98af60b2a", "migrations_dir": "migrations-events" },
+    { "binding": "DB_CONTEXT", "database_name": "watt-context", "database_id": "3e741fe1-e857-4581-883e-801d0e1a1d82", "migrations_dir": "migrations-context" }
   ],
   "kv_namespaces": [
     { "binding": "KV_AUTHZ_CACHE", "id": "0584d9f46f2a4af8897c0d965b992231" },
@@ -87,16 +88,23 @@
   ]
   // <<< provision:bindings <<<
   ,
+  // Workers AI 绑定（marker 段外——AI 是账户级能力，非 provision 管的 storage 资源，绑定即用；
+  // provision 重跑只覆写 marker 段内内容，不触碰此处）。M3 vector provider embeddings（@cf/baai/bge-m3）。
+  "ai": { "binding": "AI" },
   // Durable Objects（marker 段外——DO 绑定不是 provision 管的 storage 资源，故手写在此，
-  // provision 重跑只覆写 marker 段内内容，不触碰此处）。M1 EventRouter：订阅表 + Session Mapper。
+  // provision 重跑只覆写 marker 段内内容，不触碰此处）。
+  //   M1 EventRouter：订阅表 + Session Mapper。
+  //   M3 ContextRegistry：namespace 挂载注册表 + TTL 回收。
   "durable_objects": {
     "bindings": [
-      { "name": "EVENT_ROUTER", "class_name": "EventRouter" }
+      { "name": "EVENT_ROUTER", "class_name": "EventRouter" },
+      { "name": "CONTEXT_REGISTRY", "class_name": "ContextRegistry" }
     ]
   },
   // DO SQLite 迁移（与 D1 的 migrations_dir 是不同概念：此顶层 migrations 键声明 SQLite-backed
-  // DO class）。首次引入 EventRouter class → new_sqlite_classes。
+  // DO class）。v1：EventRouter class。v2：新增 ContextRegistry class（new_sqlite_classes）。
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["EventRouter"] }
+    { "tag": "v1", "new_sqlite_classes": ["EventRouter"] },
+    { "tag": "v2", "new_sqlite_classes": ["ContextRegistry"] }
   ]
 }

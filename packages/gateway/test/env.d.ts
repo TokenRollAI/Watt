@@ -12,6 +12,7 @@ declare global {
       WATT_ADMIN_PRINCIPAL: string;
       TEST_MIGRATIONS: D1Migration[];
       TEST_MIGRATIONS_EVENTS: D1Migration[];
+      TEST_MIGRATIONS_CONTEXT: D1Migration[];
     }
   }
 }

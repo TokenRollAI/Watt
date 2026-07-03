@@ -18,15 +18,15 @@
 import type { R2Bucket, R2Object } from '@cloudflare/workers-types';
 import {
   applyPatch,
-  checkIfVersion,
   type ContextEntry,
   type ContextEntryInput,
   type ContextEntryMeta,
   type ContextPatch,
+  checkIfVersion,
   requireExisting,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
-import type { ListOptions, Page } from './provider.ts';
+import type { ListOptions, Page } from '../provider.ts';
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
@@ -122,7 +122,8 @@ export class ObjectContextProvider {
     const conflict = checkIfVersion(currentVersion, input.ifVersion);
     if (conflict !== null) return conflict;
     const version = existing === null ? '1' : bumpVersion(currentVersion ?? '0');
-    const content = typeof input.content === 'string' ? input.content : JSON.stringify(input.content);
+    const content =
+      typeof input.content === 'string' ? input.content : JSON.stringify(input.content);
     const metadata = input.metadata ?? {};
     const obj = await this.bucket.put(this.key(path), content, {
       customMetadata: {
