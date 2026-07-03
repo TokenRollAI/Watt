@@ -30,6 +30,7 @@ import {
   eventSchema,
   normalizeEvent,
   type OutboundMessage,
+  outboundMessageSchema,
   parseImActionSignal,
   parseTaskCheckpoint,
 } from '@watt/core';
@@ -39,6 +40,7 @@ import { ChannelStore } from './channel-store.ts';
 import type { EventQueueSender } from './event-bus.ts';
 import type { EventRouter } from './event-router.ts';
 import { EventStore } from './event-store.ts';
+import { type FeishuSender, feishuSenderFromEnv } from './feishu-sender.ts';
 
 // DurableObjectStub / MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types），
 // 与 vitest-pool-workers 期望同源（见 env.ts 注释）。
@@ -129,6 +131,8 @@ export interface ConsumerDeps {
   signaler: TaskSignaler;
   /** agent sink 真实投递 + §3.4 结果路由（Phase 4）。 */
   agent: AgentDeliverer;
+  /** 飞书出站投递（§2.1 出站接线 R24）——outbound.message 且渠道 adapter=feishu 时调飞书 REST。 */
+  feishu: FeishuSender;
   /** 补齐 outbound.message 的 Omit 三字段（可注入以便测试）。 */
   genId: () => string;
   now: () => string;
@@ -149,6 +153,7 @@ export function defaultConsumerDeps(env: Bindings): ConsumerDeps {
     channels: new ChannelStore(env.DB_EVENTS),
     signaler: defaultTaskSignaler(env),
     agent: defaultAgentDeliverer(env),
+    feishu: feishuSenderFromEnv(env),
     genId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     genTraceId: () => crypto.randomUUID(),
@@ -218,6 +223,9 @@ async function runSystemSubscribers(event: Event, deps: ConsumerDeps): Promise<v
       break;
     case 'im.bot_joined':
       await handleBotJoined(event, deps);
+      break;
+    case 'outbound.message':
+      await handleOutboundMessage(event, deps);
       break;
     default:
       break;
@@ -304,6 +312,37 @@ async function handleBotJoined(event: Event, deps: ConsumerDeps): Promise<void> 
     match: { session: event.session },
     sink: { kind: 'agent', definition: defaultAgent, instanceBy: 'session' },
   });
+}
+
+/**
+ * §2.1 出站接线（R24）：outbound.message → 若目标渠道 adapter=feishu，调飞书 REST 投递。
+ * payload 经 outboundMessageSchema 校验（畸形 → console.error 后返回，毒丸不重投）。
+ * 渠道解析：ChannelStore.get(payload.channel) 拿 ChannelConfig；adapter!=feishu / channel 不存在
+ *   → 跳过（本轮只接飞书；其他渠道出站留后续轮）。投递失败 console.error 留痕（不阻塞 ack/retry
+ *   判定——出站是内置 system 规则，与用户订阅分发解耦；重投由队列层不覆盖此路径，失败仅留痕）。
+ */
+async function handleOutboundMessage(event: Event, deps: ConsumerDeps): Promise<void> {
+  const parsed = outboundMessageSchema.safeParse(event.payload);
+  if (!parsed.success) {
+    console.error('event consumer: outbound.message malformed payload (dropped)', {
+      eventId: event.id,
+    });
+    return;
+  }
+  const outbound = parsed.data;
+  const config = await deps.channels.get(outbound.channel);
+  if ('code' in config) return; // 渠道未配置 → 跳过（无投递目标）
+  if (config.adapter !== 'feishu') return; // 本轮只接飞书出站
+
+  const result = await deps.feishu.send(outbound);
+  if (!result.ok) {
+    console.error('event consumer: feishu outbound delivery failed', {
+      eventId: event.id,
+      channel: outbound.channel,
+      target: outbound.target,
+      error: result.error,
+    });
+  }
 }
 
 /**

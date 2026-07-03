@@ -136,6 +136,35 @@ describe('POST /htbp/platform/policy', () => {
     expect(body.policy.subject).toBe('user:carol');
   });
 
+  it('admin can MapIdentity a channel user to a principal (§6.3 write plane)', async () => {
+    const token = await signAdmin();
+    const res = await SELF.fetch(`${BASE}/htbp/platform/policy`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'MapIdentity',
+        arguments: { channel: 'feishu', channelUserId: 'ou_admin', principal: 'user:carol' },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      channel: string;
+      channelUserId: string;
+      principal: string;
+    };
+    expect(body).toEqual({ channel: 'feishu', channelUserId: 'ou_admin', principal: 'user:carol' });
+  });
+
+  it('MapIdentity missing fields → 400 invalid_argument', async () => {
+    const token = await signAdmin();
+    const res = await SELF.fetch(`${BASE}/htbp/platform/policy`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ tool: 'MapIdentity', arguments: { channel: 'feishu' } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('non-admin token is denied Write with 403 (default-deny, no seed match)', async () => {
     const token = await signNonAdmin();
     const res = await SELF.fetch(`${BASE}/htbp/platform/policy`, {

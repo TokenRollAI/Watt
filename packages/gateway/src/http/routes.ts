@@ -132,6 +132,9 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     Write: 'manage',
     Update: 'manage',
     Delete: 'manage',
+    // MapIdentity（§6.3 渠道身份→principal 写入口）：绑定授权域数据，与写策略同为 manage 动作。
+    // 复用 platform://policy 资源（身份映射是授权配置的一部分，不新增资源 URI）。
+    MapIdentity: 'manage',
   };
   app.post('/htbp/platform/policy', async (c) => {
     const claims = c.get('claims');
@@ -222,6 +225,27 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         const result = await store.delete(id);
         if (isWattError(result)) return wattErrorResponse(c, result);
         return c.json(result);
+      }
+      case 'MapIdentity': {
+        // 渠道身份→principal 绑定（§6.3）。arguments:{channel, channelUserId, principal}。
+        const { channel, channelUserId, principal } = args;
+        if (
+          typeof channel !== 'string' ||
+          typeof channelUserId !== 'string' ||
+          typeof principal !== 'string'
+        ) {
+          return wattErrorResponse(
+            c,
+            wattError(
+              'invalid_argument',
+              'channel, channelUserId and principal are required',
+              false,
+            ),
+          );
+        }
+        const identities = new IdentityMapper(c.env.DB_POLICIES);
+        await identities.bindChannelIdentity(channel, channelUserId, principal);
+        return c.json({ channel, channelUserId, principal });
       }
     }
   });
