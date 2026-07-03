@@ -14,7 +14,12 @@
  */
 
 import type { EventInput, Policy, Subscription } from '@watt/core';
-import { channelConfigSchema, policySchema, subscriptionSchema } from '@watt/core';
+import {
+  channelConfigSchema,
+  eventInputSchema,
+  policySchema,
+  subscriptionSchema,
+} from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
 import { Authorizer } from '../authz/authorizer.ts';
@@ -273,9 +278,23 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         return c.json({ event });
       }
       case 'Publish': {
-        const parsed = eventInputForPublish(args.event);
-        if (isWattError(parsed)) return wattErrorResponse(c, parsed);
-        const result = await publish(parsed, {
+        const parsedEvent = eventInputSchema.safeParse(args.event);
+        if (!parsedEvent.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid event: ${parsedEvent.error.message}`, false),
+          );
+        }
+        // §2.3 规约（规范性）：外部系统经 Platform API（Bearer/OAuth）直接 Publish 时，
+        // 事件被规约为 source.kind='webhook'，与入站 webhook 同权处理——调用方自报的
+        // system/agent/cron 等 kind 不得命中 sourceKind 订阅。Phase 2 只有 user/admin token，
+        // 无豁免面，故一律覆写。Phase 4 引入 agent token（claims.agent 字段）后，由 claims
+        // 区分 agent 出站（type=outbound.message，走出站鉴权而非 webhook 规约）的豁免。
+        const eventInput: EventInput = {
+          ...(parsedEvent.data as EventInput),
+          source: { ...parsedEvent.data.source, kind: 'webhook' },
+        };
+        const result = await publish(eventInput, {
           store: new EventStore(c.env.DB_EVENTS),
           authorizer,
           queue: {
@@ -405,12 +424,4 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   });
 
   return app;
-}
-
-/** Publish 入参校验：event 必须是 EventInput（不含 id/traceId/occurredAt，平台补齐）。 */
-function eventInputForPublish(raw: unknown): EventInput | WattError {
-  if (typeof raw !== 'object' || raw === null) {
-    return wattError('invalid_argument', 'event is required', false);
-  }
-  return raw as EventInput;
 }

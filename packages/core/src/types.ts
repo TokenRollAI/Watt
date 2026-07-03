@@ -146,3 +146,11 @@ export type Event = z.infer<typeof eventSchema>;
 // Publish(event: Omit<Event, 'id'|'traceId'|'occurredAt'>): { eventId: string }
 // 平台补齐这三字段。principal 不在 Omit 但仍由平台在 channelUser 存在时覆写（doc-gap #10）。
 export type EventInput = Omit<Event, 'id' | 'traceId' | 'occurredAt'>;
+
+// Publish 入参的运行时校验 schema（Platform API 边界）：
+// id/traceId 由平台补齐，入参不接受；occurredAt 可选（normalizeEvent「已有则保留」，
+// 缺省时由平台补齐），故设为 optional。principal/channelUser/dedupeKey/session/raw 等可选字段保持。
+export const eventInputSchema = eventSchema
+  .omit({ id: true, traceId: true })
+  .extend({ occurredAt: timestampSchema.optional() });
+export type EventInputParsed = z.infer<typeof eventInputSchema>;
