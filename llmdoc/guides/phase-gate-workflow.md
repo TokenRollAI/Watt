@@ -42,3 +42,10 @@
 - **确认项修复可并行**：按"互不冲突的文件集"把修复拆给多个 worker（本轮 4 个）并行执行，主 assistant 复核 diff 并收口。
 - **跨包契约改动派发时必须列全消费方**：gateway List 返回形状变更（→ `{items}`）时漏列了 CLI 消费方 `cli/audit.ts`——worker 无权限修界外文件，且 CLI 侧测试 mock 掩盖了错配，只能靠主 assistant 收口时发现。拆任务时对每个契约变更显式枚举所有消费方（含测试 mock），要么划进同一 worker 的文件集，要么明确留给主 assistant 收口。
 - **关门轮 DoD 重跑可结合线上全链**：Phase 1 用真实部署跑通 device flow 全链（login → approve → whoami）作为 DoD 项 3 的关门证据，比只跑单测更硬。
+
+## 实测经验（Phase 2/3，2026-07-03 Round 10/13）
+
+- **finding 先聚类找共同根因**：Phase 3 关门 vector provider 三条独立 MAJOR（截断丢数据 / List 违约 / 最终一致）同根——权威数据放错存储层；对症是"D1 sidecar"一个架构动作而非三个补丁。修复派发前先按文件/子系统聚类 finding，判断补丁 vs 重构。
+- **对抗核查连续四个 Phase 0 误报**：其价值不在滤误报，而在修正严重度、补齐修复所需代码事实、比对 doc-gaps 识别"已声明的实现自由"（核查 prompt 里加 doc-gaps/PROGRESS 声明比对指令有效）。
+- **验收指令置于派发 prompt 末尾显眼处**：worker idle ≠ done——曾有 worker 源码就位但测试未写即 idle，需 SendMessage 追要。派发时明确"验收命令跑绿并报告后才算完成"。
+- **禁宽容解析**：跨包响应形状解不到就报错（`body.meta ?? body` 型双形态兜底曾把错配从测试期一路掩盖到线上冒烟之后）；形状唯一真源 = gateway 路由测试，CLI mock 照抄（toolchain-pitfalls §34）。
