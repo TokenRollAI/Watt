@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 5（Task + Scheduler）三项 DoD 全勾**（Round 19/20/21），待 R22 关门（质量关口 + 对抗核查 + Docs 漂移回查）
-- **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）+ Phase 5 三项（R21 勾选）
+- **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
+- **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Round 22 Phase 5 关门（4 维质量关口 workflow + 逐条对抗核查 + doc-gap #11/#14 收口 + llmdoc 沉淀）
+- **下一目标**：Phase 6 R23（飞书 Channel + Observability + Management：先 investigator 前置调研）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,21 @@
 ---
 
 # 轮次记录
+
+## Round 22 — 2026-07-03（Phase 5 关门轮）
+- 目标：Phase 5 关门——4 维质量关口 workflow + 逐条对抗核查 + 确认项全修 + Docs 漂移回查 + 沉淀
+- 动作：
+  - **Docs 漂移回查**：Proto §3.4 回写 checkpoint 超时基线（human 10min/agent 5min，收口 #11）、§8 回写 checkpoints 由模板代码声明（收口 #14）。
+  - **质量关口 Workflow**（4 维 correctness/contract/ops/test-quality + 对抗核查，19 agents；**按约不含渗透性安全维度**）：15 条确认（0 误报驳回），归并后 **2 BLOCKER + 6 MAJOR + 15 MINOR**。
+  - **确认项全修**（3 worker 文件集互斥并行，commit 5a91fd7）：
+    - **[BLOCKER] cron:<jobId> 链段上限完全失效**——core authorize 的纯直调捷径在 agent_def 缺省时早返回 allow，步骤 3 链段扫描（grants 上限/禁用→deny）对无 agent_def 的 cron claims 永不执行（对抗核查 tsx 实证）。修：捷径改「agent_def 缺省**且 chain 为空**」（§6.5a），步骤 2 加守卫；core +6 用例（deny 分支首次可达）覆盖率 100%；gateway +1 script deny 集成用例。
+    - **[BLOCKER] waitForEvent 超时状态卡死**——三处裸 await 超时抛出→实例 errored 但状态表永卡 waiting_human/running（注释声称的 catch 是虚构）。修：human 超时→failed 落库+清 checkpoint；fan-in 单超时记 failed step 继续收其余；+9 测试（introspect forceEventTimeout 实测）。
+    - **6 MAJOR**：Cancel 级联终止子实例（listInstances+task:<id># 前缀）；Cancel 终态守卫（done/failed→conflict、cancelled 幂等）；Signal 校验 checkpoint 匹配→invalid_argument；Write 非原子补偿（WATT_TASK.create 失败删 pending 孤儿行）；correlation emitFailed task waiter 占位改真实 deliverTaskResult 投递（成功才 settle，CorrelationEnv+WATT_TASK）；defaultTaskSignaler 四分支+principal 透传补测试。
+    - 顺手：get() 删虚假 instance.status() 注释；cron.completed 错误摘要取 WattError.message（线上冒烟发现 [object Object]）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**917 tests**：shared 6 + core 402 + cli 107 + gateway 402+1skip）；`pnpm deploy:all` exit 0；**线上关门复验**：① grants=[] script job trigger → cron.completed **ok:false error="cron script grant exceeded"**（BLOCKER 修复实证，修前会错误放行）；② grants 覆盖 job 同脚本 → ok:true 出站正常（回归）；③ auto-delivery-lite：Signal 错 checkpoint → **400 checkpoint mismatch**；正确 Signal → done；Cancel 已 done → **409 already in terminal state**。
+- 勾选：无新增（三项 R21 已勾）→ **Phase 5 正式关门**。
+- 沉淀：llmdoc 已收录（pitfalls §41-45、decisions task-workflow-instance-id/scheduler-script-runner、doc-gaps #11/#14 收口+#29 声明簇、current-state 翻页）；15 MINOR backlog（tasks 表无 TTL、cron 重试非幂等、scheduler List 丢 filter、toMergedResultPayload 丢 reason、cancelScheduleSafe 吞异常、fan-in 真实投递胶水本地 0 覆盖等）。
+- 遗留：Phase 6（飞书 Channel + Observability + Management）为下一 Phase；backlog：模板 agent def 种子化、script 能力表扩容、Phase 4 的 13 MINOR。
 
 ## Round 21 — 2026-07-03（Phase 5 R21：Scheduler/M6 + 三项 DoD 勾选）
 - 目标：Phase 5 / Scheduler 侧（SchedulerHub DO + publish/agent/script 三 action + script isolate + CLI cron 族）+ 三项 DoD 采证勾选
