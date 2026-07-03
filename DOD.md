@@ -81,7 +81,7 @@
 **范围**：Tool Gateway（**基于 tool-bridge 集成**——该仓库是用户的私有项目、仍在建设中，缺能力直接改上游（流程见 LOOP.md §2.1），不做平行实现：`/htbp/tools/*` 树、mcp/http/builtin 三种 ToolProvider、调用点 Check、凭证注入）；`ToolRegistry`；`AgentRegistry` + `AgentRuntime`（Spawn/Send/Status/Terminate/ListInstances，DO Light Runtime）；完成协议 §3.4（correlationId 全生命周期、六条路由规则、ExpectSpec.schema 校验重试）；内置 echo/LLM harness（Agents SDK，接 `ANTHROPIC_API_KEY`）；Model Provider 最小版（`ModelProviderRegistry` + 直连路由）；**CLI**：`watt tool ls|describe|call|mount` / `watt agent list|get|spawn|send|terminate|tree` / `watt provider list|add|set-default`。
 
 **DoD**：
-- [ ] 单测：§3.4 六条规则逐条（定向回送、派生回送、超时代发、终止失败、等待方消失丢弃、去重）；schema 校验失败→重试→invalid_output；correlationId 字符集校验；Spawn 幂等键。
+- [x] 单测：§3.4 六条规则逐条（定向回送、派生回送、超时代发、终止失败、等待方消失丢弃、去重）；schema 校验失败→重试→invalid_output；correlationId 字符集校验；Spawn 幂等键。（2026-07-03 Round 14：core `src/agent/` 86 新测试，`pnpm verify` 597 tests 全绿，core 覆盖率 100% 保持）
 - [ ] 集成：`watt tool mount` 注册一个 http ToolProvider → `watt tool call` 成功；无权限 principal 的 token 下 `watt tool call` → 403 且 `watt tool ls` 不可见（Case 4 的机制预演）。
 - [ ] 集成：`watt agent spawn` 一个 LLM Agent（真实模型）→ `watt agent send --expect-schema` → 收到 schema 合法的 agent.result → `watt agent tree` 显示派生关系。**这是第一个消耗真实 token 的测试，单独 tag `@llm`，可跳过。**
 

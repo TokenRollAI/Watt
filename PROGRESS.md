@@ -5,9 +5,9 @@
 ## 当前状态
 
 - **当前 Phase**：**Phase 3（Context Layer）已关门**（Round 13：16 MAJOR 全修 + DoD 线上复验）
-- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）
+- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 项 1（Round 14）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 4（Tool Layer + Agent Runtime）项 1——先派 investigator 调研（含 tool-bridge 上游现状,LOOP §2.1）
+- **下一目标**：Phase 4 项 2（R12：tool-bridge 上游补 builtin/effect 字段 + Watt ToolRegistry + /htbp/tools 代理 + Check PEP）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 14 — 2026-07-03（Phase 4 R11：core Agent 纯逻辑）
+- 目标：Phase 4 / DoD 项 1（§3.4 六条规则逐条、schema 校验失败→重试→invalid_output、correlationId 字符集校验、Spawn 幂等键）
+- 动作：investigator 先产出 `.llmdoc-tmp/investigations/phase4-tool-agent.md`（tool-bridge 上游现状:HTBP 树/虚拟化/租户/~help 已备,缺 builtin 节点+effect/scope/confirm 字段+错误契约对齐;集成拓扑倾向独立 watt-toolbridge Worker + service binding 代理 /htbp/tools;Agents SDK 未引入有共存风险;四轮拆分建议）。worker 落地 `packages/core/src/agent/`（纯逻辑,test-first）：`types.ts`（AgentDefinition/SpawnRequest/ExpectSpec/AgentResult/AgentFailed zod）、`correlation.ts`（字符集校验 `[A-Za-z0-9_-]`≤80 + CorrelationTable 状态机:register/resolve-once/expire/failWaiter）、`routing.ts`（§3.4 六规则纯判定:定向回送/派生回送/超时代发(真实结果晚到→drop-duplicate 幂等)/终止即失败/等待方消失丢弃/去重）、`expect-schema.ts`（最小 JSON Schema 子集校验器 type/properties/required/items/enum,声明子集范围;重试 maxAttempts=3 实现声明→invalid_output）;Spawn 幂等键复用 eventbus resolveInstanceKey 不重写。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**597 tests**：shared 6 + core 302 + cli 62 + gateway 227;core 覆盖率 100%：438/438）。
+- 勾选：Phase 4 项 1（core 面;含 §3.4 六规则/schema 重试/correlationId/Spawn 幂等键全部单测）。
+- 沉淀：调研报告落 `.llmdoc-tmp/`;实现声明（JSON Schema 子集、maxAttempts=3、CorrelationTable 接口）待关门轮入 doc-gaps。
+- 遗留：R12（tool-bridge 上游补 builtin+effect/scope 字段 → Watt 侧 ToolRegistry + /htbp/tools 代理 + Check PEP → DoD 项 2）;R13（Agents SDK Light Runtime + AgentRegistry/AgentRuntime + @llm 集成 → DoD 项 3）;R14 关门。**待决策**：Architecture M4 "tool-bridge 是整棵 HTBP 树宿主" 与 gateway 已自建 platform/context 子树的边界矛盾（倾向方案 A:代理仅 tools,需回写 Architecture 或记 doc-gap）。
 
 ## Round 13 — 2026-07-03（Phase 3 关门轮）
 - 目标：Phase 3 关门——质量关口 Workflow + 确认项全修 + DoD 线上复验 + 沉淀
