@@ -9,9 +9,9 @@
 - 该 Phase 在 `DOD.md` 中的**每一条** DoD 命令都要在关门轮重新跑一遍（不吃历史证据）。
 - 主 assistant 亲自跑，每条记一行结果（命令 + exit code / 关键输出），入 `PROGRESS.md` 关门轮。
 
-### ② 质量关口 Workflow：5 维 review → 对抗核查
+### ② 质量关口 Workflow：4 维 review → 对抗核查
 
-- **5 维并行 review**：correctness / contract（与 Proto 契约一致性） / ops / test-quality，各维独立派 review agent。
+- **4 维并行 review**：correctness / contract（与 Proto 契约一致性） / ops / test-quality，各维独立派 review agent（Phase 0/1 曾含渗透性安全维度共 5 维，Round 10 起按用户指示去掉该维度）。
 - **逐条对抗核查**：每条 BLOCKER/MAJOR finding 再派一个核查 agent，prompt 要求**"先假设这是误报去求证"**——拿着 finding 去读源码/规范原文，只有证伪失败才确认成立。
 - MINOR 不阻塞关门，记入 backlog（PROGRESS 遗留节）。
 

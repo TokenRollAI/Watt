@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -150,3 +150,24 @@
 
 - notFound 兜底在中间件链末端：若规范树 501 占位靠 notFound 判前缀实现，请求会先被认证中间件拦成 401。
 - §11.3a 语义要求 501 优先于 401——占位路由必须**显式注册在认证中间件之前**（gateway `index.ts` 即此做法）。
+
+## 26. gateway src 直接 import zod 在 workerd 解析失败
+
+- 现象：gateway 源码直接 `import { z } from 'zod'`，typecheck 绿但 workerd 运行时报 `Cannot find package 'zod'`。
+- 原因：zod 被 pnpm workspace hoisting 到别处，gateway 包解析不到。
+- 解法：gateway 内用手写 type guard，或需要 zod schema 时**经 `@watt/core` 导出**（core 是 zod 的直接依赖方）。
+
+## 27. TextDecoder `fatal` 须同时给 `ignoreBOM`（TS2345）
+
+- 现象：`new TextDecoder('utf-8', { fatal: true })` 在本工程 lib 类型下报 TS2345。
+- 解法：同时给两个选项：`{ fatal: true, ignoreBOM: false }`（或显式 true），否则 typecheck 红。
+
+## 28. 本机代理：workers.dev 直连偶发超时（Round 10 起）
+
+- 现象：本机直连 `watt-gateway.shuaiqijianhao.workers.dev` 也开始偶发超时（此前只有 watt.pdjjq.org DNS 污染，见 §11）；CF 边缘本身正常。
+- 解法：验证命令带 `https_proxy=http://127.0.0.1:7890`；**Node 脚本**（如 `sign-admin-token.mjs`）不认 env proxy，需另加 `NODE_USE_ENV_PROXY=1`。
+
+## 29. 多 teammate 共享工作树的并行修复纪律
+
+- typecheck 红时先判断归属：用 `git show HEAD:<file>` 对比基线，确认是自己的在途改动还是他人的——不要见红就修别人的文件。
+- **禁用 `git stash`**：会连带他人在途改动一起 stash 掉，恢复时产生冲突/丢改动。

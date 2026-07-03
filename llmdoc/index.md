@@ -1,6 +1,6 @@
 # llmdoc 全局文档地图
 
-> Watt：构建在 Cloudflare 上的 Agent Infra 平台，由持续开发 loop 按 DOD Phase 0~7 增量实现（Phase 0/1 已关门，当前 Phase 2 Event Gateway）。规格真源在 `Docs/`，本目录是其检索层与过程记忆。启动阅读顺序见 [startup.md](startup.md)（此处不重复）。
+> Watt：构建在 Cloudflare 上的 Agent Infra 平台，由持续开发 loop 按 DOD Phase 0~7 增量实现（Phase 0/1/2 已关门，当前 Phase 3 Context Layer）。规格真源在 `Docs/`，本目录是其检索层与过程记忆。启动阅读顺序见 [startup.md](startup.md)（此处不重复）。
 
 ## 目录用途
 
@@ -19,8 +19,8 @@
 - [must/current-state.md](must/current-state.md) — 当前状态快照：Phase 进度、源码/部署现状、本机工具链、凭据状态与空缺（随轮次更新）。
 - [overview/project-overview.md](overview/project-overview.md) — 项目定位、六个 User Case、Phase 0~7 路线图、全局 Done 五条。
 - [architecture/modules-and-flows.md](architecture/modules-and-flows.md) — M1~M11 模块表、三大 Registry 与单一 HTBP 消费面、数据流、HITL 链路、CLI 命令表、Plugin 四类契约、引导顺序。
-- [guides/toolchain-pitfalls.md](guides/toolchain-pitfalls.md) — 本仓库工具链与 wrangler 部署的坑：registry 超时、pnpm build 门禁、vitest-pool-workers 新 API（含 D1 migrations 接线、同文件共享 isolate）、TS noEmit、workers_dev 默认关闭、--json banner 污染、JSONC 注入、边缘传播重试（含旧 isolate 首击）、本机 DNS 污染 workaround、Biome 单行 import、块注释 `*/` 字面、coverage 排除、--coverage 不透传、脚本 stdout 纯净化、secret 传播窗口、provision 幂等金标准、pnpm --filter 空匹配假通过、验证脚本 base_url 缺省、Hono matcher 锁定、501 占位注册位置。
-- [guides/phase-gate-workflow.md](guides/phase-gate-workflow.md) — Phase 关门标准流程：重跑 DoD 记证据 → 5 维质量关口 + 对抗核查 → 修复复核 → Docs 漂移回查 → PROGRESS 入账与 llmdoc 沉淀；附 Phase 0/1 实测经验（并行修复拆分、跨包契约消费方枚举、线上全链重跑）。
+- [guides/toolchain-pitfalls.md](guides/toolchain-pitfalls.md) — 本仓库工具链与 wrangler 部署的坑：registry 超时、pnpm build 门禁、vitest-pool-workers 新 API（含 D1 migrations 接线、同文件共享 isolate）、TS noEmit、workers_dev 默认关闭、--json banner 污染、JSONC 注入、边缘传播重试（含旧 isolate 首击）、本机 DNS 污染 workaround、Biome 单行 import、块注释 `*/` 字面、coverage 排除、--coverage 不透传、脚本 stdout 纯净化、secret 传播窗口、provision 幂等金标准、pnpm --filter 空匹配假通过、验证脚本 base_url 缺省、Hono matcher 锁定、501 占位注册位置、gateway 直接 import zod 解析失败、TextDecoder fatal+ignoreBOM、本机代理（workers.dev 超时→https_proxy）、共享工作树并行修复纪律。
+- [guides/phase-gate-workflow.md](guides/phase-gate-workflow.md) — Phase 关门标准流程：重跑 DoD 记证据 → 4 维质量关口 + 对抗核查 → 修复复核 → Docs 漂移回查 → PROGRESS 入账与 llmdoc 沉淀；附 Phase 0/1 实测经验（并行修复拆分、跨包契约消费方枚举、线上全链重跑）。
 - [reference/proto-map.md](reference/proto-map.md) — Proto.md 章节检索地图 + 四大横切契约（Event 信封/CallContext/§6.4c 判定/WattError 含 401/501 补充与裸 body）+ §6.5d device flow + §3.4 六条路由规则 + HTBP 树 + 24 个接口面。
 - [reference/external-facts.md](reference/external-facts.md) — Cloudflare 原语选型、外部仓库归属（含 Flue 勘误）、模型渠道双路径与易错点、飞书 WS 方案要点。
 - [memory/doc-gaps.md](memory/doc-gaps.md) — Docs 缺口台账（P1/P2 需修 Docs，P3 仅记录）。
@@ -31,6 +31,7 @@
 - [memory/decisions/auth-implementation.md](memory/decisions/auth-implementation.md) — Phase 1 Auth 选型：Ed25519+jose+JWKS、私钥生命周期与轮换签发模式、device grants 存 KV、OAuth 端点 WattError 豁免边界、CLI 未认证退出码分层、KV 判定缓存跳过（2026-07-02 Round 5/6）。
 - [memory/reflections/2026-07-02-round1-scaffold.md](memory/reflections/2026-07-02-round1-scaffold.md) — Round 1 worker 派发反思：prompt 三件套模板、Reflection Handoff、派发前 proto-map 自查指令契约细节。
 - [memory/reflections/2026-07-02-round7-phase1-gate.md](memory/reflections/2026-07-02-round7-phase1-gate.md) — Round 7 关门轮反思：派发检查清单（filter 名对照 package.json name、跨包契约改动先 grep 全部消费方、文件集预留连带改动报告出口）、独立 mock 掩盖跨包错配、deploy 后旧 isolate 误判、worker 有理偏离评审建议的良性案例。
+- [memory/reflections/2026-07-03-round10-phase2-gate.md](memory/reflections/2026-07-03-round10-phase2-gate.md) — Round 10 关门轮反思：并行 worker 共享工作树的类型契约耦合污染（git worktree 隔离验证自救）、4 维评审裁剪不降质（0 误报）、对抗核查价值=修严重度+补证据链、注释与死测试合谋锁 bug、代理环境 NODE_USE_ENV_PROXY 与 token 1h 有效期。
 
 ## 检索路由
 
