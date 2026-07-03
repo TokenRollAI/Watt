@@ -47,7 +47,6 @@ export {
   type VerifiedToken,
   verifyToken,
 } from './auth/jwt.ts';
-
 // 判定算法（§6.4c）
 export { type AuthorizeInput, authorize } from './authz/authorize.ts';
 export {
@@ -58,6 +57,8 @@ export {
   subjectMatches,
 } from './authz/match.ts';
 export { toolActionFor } from './authz/tool-action.ts';
+// Context Layer 纯逻辑（§4.1 ContextProvider / §4.2 ContextRegistry）
+export * from './context/index.ts';
 export {
   DEFAULT_DEDUPE_WINDOW_MS,
   type DedupeRecord,
