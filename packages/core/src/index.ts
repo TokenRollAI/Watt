@@ -156,6 +156,8 @@ export {
   subscriptionSchema,
   subscriptionSinkSchema,
 } from './eventbus/types.ts';
+// Task + Scheduler 纯逻辑（§7 Scheduler / §8 TaskManager / §1.1 checkpoint / §3.4 事件名）
+export * from './task/index.ts';
 // Tool Layer 纯逻辑（§5.2 ToolRegistry ToolMount）
 export * from './tools/index.ts';
 // 类型层
