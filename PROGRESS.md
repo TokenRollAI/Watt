@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）已关门**（Round 18：2 BLOCKER + 10 MAJOR 全修 + DoD 线上复验）
-- **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）
+- **当前 Phase**：**Phase 5（Task + Scheduler）三项 DoD 全勾**（Round 19/20/21），待 R22 关门（质量关口 + 对抗核查 + Docs 漂移回查）
+- **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）+ Phase 5 三项（R21 勾选）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 5 R21（Scheduler/M6：SchedulerHub DO + 三 action + script isolate + CLI cron 族）
+- **下一目标**：Round 22 Phase 5 关门（4 维质量关口 workflow + 逐条对抗核查 + doc-gap #11/#14 收口 + llmdoc 沉淀）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,15 @@
 ---
 
 # 轮次记录
+
+## Round 21 — 2026-07-03（Phase 5 R21：Scheduler/M6 + 三项 DoD 勾选）
+- 目标：Phase 5 / Scheduler 侧（SchedulerHub DO + publish/agent/script 三 action + script isolate + CLI cron 族）+ 三项 DoD 采证勾选
+- 动作：worker 落地（commits b9bf71b/4eac13f）：SchedulerHub DO（Agents SDK Agent + this.schedule，CronJob 存内嵌 SQLite 多行表——Agent 基类可同时用 state + 自建 SQL 表）；六动词 + Trigger（disabled job 仍可手动 Trigger 补跑，enabled 只关到点自动）；三 action 双留痕（cron.fired → action → cron.completed，publish 亦发 completed 统一留痕面）；script action：ScriptRunner 可注入接口（**本地 vitest-pool-workers 无 LOADER 绑定实测确认**——fake runner 走同一 watt binding + Authorizer.Check(cron:<jobId> 链段) 路径，真 isolate 留部署侧）；claims=createdBy+IdentityMapper 实时 roles+chain=[cron:<jobId>]，authorize 以本 job 播种 cronJobs 索引自足；/htbp/platform/scheduler 六动词路由（**最后一个 501 占位清零，SPEC_TREE_PREFIXES 已空**）；watt cron list|create|trigger|rm；+32 测试。
+- **部署侧修复**（主 assistant，commits 5b95466/a662d3d 类）：LOADER 真 isolate 冒烟两次失败迭代——① watt binding plain object 闭包函数不可跨 isolate clone → 改 RpcTarget；② **loader 的 env 字段连 RpcTarget 也走 structured clone 拒收** → 改经 run(watt) **RPC 调用参数**注入（Cap'n Web 在 RPC 边界把 RpcTarget 转 stub）。第三次冒烟通过。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**896 tests**：shared 6 + core 396 + cli 107 + gateway 387+1skip）；`pnpm deploy:all` exit 0（DO migration v4 SchedulerHub + worker_loaders[LOADER] 绑定上线，**Dynamic Worker Loader 账户已开通实证**）；**线上全链**：① publish action：cron create（*/5）→ trigger → event tail 见 cron.fired(manual)+smoke.cron.publish+cron.completed(ok:true)，且 15:55 到点 **trigger:scheduled 自动触发**亦留痕（Agents SDK schedule 线上真实工作）；② script action：脚本存 context://automations → cron create --action-kind script --grants → trigger → **LOADER 真 isolate** run(watt) 桩指标经 watt.publish 出站 → fired+completed(ok:true)；③ deep-research 线上全链：run → waiting_human@confirm-plan → signal approve → 2 agent fan-in echo 回传 → **done**；④ cron rm ×2 → list []。
+- 勾选：**Phase 5 三项全勾**（项 1 R19+R21 单测面；项 2 R20+R21 task 集成；项 3 R21 cron script 线上全链）。
+- 沉淀：pitfalls 候选（LOADER env 字段 structured clone 拒 RpcTarget→RPC 参数注入；本地 pool-workers 无 LOADER 绑定；loader stub 类型窄声明）；决策候选 script-runner 注入抽象。
+- 遗留：R22 Phase 5 关门（4 维质量关口 workflow——不含渗透性安全维度 + 逐条对抗核查 + doc-gap #11/#14 收口 + current-state 翻页 + llmdoc 沉淀）；backlog：模板 agent def 种子化、script 能力表扩容（当前仅 watt.publish）。
 
 ## Round 20 — 2026-07-03（Phase 5 R20：Task/M7 on Cloudflare Workflows）
 - 目标：Phase 5 / Task 侧（WorkflowEntrypoint + 两模板 + TaskManager + Signal 闭环 + CLI task 族）

@@ -92,9 +92,9 @@
 **范围**：`TaskManager`（Workflows 适配：事件名净化、result/failed 归并、waitForEvent 超时处理）；`deep-research` 与 `auto-delivery-lite` 两个部署模板；`Scheduler`（DO + `this.schedule`，publish/agent/script 三种 action，script 的 isolate 执行 + grants 注入）；§1.1 闭环接通（checkpoint→卡片→action→Signal→恢复）；**CLI**：`watt task list|get|run|signal|cancel` / `watt cron list|create|trigger|rm`。
 
 **DoD**：
-- [ ] 单测：Signal 状态机（waiting 外 Signal→conflict）、事件名净化规则、cron 表达式解析、script grants 注入面（未声明的绑定不存在）。
-- [ ] 集成：`watt task run deep-research` → 进入 waiting_human → `watt task signal`（CLI 就是人类确认的命令行路径）→ 恢复执行 → done；`watt task cancel` 后子实例收到 terminated。
-- [ ] 集成：`watt cron create --action script`（查询一个桩指标 → Publish 出站事件）→ `watt cron trigger` 立即执行 → `watt event tail` 见 cron.fired + cron.completed。
+- [x] 单测：Signal 状态机（waiting 外 Signal→conflict）、事件名净化规则、cron 表达式解析、script grants 注入面（未声明的绑定不存在）。（2026-07-03 R19+R21：core/src/task/ signal/event-names/cron 纯逻辑（core 396 tests 覆盖率 100%）；script 能力表最小面=watt.publish（scheduler-hub.test.ts/platform-scheduler.test.ts 24 tests，fake runner 走同一 watt binding+Authorizer.Check(cron:<jobId> 链段) 路径，未声明能力不注入））
+- [x] 集成：`watt task run deep-research` → 进入 waiting_human → `watt task signal`（CLI 就是人类确认的命令行路径）→ 恢复执行 → done；`watt task cancel` 后子实例收到 terminated。（2026-07-03 R20+R21：本地真实 Workflows introspect 集成测（gateway 387 tests 含 task 全链+cancel 子实例 terminate）；线上 workers.dev：deep-research pending→waiting_human@confirm-plan→signal approve→2 agent fan-in echo output 回传→done；auto-delivery-lite 同链 + cancel→cancelled（R20））
+- [x] 集成：`watt cron create --action script`（查询一个桩指标 → Publish 出站事件）→ `watt cron trigger` 立即执行 → `watt event tail` 见 cron.fired + cron.completed。（2026-07-03 R21 线上：脚本存 context://automations/smoke-script-r21 → cron create --action-kind script --grants → trigger → **LOADER 真 isolate**（Dynamic Worker Loader 已开通）执行 run(watt)，桩指标 queue_depth=3 经 watt.publish 出站 smoke.cron.script → event tail 见 cron.fired+cron.completed(ok:true)；另 publish action 的到点自动触发（trigger:scheduled）亦线上验证）
 
 ## 8. Phase 6 — 飞书 Channel + Observability + Management（M1-feishu + M9 + M10）
 
