@@ -5,9 +5,9 @@
 ## 当前状态
 
 - **当前 Phase**：**Phase 3（Context Layer）已关门**（Round 13：16 MAJOR 全修 + DoD 线上复验）
-- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 项 1（Round 14）
+- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 项 1/2（Round 14/16）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 4 项 2 后半（部署 watt-toolbridge + service binding 代理 /htbp/tools + Check PEP + watt tool describe|call 闭环）
+- **下一目标**：Phase 4 项 3（R13：Agents SDK Light Runtime + AgentRegistry/AgentRuntime + ModelProvider 最小版 + @llm 集成）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 16 — 2026-07-03（Phase 4 R12 后半：watt-toolbridge 部署 + tools 代理 + DoD 项 2）
+- 目标：Phase 4 / DoD 项 2 后半（/htbp/tools 代理 + Check PEP + watt tool describe|call 闭环）
+- 动作：worker 落地:`packages/toolbridge`（**vendored** 上游 worker 源码 @56ab13b——上游运行时依赖含整套 dashboard UI(React/vite),纯代理目标不需要,vendor src/worker + 独立 tsconfig + 一处 ASSETS patch 有标注;升级流程写入 README）;gateway `http/tools-proxy.ts`（认证→tool://<path> Check PEP→service binding TOOLBRIDGE 转发→上游 {error:{}} 转裸 WattError→List/~help 按调用者逐 path Check('read') 裁剪）;SPEC_TREE_PREFIXES 移除 /htbp/tools;CLI `watt tool describe|call`;deploy-all 先 toolbridge 后 gateway。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**661 tests**：shared 6 + core 314 + cli 79 + gateway 262）;部署双 Worker（watt-toolbridge + watt-gateway,service binding 挂载）;**线上闭环**：`watt tool mount test/watt --provider http --config '{"endpoints":[...]}'` → `watt tool describe`（经代理返回 HTBP help DSL 树）→ `watt tool call test/watt/echo-get '{}'` → 200 `{resource,result}`（postman-echo 真实往返）;403/裁剪由 tools-proxy.test.ts 16 tests 锁定（scoped token 无权树 403 + ~help 裁剪不可见——Case 4 预演）。**冒烟发现并明确**:http mount 的 providerConfig 形状必须是上游 HttpEndpointConfig 的 `{endpoints:[{name,method,url,...}]}`,单 `{endpoint}` 会 500——CLI/文档待注明(backlog)。
+- 勾选：Phase 4 项 2。
+- 沉淀：vendoring 决策与升级流程在 packages/toolbridge/README.md。
+- 遗留：R13——Agents SDK Light Runtime（装 agents 包,echo/LLM harness）+ AgentRegistry/AgentRuntime + ModelProvider 最小版 + CLI agent/provider 命令族 + @llm 集成（DoD 项 3,每轮每 tag 一次）;R14 关门。
 
 ## Round 15 — 2026-07-03（Phase 4 R12 前半：tool-bridge 上游 + ToolRegistry）
 - 目标：Phase 4 / DoD 项 2 前半（上游能力补齐 + Watt 侧 ToolRegistry/platform 路由/CLI mount|ls）
