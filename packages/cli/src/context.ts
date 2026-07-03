@@ -117,8 +117,11 @@ export async function contextGet(
   const body = (await contextCall(base, token, namespace, 'Get', { path }, deps)) as {
     entry?: ContextEntry;
   };
-  // 服务端 Get 返回 { entry }（context-routes.ts）。
-  return body.entry ?? (body as unknown as ContextEntry);
+  // 服务端 Get 返回 { entry }（context-routes.ts，gateway test 锁定）。精确解包，不兜底 body 本身。
+  if (body.entry === undefined) {
+    throw new CliError('server Get response missing entry', 1);
+  }
+  return body.entry;
 }
 
 /** put 的 entry 输入（Write：ContextEntryInput）。 */
@@ -145,10 +148,14 @@ export async function contextPut(
   if (input.metadata !== undefined) entry.metadata = input.metadata;
   if (input.ifVersion !== undefined) entry.ifVersion = input.ifVersion;
   const body = (await contextCall(base, token, namespace, 'Write', { path, entry }, deps)) as {
-    entry?: ContextEntryMeta;
+    meta?: ContextEntryMeta;
   };
-  // 服务端返回 ContextEntryMeta（可能包一层 {entry} 或直接返回）。
-  return body.entry ?? (body as unknown as ContextEntryMeta);
+  // 服务端消费面 Write 返回 { meta }（context-routes.ts，其 gateway test 已锁定该形状）。
+  // 精确解包 body.meta：不再兜底 body 本身——双形态兼容会掩盖两侧漂移（曾两次致线上 bug）。
+  if (body.meta === undefined) {
+    throw new CliError('server Write response missing meta', 1);
+  }
+  return body.meta;
 }
 
 /** patch 的输入（Update：ContextPatch）。content 可选（只改 metadata 时省略）。 */
@@ -171,9 +178,13 @@ export async function contextPatch(
   if (input.metadata !== undefined) patch.metadata = input.metadata;
   if (input.ifVersion !== undefined) patch.ifVersion = input.ifVersion;
   const body = (await contextCall(base, token, namespace, 'Update', { path, patch }, deps)) as {
-    entry?: ContextEntryMeta;
+    meta?: ContextEntryMeta;
   };
-  return body.entry ?? (body as unknown as ContextEntryMeta);
+  // 服务端消费面 Update 返回 { meta }（context-routes.ts，gateway test 锁定）。精确解包，见 contextPut。
+  if (body.meta === undefined) {
+    throw new CliError('server Update response missing meta', 1);
+  }
+  return body.meta;
 }
 
 /** NamespaceMount 的读投影（mount 回显 / unmount 无 body）。 */
@@ -207,10 +218,14 @@ export async function contextMount(
   if (input.readOnly !== undefined) mount.readOnly = input.readOnly;
   if (input.providerConfig !== undefined) mount.providerConfig = input.providerConfig;
   // 管理面走 platform 子树（htbpCall → /htbp/platform/context），ContextRegistry.Write。
+  // 服务端返回 { mount }（routes.ts platform context Write，gateway context-routes.test.ts 锁定）。
   const body = (await htbpCall(base, token, 'context', 'Write', { mount }, deps)) as {
     mount?: NamespaceMount;
   };
-  return body.mount ?? (body as unknown as NamespaceMount);
+  if (body.mount === undefined) {
+    throw new CliError('server mount response missing mount', 1);
+  }
+  return body.mount;
 }
 
 export async function contextUnmount(

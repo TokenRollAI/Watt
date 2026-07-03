@@ -49,9 +49,15 @@ export type ContextPatch = z.infer<typeof contextPatchSchema>;
 
 // ─── ContextEntryInput（§4.1 L493-498）───────────────────────────────────
 // Write 入参：整体创建或替换；ifVersion 不匹配 → conflict。
+// content 必填：z.unknown() 本身允许缺省（键可省），会让缺 content 的 Write 穿过校验、
+// 到 provider 内才炸成 500——契约上应 400。故 content 分支用 z.unknown().refine 断言"存在且
+// 非 undefined"，收紧为必填；类型面仍是 string | unknown（union 坍缩为 unknown，与 §4.1 一致）。
 export const contextEntryInputSchema = z.object({
   contentType: z.string(),
-  content: z.union([z.string(), z.unknown()]),
+  content: z.union([
+    z.string(),
+    z.unknown().refine((v) => v !== undefined, { message: 'content is required' }),
+  ]),
   metadata: z.record(z.string(), z.string()).optional(),
   ifVersion: z.string().optional(),
 });

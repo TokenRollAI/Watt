@@ -89,6 +89,28 @@ describe('contextEntryInputSchema（§4.1 Write 入参）', () => {
     expect(i.contentType).toBe('text/plain');
   });
 
+  it('缺 content 键 → fail（z.unknown() 曾允许缺省，穿过校验致 provider 500）', () => {
+    // 收紧前 z.union([z.string(), z.unknown()]) 会让此例通过；收紧后契约面 400 而非 provider 500。
+    expect(contextEntryInputSchema.safeParse({ contentType: 'text/plain' }).success).toBe(false);
+  });
+
+  it('content 显式 undefined → fail', () => {
+    expect(
+      contextEntryInputSchema.safeParse({ contentType: 'text/plain', content: undefined }).success,
+    ).toBe(false);
+  });
+
+  it('content 为非字符串（对象/null）→ pass（走 unknown 分支）', () => {
+    // string 分支不命中时落到 unknown().refine，非 undefined 即通过——覆盖 refine 的 true 侧。
+    expect(
+      contextEntryInputSchema.safeParse({ contentType: 'application/json', content: { a: 1 } })
+        .success,
+    ).toBe(true);
+    expect(
+      contextEntryInputSchema.safeParse({ contentType: 'text/plain', content: null }).success,
+    ).toBe(true);
+  });
+
   it('接受 metadata/ifVersion', () => {
     const i = contextEntryInputSchema.parse({
       contentType: 'application/json',

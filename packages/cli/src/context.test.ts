@@ -6,6 +6,10 @@ import { run } from './cli.ts';
  * 断言精确到请求形状（URL 子树 / tool / arguments 各字段），吸取 Phase 2 教训——
  * mock 不掩盖形状错配。覆盖：六命令请求形状、put 三路 content、metadata k=v 解析、
  * mount 参数组装（ttl 数字化 / readOnly / provider-config）、错误路径（401→exit 1，无 token→exit 2）。
+ *
+ * mock 响应形状真源：以 gateway packages/gateway/test/context-routes.test.ts 锁定的服务端响应为准
+ * （消费面 Get→{entry}、Write/Update→{meta}、List→{items}；管理面 context Write→{mount}）。
+ * 两侧漂移曾两次造成线上 bug——此处 mock 必须与服务端契约一致，勿凭想当然造形状。
  */
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -17,16 +21,27 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const ENV = { WATT_BASE_URL: 'https://x', WATT_TOKEN: 'tok-test' };
 
-/** 记录每次请求（url + HTBP {tool,arguments}），按顺序返回预设响应（含状态码）。 */
+/** 记录每次请求（url + headers + HTBP {tool,arguments}），按顺序返回预设响应（含状态码）。 */
 function scriptedFetch(responses: Array<{ body: unknown; status?: number }>): {
   fetch: typeof globalThis.fetch;
-  calls: Array<{ url: string; body: { tool: string; arguments: Record<string, unknown> } }>;
+  calls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: { tool: string; arguments: Record<string, unknown> };
+  }>;
 } {
-  const calls: Array<{ url: string; body: { tool: string; arguments: Record<string, unknown> } }> =
-    [];
+  const calls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: { tool: string; arguments: Record<string, unknown> };
+  }> = [];
   let i = 0;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
-    calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) });
+    calls.push({
+      url: String(url),
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      body: JSON.parse(String(init?.body ?? '{}')),
+    });
     const r = responses[Math.min(i, responses.length - 1)]!;
     i++;
     return jsonResponse(r.body, r.status ?? 200);
@@ -78,7 +93,9 @@ describe('watt context ls', () => {
 describe('watt context cat', () => {
   it('gets one entry and prints content (human)', async () => {
     const out: string[] = [];
-    const { fetch, calls } = scriptedFetch([{ body: { ...META(), content: '## report body' } }]);
+    const { fetch, calls } = scriptedFetch([
+      { body: { entry: { ...META(), content: '## report body' } } },
+    ]);
     const code = await run(['context', 'cat', 'feedback/bugs', '1235'], {
       env: ENV,
       fetch,
@@ -93,7 +110,7 @@ describe('watt context cat', () => {
 
   it('--json prints the whole entry', async () => {
     const out: string[] = [];
-    const { fetch } = scriptedFetch([{ body: { ...META(), content: 'x' } }]);
+    const { fetch } = scriptedFetch([{ body: { entry: { ...META(), content: 'x' } } }]);
     const code = await run(['--json', 'context', 'cat', 'feedback/bugs', '1235'], {
       env: ENV,
       fetch,
@@ -107,7 +124,7 @@ describe('watt context cat', () => {
 describe('watt context put', () => {
   it('writes from --content with content-type and repeatable metadata', async () => {
     const out: string[] = [];
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     const code = await run(
       [
         'context',
@@ -127,6 +144,9 @@ describe('watt context put', () => {
     );
     expect(code).toBe(0);
     expect(calls[0]?.url).toBe('https://x/htbp/context/feedback/bugs');
+    // 请求头契约：Bearer token + JSON content-type（HTBP 调用固定形状）。
+    expect(calls[0]?.headers.authorization).toBe('Bearer tok-test');
+    expect(calls[0]?.headers['content-type']).toBe('application/json');
     expect(calls[0]?.body.tool).toBe('Write');
     expect(calls[0]?.body.arguments.path).toBe('1235');
     const entry = calls[0]?.body.arguments.entry as Record<string, unknown>;
@@ -138,7 +158,7 @@ describe('watt context put', () => {
 
   it('reads content from stdin when no --content/--file', async () => {
     const out: string[] = [];
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     const code = await run(['context', 'put', 'feedback/bugs', '1235'], {
       env: ENV,
       fetch,
@@ -154,7 +174,7 @@ describe('watt context put', () => {
   });
 
   it('reads content from --file', async () => {
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     const code = await run(['context', 'put', 'feedback/bugs', '1235', '--file', '/tmp/x.md'], {
       env: ENV,
       fetch,
@@ -166,7 +186,7 @@ describe('watt context put', () => {
   });
 
   it('carries --if-version', async () => {
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     await run(['context', 'put', 'feedback/bugs', '1235', '--content', 'x', '--if-version', 'v9'], {
       env: ENV,
       fetch,
@@ -190,7 +210,7 @@ describe('watt context put', () => {
 describe('watt context patch', () => {
   it('updates metadata only (no content, no stdin touched)', async () => {
     const out: string[] = [];
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     const stdin = vi.fn(async () => 'should-not-be-read');
     const code = await run(
       ['context', 'patch', 'feedback/bugs', '1235', '--metadata', 'status=fixed'],
@@ -208,7 +228,7 @@ describe('watt context patch', () => {
   });
 
   it('updates content via --content and carries --if-version', async () => {
-    const { fetch, calls } = scriptedFetch([{ body: { entry: META() } }]);
+    const { fetch, calls } = scriptedFetch([{ body: { meta: META() } }]);
     await run(
       ['context', 'patch', 'feedback/bugs', '1235', '--content', 'new body', '--if-version', 'v1'],
       { env: ENV, fetch, stdout: () => {} },
