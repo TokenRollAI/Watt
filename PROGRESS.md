@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 2（Event Gateway）三项 DoD 全勾（Round 8/9）**，待关门（质量关口 review + 沉淀）
-- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 全部三项（Round 8 项 1、Round 9 项 2/3）
-- **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染，CF 边缘正常——验证/E2E 用 workers.dev URL 或 DoH）
-- **下一目标**：Phase 2 关门（重跑全部 DoD + 质量关口 Workflow + llmdoc 沉淀 + Docs 漂移回查，见 guides/phase-gate-workflow.md）
+- **当前 Phase**：**Phase 2（Event Gateway）已关门**（Round 10 质量关口 15 MAJOR 全修 + DoD 线上重跑，证据见 Round 10）
+- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 全部三项（Round 8/9，关门 Round 10）
+- **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
+- **下一目标**：Phase 3（Context Layer）项 1（四动词语义单测）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,21 @@
 ---
 
 # 轮次记录
+
+## Round 10 — 2026-07-03（Phase 2 关门轮）
+- 目标：Phase 2 关门——质量关口 Workflow + 确认项全修 + DoD 重跑 + 沉淀
+- 动作：
+  - **质量关口 Workflow**（4 维 review：correctness/contract/ops/test-quality + 逐条对抗核查,19 agents;按用户指示评审不含渗透性安全维度,phase-gate guide 已同步改 4 维并 commit）:15 条 MAJOR 全部确认成立（0 误报）,17 条 MINOR 记 backlog。
+  - **15 MAJOR 全修**（4 worker 并行 + 主 assistant 收口格式/提交）,按主题分 5 个 commit:
+    - `952f65a` event-bus:queue.send 失败补偿（best-effort 删留痕防 dedupe 吞重试,返回 unavailable/retryable）+ channelUser→IdentityMapper.Resolve 接线（未映射→user:anonymous）+ EventStore.delete + list limit 下界钳制。
+    - `a7bb36f` inbound:非 webhook adapter 显式 501（§0.2）+ bodyRaw 改 arrayBuffer 严格 UTF-8 解码/失败转 base64（§2.1 字节精确,非 UTF-8 验签集成测试锁定）+ core normalizeEvent 保留调用方 occurredAt（§2.1 Decode 义务;Proto §2.3 已加规范性澄清——宪法先行）。
+    - `6e8e457` routes:Publish 入参 eventInputSchema.safeParse（畸形→400 invalid_argument 非 500）+ Platform API Publish 无条件规约 source.kind='webhook'（§2.3 规范性）+ 新增 platform-event.test.ts 13 个 SELF.fetch 服务端契约测试（补零测试盲区）。
+    - `c6fc35d` consumer:§1.1 HITL system subscriber（task.checkpoint→带 actions 的 outbound.message 卡片、im.action(signal)→TaskSignaler 桩留 Phase 5）+ §2.3 规则 2（im.bot_joined→defaultAgent 的 session 订阅,(definition,session) 去重）+ DLQ watt-events-dlq（wrangler.jsonc consumer + provision 队列清单）+ consumer 测试补多 sink 部分失败/粘性映射落库断言/unsubscribe 后不投递。
+    - `b62af34` CLI tail:显式 limit 200 + 游标去 +1ms 改含端重查 + 同毫秒 id 去重（Set 仅存游标毫秒,防无界）+ 满页 stderr 截断警告;死测试重写为两轮真实轮询断言。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**354 tests**：shared 6 + core 163 + cli 41 + gateway 144;core 覆盖率 100%：247/247 语句、166/166 分支）;`pnpm provision` 幂等重跑（watt-events-dlq 已创建,wrangler.jsonc 字节级幂等）;`pnpm deploy:all` exit 0（DLQ consumer 上线）;**线上 DoD 重跑**（workers.dev,经本机代理）：签名 inbound 200 / 错签 403 / 未知 channel 404 / 同 delivery-id 重发返回原 eventId / event get·tail·channel list 全通 / webhook.site sink 订阅→投递 count=1→重发仍 1→unsubscribe;**修复项线上冒烟**：Publish {} → 400 invalid_argument（zod 明细）;Publish 自报 source.kind=system → Get 读回已规约为 webhook。
+- 勾选：无新增（Phase 2 三项此前已勾;本轮为关门质量修复）→ **Phase 2 正式关门**。
+- 沉淀：doc-gaps 新增 #24（occurredAt 矛盾,已回写 Proto §2.3）、#25（Phase 2 实现声明簇：source.kind 规约/HITL 系统投递免 Check/Signal 桩/DLQ/session 形状/补偿边界）;phase-gate guide 改 4 维评审;llmdoc /llmdoc:update 待做（current-state 翻页 + reflections）。
+- 遗留：17 条 MINOR backlog（dedupe check-then-put 并发窗、fetchDeliverer 无超时/不分 4xx/5xx、ListSubscriptions opts 未校验、~help 缺失 #21、cursor 分页 #22 等）不阻塞,随后续 Phase 顺手修;本机网络新状况：workers.dev 直连偶发超时,验证脚本需带 https_proxy（sign-admin-token.mjs 需 NODE_USE_ENV_PROXY=1）。
 
 ## Round 9 — 2026-07-02
 - 目标：Phase 2 / DoD 项 2（集成全链）+ 项 3（部署冒烟）

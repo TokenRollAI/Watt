@@ -39,6 +39,8 @@
 | 21 | **HTBP 节点 `~help`/`~skill` 延后**（Phase 1 关门，2026-07-02）：Proto §11.3a 要求每个 HTBP 节点响应 `GET ~help`/`~skill`，Phase 1 的 platform 子树未实现。已决策统一延后：platform 子树最小 ~help 随 Phase 3 Help DSL parser 落地；通用 ~help 生成归上游 tool-bridge（Phase 4，见 loop-contract §2.1 上游通道）。未知路径当前由 gateway notFound 兜底返回 404/501 裸 WattError | 仅记录（有意延后，已入 PROGRESS 关门记录） |
 | 22 | **Page<T> cursor 分页延后**（Phase 1 关门，2026-07-02）：§0.2 Page<T> 含可选 cursor；Phase 1 PolicyStore.List 返回 `{items}` 省略 cursor（limit 默认 50、上限 200 已按 §6.2 实现），cursor 分页留待数据量需要时的后续 Phase 补 | 仅记录（cursor 为可选字段，省略不违反契约） |
 | 23 | **instanceBy='session' 但 event.session 缺失行为未定义**（Round 8）：Proto §2.3 未定义该组合。实现取显式 `invalid_argument` 错误、不静默 fallback（`packages/core/src/eventbus/instance-key.ts` 注释声明理由），由订阅建立时保证 session 存在。另两项实现声明：type 通配 `"*"` 全通配合法；`"im.*"` 前缀含点故不匹配裸 `"im"` | 待回写 Proto §2.3（低优先，实现已自声明+测试锁定） |
+| 24 | **occurredAt 的 §2.3 Omit vs §2.1 Decode 义务矛盾**（Round 10 关门）：§2.3 Publish 参数为 `Omit<Event,'id'\|'traceId'\|'occurredAt'>`（类型上不含 occurredAt），但 §2.1 Decode 义务字段又要求填 occurredAt（渠道侧发生时刻）。已按"调用方已提供则保留、缺省才补接收时刻"实现（core normalizeEvent），并在 Proto §2.3 加规范性澄清（2026-07-03） | ✅ 已回写 Proto §2.3 |
+| 25 | **Phase 2 实现声明簇**（Round 10 关门，均已代码注释声明+测试锁定）：① Platform API Publish 无条件规约 `source.kind='webhook'`（Phase 2 无 agent token 豁免面；Phase 4 引入 claims.agent 后由 claims 区分）；② §1.1 system subscriber 的 outbound.message 投递不走出站 Check（系统行为非 Agent 出站）；③ im.action→Signal 桩的权限校验点 Check(task://,'signal') 留 Phase 5 与 TaskManager 一并落地；④ DLQ 命名 `watt-events-dlq`（仅队列存在，consumer/重放工具留 Phase 6 可观测轮）；⑤ webhook adapter session 形状 `webhook:<channelId>:<channelId>`（scope 退化，与 §1 `<channel>:<scope>:<id>` 的对齐留 doc 漂移候选）；⑥ publish 的 queue.send 失败补偿为 best-effort 删留痕（删失败留 console.error，严格原子需 DO/事务） | 仅记录（Phase 4/5/6 对应项到期收口） |
 
 ## 报告事实漂移订正（勿改 Docs）
 
