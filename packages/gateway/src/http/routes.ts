@@ -29,9 +29,12 @@ import {
   expectSpecSchema,
   modelProviderSchema,
   namespaceMountSchema,
+  type PluginManifest,
+  pluginManifestSchema,
   policySchema,
   schedulerCronJobSchema,
   signalRequestSchema,
+  signUserToken,
   spawnRequestSchema,
   subscriptionSchema,
   taskWriteRequestSchema,
@@ -57,6 +60,13 @@ import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/c
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
 import { METRIC_NAMES, type MetricQuery, Metrics } from '../metrics/metrics.ts';
+import {
+  type ListOptions as PluginListOptions,
+  PluginRegistry,
+  pluginHealth,
+  toManifest,
+} from '../plugin/plugin-registry.ts';
+import { ensureBuiltinPluginsSeeded } from '../plugin/plugin-seed.ts';
 import { RES_SCHEDULER, SchedulerManager } from '../scheduler/scheduler-manager.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
@@ -74,6 +84,7 @@ const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
 const RES_METRICS = 'platform://metrics';
+const RES_PLUGIN = 'platform://plugin';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -111,6 +122,8 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     await ensureSeedPolicy(store, identities, c.env.WATT_ADMIN_PRINCIPAL);
     // manage/* 内置 AgentDefinition 种子（M10）：与策略种子同幂等语义，供 manage/cron 等对话入口 spawn。
     await ensureManageDefsSeeded(new AgentRegistry(c.env.DB_PROVIDERS));
+    // 内置 Plugin 种子（M11）：webhook/feishu channel-adapter 注册为 built_in Plugin，供 plugin list/health。
+    await ensureBuiltinPluginsSeeded(new PluginRegistry(c.env.DB_PROVIDERS));
     await next();
   });
 
@@ -1278,6 +1291,140 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         const result = await registry.setDefault(providerId);
         if (isWattError(result)) return wattErrorResponse(c, result);
         return c.json({ provider: result });
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/plugin → PluginRegistry（§11.1）+ PluginLifecycle.Health（§11.2）──
+  // tool → action（§6.4d）：List/Get/Health=read；Write/Update=manage。资源 platform://plugin。
+  //
+  // Write 返回 PluginRegistration（§11.2 注册响应）：manifest + platformBaseUrl + jwksUrl + pluginToken。
+  //   pluginToken 最小面（实现声明）：复用 signUserToken 签发 principal=`plugin:<id>`、roles=[] 的平台 token
+  //   （不新增 token 型）——Plugin 回调平台的权限由 PolicyStore 对 `plugin:<id>` 的策略控制，而非 token 内嵌
+  //   scope。§11.2 的"scope=requiredGrants"由 requiredGrants 声明 + 策略配置共同表达。pluginToken 仅此响应
+  //   回传一次（List/Get 不回显，与 ModelProvider.secretRef 同脱敏纪律）。
+  const PLUGIN_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Health: 'read',
+    Write: 'manage',
+    Update: 'manage',
+  };
+  app.post('/htbp/platform/plugin', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
+    const registry = new PluginRegistry(c.env.DB_PROVIDERS);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? PLUGIN_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_PLUGIN, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://plugin');
+    }
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as PluginListOptions;
+        const page = await registry.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        // 对外投影为 PluginManifest（去 built_in 存储细节，§11.1 形状）。
+        return c.json({ items: page.items.map(toManifest) });
+      }
+      case 'Get': {
+        const pluginId = args.pluginId;
+        if (typeof pluginId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'pluginId is required', false));
+        }
+        const plugin = await registry.get(pluginId);
+        if (isWattError(plugin)) return wattErrorResponse(c, plugin);
+        return c.json({ plugin: toManifest(plugin) });
+      }
+      case 'Write': {
+        const parsed = pluginManifestSchema.safeParse(args.manifest);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError(
+              'invalid_argument',
+              `invalid plugin manifest: ${parsed.error.message}`,
+              false,
+            ),
+          );
+        }
+        const written = await registry.write(parsed.data as PluginManifest);
+        // 组装 PluginRegistration（§11.2）：platformBaseUrl + jwksUrl + pluginToken。
+        const baseUrl = (c.env.WATT_BASE_URL ?? new URL(c.req.url).origin).replace(/\/+$/, '');
+        let pluginToken: string;
+        try {
+          const keys = await loadPlatformKeys(c.env);
+          pluginToken = await signUserToken(
+            { principal: `plugin:${written.id}`, roles: [], trace: c.get('callContext').traceId },
+            keys.priv,
+            keys.meta,
+          );
+        } catch {
+          return wattErrorResponse(
+            c,
+            wattError('unavailable', 'platform signing key is not configured', false),
+          );
+        }
+        return c.json({
+          registration: {
+            ...toManifest(written),
+            platformBaseUrl: baseUrl,
+            jwksUrl: `${baseUrl}/.well-known/jwks.json`,
+            pluginToken,
+          },
+        });
+      }
+      case 'Update': {
+        const pluginId = args.pluginId;
+        if (typeof pluginId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'pluginId is required', false));
+        }
+        // patch 经 schema 校验（id 不可改、其余可选、严格键集）——防写入畸形字段。
+        const parsedPatch = pluginManifestSchema
+          .omit({ id: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await registry.update(pluginId, parsedPatch.data);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ plugin: toManifest(result) });
+      }
+      case 'Health': {
+        // PluginLifecycle.Health（§11.2）：built_in 直接 ok；外部 plugin 探活 endpoint+healthPath。
+        const pluginId = args.pluginId;
+        if (typeof pluginId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'pluginId is required', false));
+        }
+        const plugin = await registry.get(pluginId);
+        if (isWattError(plugin)) return wattErrorResponse(c, plugin);
+        const health = await pluginHealth(plugin);
+        return c.json({ health });
       }
     }
   });

@@ -167,6 +167,8 @@ export {
   subscriptionSchema,
   subscriptionSinkSchema,
 } from './eventbus/types.ts';
+// Plugin System 纯逻辑（§11.1 PluginRegistry / §11.2 PluginLifecycle）
+export * from './plugin/index.ts';
 // Task + Scheduler 纯逻辑（§7 Scheduler / §8 TaskManager / §1.1 checkpoint / §3.4 事件名）
 export * from './task/index.ts';
 // Tool Layer 纯逻辑（§5.2 ToolRegistry ToolMount）

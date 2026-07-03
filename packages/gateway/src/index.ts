@@ -1,6 +1,7 @@
 import type { WattError } from '@watt/shared';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import pkg from '../package.json' with { type: 'json' };
 import type { Bindings } from './env.ts';
@@ -34,6 +35,39 @@ export { WattTaskWorkflow } from './task/watt-task-workflow.ts';
  */
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVars }>();
+
+/**
+ * CORS（M10 Dashboard）：浏览器 SPA 跨源调 /htbp/* + Authorization header 需 CORS 放行 + OPTIONS 预检。
+ * origin 白名单（安全边界，不用 `*`——带 Authorization 的凭据请求 `*` 无效且不安全）：
+ *   - env.WATT_DASHBOARD_ORIGIN 逗号分隔的精确 origin；
+ *   - 缺省放行 `*.pages.dev`（Cloudflare Pages 部署域）+ `localhost`/`127.0.0.1`（开发）。
+ * 只挂 /htbp/*（Platform API 消费面）；健康探针/OAuth/inbound 不需要浏览器跨源。
+ */
+export function isAllowedDashboardOrigin(origin: string, configured?: string): boolean {
+  const allowlist = (configured ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  if (allowlist.includes(origin)) return true;
+  let host: string;
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+  if (host === 'localhost' || host === '127.0.0.1') return true;
+  return host.endsWith('.pages.dev');
+}
+
+app.use('/htbp/*', (c, next) =>
+  cors({
+    origin: (origin) =>
+      isAllowedDashboardOrigin(origin, c.env.WATT_DASHBOARD_ORIGIN) ? origin : null,
+    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowHeaders: ['Authorization', 'Content-Type', 'X-Watt-Trace'],
+    maxAge: 86400,
+  })(c, next),
+);
 
 /** GET /healthz — 健康探针（DOD §2、Phase 0 DoD 项 3）。 */
 app.get('/healthz', (c) => {

@@ -1,0 +1,75 @@
+/**
+ * 内置 Plugin 种子（Proto §11 / Architecture M11）——把平台内置的 ChannelAdapter 作 PluginRegistry 条目注册。
+ *
+ * M11：Channel Adapter 是四类 Plugin 之一（ChannelAdapter 接口）。平台内置两个 channel-adapter：
+ *   - webhook：通用 webhook 入站 adapter（gateway src/event/adapters/webhook.ts，§2.1 verify/decode 型）。
+ *   - feishu：飞书 WS push 型 adapter（规约纯逻辑在 core channel/feishu.ts，CLI connect 承载连接，§2.1 push 型）。
+ * 二者能力在平台内（endpoint="binding:<name>" 引用，非外部 HTTPS 服务）——注册为 built_in Plugin，使
+ *   `watt plugin list` 能枚举内置 channel adapter、`watt plugin health` 对其返回 ok（M10 完备性 + PluginLifecycle）。
+ *
+ * 幂等种子（仿 authz/seed.ts 与 agent/manage/manage-defs.ts 的 once-guard 语义）：挂 platform/* 种子中间件，
+ *   isolate 级短路，首次成功后不再打 D1。upsert 语义下重跑安全（相同 id 覆盖 + built_in:true 保留）。
+ */
+
+import type { PluginManifest } from '@watt/core';
+import type { PluginRegistry } from './plugin-registry.ts';
+
+/** 内置 webhook ChannelAdapter（§2.1 verify/decode 型；入站验签 adapter）。 */
+export const BUILTIN_WEBHOOK_PLUGIN: PluginManifest = {
+  id: 'channel-webhook',
+  kind: 'channel-adapter',
+  interfaceVersion: 'channel-adapter/v1',
+  endpoint: 'binding:webhook',
+  auth: { kind: 'platform-token' },
+  // 入站 adapter 把外部事件规约后 EventBus.Publish（回调平台）——需 event:// write。
+  requiredGrants: [{ resources: ['event://'], actions: ['write'] }],
+  healthPath: '/healthz',
+  enabled: true,
+};
+
+/** 内置 feishu ChannelAdapter（§2.1 push 型；WS 长连接由 CLI connect 承载）。 */
+export const BUILTIN_FEISHU_PLUGIN: PluginManifest = {
+  id: 'channel-feishu',
+  kind: 'channel-adapter',
+  interfaceVersion: 'channel-adapter/v1',
+  endpoint: 'binding:feishu',
+  auth: { kind: 'platform-token' },
+  // push 型：Encode/Send 出站（event://outbound.message write）+ 入站规约后 Publish（event:// write）。
+  requiredGrants: [{ resources: ['event://'], actions: ['write'] }],
+  healthPath: '/healthz',
+  enabled: true,
+};
+
+/** 全部内置 Plugin 种子源。 */
+export const BUILTIN_PLUGINS: PluginManifest[] = [BUILTIN_WEBHOOK_PLUGIN, BUILTIN_FEISHU_PLUGIN];
+
+/**
+ * 幂等种子内置 Plugin（引导时调）。每个经 PluginRegistry.write(manifest, builtIn=true) upsert。
+ */
+export async function seedBuiltinPlugins(registry: PluginRegistry): Promise<void> {
+  for (const manifest of BUILTIN_PLUGINS) {
+    await registry.write(manifest, true);
+  }
+}
+
+/** isolate 级短路缓存（同一 isolate 内已成功种子的 promise）。失败时置回 null 以保留重试。 */
+let pluginsSeeded: Promise<void> | null = null;
+
+/**
+ * 幂等引导入口（挂 platform/* 种子中间件，仿 ensureManageDefsSeeded）：isolate 级短路，首次成功后不再打 D1。
+ * upsert 语义下即使短路失效重跑也安全（相同 id 覆盖）。失败清缓存以便下次请求重试。
+ */
+export function ensureBuiltinPluginsSeeded(registry: PluginRegistry): Promise<void> {
+  if (!pluginsSeeded) {
+    pluginsSeeded = seedBuiltinPlugins(registry).catch((err) => {
+      pluginsSeeded = null;
+      throw err;
+    });
+  }
+  return pluginsSeeded;
+}
+
+/** 测试专用：重置 isolate 级短路缓存（清库后须调，否则种子不再重建）。 */
+export function resetPluginSeedGuardForTests(): void {
+  pluginsSeeded = null;
+}

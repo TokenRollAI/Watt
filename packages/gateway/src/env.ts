@@ -85,6 +85,12 @@ export interface Bindings {
   WATT_JWT_AUDIENCE?: string;
   /** 平台对外基址（device flow 的 verification_uri 组装用）；缺省取请求 origin。 */
   WATT_BASE_URL?: string;
+  /**
+   * Dashboard 允许的 CORS origin（M10 Dashboard）——逗号分隔的精确 origin 白名单（如
+   * "https://watt-dashboard.pages.dev,http://localhost:5173"）。缺省时仅放行 *.pages.dev（Pages 部署域）
+   *   + localhost（开发）。用于浏览器 SPA 跨源调 /htbp/platform/* + Authorization header 预检（见 http/index.ts）。
+   */
+  WATT_DASHBOARD_ORIGIN?: string;
   /** 模型中转 key（§9 / DoD §6 项3 @llm）——Anthropic Messages 格式，x-api-key。 */
   ANTHROPIC_API_KEY?: string;
   /** 模型中转基址（缺省 https://llm.fantacy.live）。 */
