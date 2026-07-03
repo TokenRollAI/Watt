@@ -113,19 +113,42 @@ export class StructuredContextProvider {
     const updatedAt = new Date().toISOString();
     const content = serializeContent(input.content);
     const metadata = JSON.stringify(input.metadata ?? {});
-    await this.db
-      .prepare(
-        `INSERT INTO entries (namespace, path, content, content_type, metadata, version, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(namespace, path) DO UPDATE SET
-           content = excluded.content,
-           content_type = excluded.content_type,
-           metadata = excluded.metadata,
-           version = excluded.version,
-           updated_at = excluded.updated_at`,
-      )
-      .bind(this.namespace, path, content, input.contentType, metadata, version, updatedAt)
-      .run();
+    // 条件写（原子读-改-写，防并发绕过 ifVersion，见 P3 项 2）：
+    // - 新建：INSERT ... ON CONFLICT DO NOTHING；changes=0 → 并发已插入 → conflict。
+    // - 覆盖：UPDATE ... WHERE version=<读到的旧版本>；changes=0 → 并发已改版本 → conflict。
+    if (existing === null) {
+      const res = await this.db
+        .prepare(
+          `INSERT INTO entries (namespace, path, content, content_type, metadata, version, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(namespace, path) DO NOTHING`,
+        )
+        .bind(this.namespace, path, content, input.contentType, metadata, version, updatedAt)
+        .run();
+      if (res.meta.changes === 0) {
+        return wattError('conflict', `concurrent write on ${path}`, false);
+      }
+    } else {
+      const res = await this.db
+        .prepare(
+          `UPDATE entries SET content = ?, content_type = ?, metadata = ?, version = ?, updated_at = ?
+           WHERE namespace = ? AND path = ? AND version = ?`,
+        )
+        .bind(
+          content,
+          input.contentType,
+          metadata,
+          version,
+          updatedAt,
+          this.namespace,
+          path,
+          existing.version,
+        )
+        .run();
+      if (res.meta.changes === 0) {
+        return wattError('conflict', `concurrent write on ${path}`, false);
+      }
+    }
     return {
       uri: contextUri(this.namespace, path),
       contentType: input.contentType,
@@ -148,13 +171,26 @@ export class StructuredContextProvider {
     const updatedAt = new Date().toISOString();
     const content = serializeContent(merged.content);
     const metadata = JSON.stringify(merged.metadata);
-    await this.db
+    // 条件写：WHERE version=<读到的旧版本>，changes=0 → 并发已改 → conflict（防绕过 ifVersion）。
+    const res = await this.db
       .prepare(
-        `UPDATE entries SET content = ?, metadata = ?, version = ?, updated_at = ?
-         WHERE namespace = ? AND path = ?`,
+        `UPDATE entries SET content = ?, content_type = ?, metadata = ?, version = ?, updated_at = ?
+         WHERE namespace = ? AND path = ? AND version = ?`,
       )
-      .bind(content, metadata, version, updatedAt, this.namespace, path)
+      .bind(
+        content,
+        merged.contentType,
+        metadata,
+        version,
+        updatedAt,
+        this.namespace,
+        path,
+        existing.version,
+      )
       .run();
+    if (res.meta.changes === 0) {
+      return wattError('conflict', `concurrent write on ${path}`, false);
+    }
     return {
       uri: contextUri(this.namespace, path),
       contentType: merged.contentType,
@@ -170,6 +206,14 @@ export class StructuredContextProvider {
       .prepare('DELETE FROM entries WHERE namespace = ? AND path = ?')
       .bind(this.namespace, path)
       .run();
+  }
+
+  /**
+   * TTL 过期回收（§4.2）——物理清理本 namespace 的全部 D1 条目（重挂同名 namespace 不复活旧数据）。
+   * best-effort：失败由调用方（context-routes GC）捕获降级，不阻塞挂载行删除。
+   */
+  async purgeNamespace(): Promise<void> {
+    await this.db.prepare('DELETE FROM entries WHERE namespace = ?').bind(this.namespace).run();
   }
 
   private async readRow(path: string): Promise<EntryRow | null> {

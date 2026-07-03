@@ -156,6 +156,30 @@ describe('StructuredContextProvider delete_ (§4.1 optional)', () => {
   });
 });
 
+describe('StructuredContextProvider concurrency (§4.1 — conditional write, P3 项 2)', () => {
+  it('two conditional updates based on the same version: the second conflicts', async () => {
+    const p = provider();
+    await p.write('id', { contentType: 'text/plain', content: 'v1' }); // version "1"
+    // 两次都基于读到的 version="1" 做条件 UPDATE：第一次成功推进到 "2"，
+    // 第二次仍用陈旧 ifVersion="1" → 条件写 WHERE version='1' 命中 0 行 → conflict。
+    const first = await p.update('id', { content: 'v2', ifVersion: '1' });
+    expect('code' in first).toBe(false);
+    const second = await p.update('id', { content: 'v3', ifVersion: '1' });
+    expect(second).toMatchObject({ code: 'conflict' });
+  });
+
+  it('purgeNamespace deletes all rows for the namespace only', async () => {
+    const a = provider('ns/a');
+    const b = provider('ns/b');
+    await a.write('x', { contentType: 'text/plain', content: '1' });
+    await b.write('y', { contentType: 'text/plain', content: '2' });
+    await a.purgeNamespace();
+    expect(asMeta_list(await a.list(''))).toHaveLength(0);
+    // 他 namespace 不受影响。
+    expect(asMeta_list(await b.list(''))).toHaveLength(1);
+  });
+});
+
 function asMeta_list(x: { items: ContextEntryMeta[] } | { code: string }): ContextEntryMeta[] {
   if ('code' in x) throw new Error(`expected page, got error ${x.code}`);
   return x.items;

@@ -15,7 +15,7 @@
  *   limit 默认 50 钳 200（对齐 event-store）。cursor 分页延后（doc-gap #22）。
  */
 
-import type { R2Bucket, R2Object } from '@cloudflare/workers-types';
+import type { R2Bucket, R2Conditional, R2Object } from '@cloudflare/workers-types';
 import {
   applyPatch,
   type ContextEntry,
@@ -132,13 +132,22 @@ export class ObjectContextProvider {
     const content =
       typeof input.content === 'string' ? input.content : JSON.stringify(input.content);
     const metadata = input.metadata ?? {};
+    // 条件写收窄并发窗口（P3 项 2）：existing 存在 → onlyIf etagMatches（并发覆盖则 put 返 null → conflict）；
+    // 新建 → onlyIf etagDoesNotMatch:'*'（并发已建则 put 返 null → conflict）。
+    // 残余窗口声明：head 与 put 之间仍非严格原子，但 R2 onlyIf 把 TOCTOU 窗口收窄到 put 一次调用内。
+    const onlyIf: R2Conditional =
+      existing === null ? { etagDoesNotMatch: '*' } : { etagMatches: existing.etag };
     const obj = await this.bucket.put(this.key(path), content, {
+      onlyIf,
       customMetadata: {
         contentType: input.contentType,
         version,
         metadata: JSON.stringify(metadata),
       },
     });
+    if (obj === null) {
+      return wattError('conflict', `concurrent write on ${path}`, false);
+    }
     return {
       uri: contextUri(this.namespace, path),
       contentType: input.contentType,
@@ -162,13 +171,18 @@ export class ObjectContextProvider {
     const version = bumpVersion(meta.version);
     const mergedContent =
       typeof merged.content === 'string' ? merged.content : JSON.stringify(merged.content);
+    // 条件写：onlyIf etagMatches 读到的 etag（并发已改则 put 返 null → conflict，见 P3 项 2）。
     const written = await this.bucket.put(this.key(path), mergedContent, {
+      onlyIf: { etagMatches: existing.etag },
       customMetadata: {
         contentType: merged.contentType,
         version,
         metadata: JSON.stringify(merged.metadata),
       },
     });
+    if (written === null) {
+      return wattError('conflict', `concurrent write on ${path}`, false);
+    }
     return {
       uri: contextUri(this.namespace, path),
       contentType: merged.contentType,
@@ -181,6 +195,21 @@ export class ObjectContextProvider {
 
   async delete_(path: string): Promise<void | WattError> {
     await this.bucket.delete(this.key(path));
+  }
+
+  /**
+   * TTL 过期回收（§4.2）——物理清理本 namespace（`<ns>/` 前缀）的全部 R2 对象（重挂同名不复活）。
+   * 分批 list + delete；best-effort，失败由调用方（context-routes GC）捕获降级，不阻塞挂载行删除。
+   */
+  async purgeNamespace(): Promise<void> {
+    const prefix = `${this.namespace}/`;
+    let cursor: string | undefined;
+    do {
+      const listed = await this.bucket.list({ prefix, cursor });
+      const keys = listed.objects.map((o) => o.key);
+      for (const key of keys) await this.bucket.delete(key);
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor !== undefined);
   }
 }
 

@@ -120,6 +120,44 @@ describe('ObjectContextProvider List (§4.1 / §0.2)', () => {
     expect(listed).toHaveLength(1);
     expect(listed[0]?.uri).toBe('context://ns/a/x');
   });
+
+  it('list carries contentType / version / metadata (include customMetadata)', async () => {
+    const p = provider();
+    await p.write('doc', {
+      contentType: 'text/markdown',
+      content: '# doc',
+      metadata: { author: 'bob', status: 'open' },
+    });
+    const listed = asList(await p.list(''));
+    const item = listed.find((m) => m.uri === 'context://skills/python/doc');
+    expect(item?.contentType).toBe('text/markdown');
+    expect(item?.version).toBe('1');
+    expect(item?.metadata).toEqual({ author: 'bob', status: 'open' });
+  });
+});
+
+describe('ObjectContextProvider concurrency / purge (§4.1 / §4.2, P3 项 2 / 项 5)', () => {
+  it('two conditional updates based on the same read conflict (R2 onlyIf etagMatches)', async () => {
+    const p = provider();
+    await p.write('f', { contentType: 'text/plain', content: 'v1' }); // version "1"
+    // 两次都基于陈旧读到的 version="1"（etag 亦为 v1）做 update：第一次成功推进到 "2"（etag 变），
+    // 第二次仍带 ifVersion="1" → checkIfVersion 已判 conflict（现版本已 "2"）。
+    const first = await p.update('f', { content: 'v2', ifVersion: '1' });
+    expect('code' in first).toBe(false);
+    const second = await p.update('f', { content: 'v3', ifVersion: '1' });
+    expect(second).toMatchObject({ code: 'conflict' });
+  });
+
+  it('purgeNamespace deletes all objects under the namespace prefix only', async () => {
+    const a = provider('ns/a');
+    const b = provider('ns/b');
+    await a.write('x', { contentType: 'text/plain', content: '1' });
+    await a.write('y', { contentType: 'text/plain', content: '2' });
+    await b.write('z', { contentType: 'text/plain', content: '3' });
+    await a.purgeNamespace();
+    expect(asList(await a.list(''))).toHaveLength(0);
+    expect(asList(await b.list(''))).toHaveLength(1);
+  });
 });
 
 describe('ObjectContextProvider delete_ (§4.1 optional)', () => {

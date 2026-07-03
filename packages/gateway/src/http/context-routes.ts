@@ -37,6 +37,7 @@ import {
   VectorContextProvider,
   type VectorIndex,
   type VectorMatch,
+  type VectorQueryOptions,
   type VectorRecord,
 } from '../context/providers/vector.ts';
 import type { Bindings } from '../env.ts';
@@ -85,8 +86,13 @@ function makeVectorIndex(index: Bindings['VECTORIZE_CONTEXT']): VectorIndex {
     async upsert(vectors: VectorRecord[]): Promise<unknown> {
       return await index.upsert(vectors);
     },
-    async query(values: number[], opts: { topK: number }): Promise<{ matches: VectorMatch[] }> {
-      const res = await index.query(values, { topK: opts.topK, returnMetadata: 'all' });
+    async query(values: number[], opts: VectorQueryOptions): Promise<{ matches: VectorMatch[] }> {
+      // 透传 metadata filter（namespace $eq）——收窄召回到本 namespace，避免 topK 被全索引稀释（项 3）。
+      const res = await index.query(values, {
+        topK: opts.topK,
+        returnMetadata: 'all',
+        ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
+      });
       const matches: VectorMatch[] = res.matches.map((m) => ({
         id: m.id,
         score: m.score,
@@ -94,13 +100,8 @@ function makeVectorIndex(index: Bindings['VECTORIZE_CONTEXT']): VectorIndex {
       }));
       return { matches };
     },
-    async getByIds(ids: string[]): Promise<VectorRecord[]> {
-      const recs = await index.getByIds(ids);
-      return recs.map((r) => ({
-        id: r.id,
-        values: (r.values as number[] | undefined) ?? [],
-        metadata: (r.metadata ?? {}) as Record<string, string>,
-      }));
+    async deleteByIds(ids: string[]): Promise<unknown> {
+      return await index.deleteByIds(ids);
     },
   };
 }
@@ -121,6 +122,7 @@ function buildProvider(
       return new StructuredContextProvider(env.DB_CONTEXT, namespace);
     case 'vector':
       return new VectorContextProvider(
+        env.DB_CONTEXT,
         makeVectorIndex(env.VECTORIZE_CONTEXT),
         makeEmbedder(env.AI),
         namespace,
@@ -150,10 +152,11 @@ const CONTEXT_TOOL_ACTIONS: Record<string, 'read' | 'write'> = {
   Search: 'read',
   Write: 'write',
   Update: 'write',
+  Delete: 'write',
 };
 
 /** 写动词集合（readOnly mount 对其直接拒绝）。 */
-const WRITE_VERBS = new Set(['Write', 'Update']);
+const WRITE_VERBS = new Set(['Write', 'Update', 'Delete']);
 
 export function contextRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars }> {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVars }>();
@@ -296,6 +299,27 @@ export function contextRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars 
         const page = await provider.search(query, opts);
         if (isWattError(page)) return wattErrorResponse(c, page);
         return c.json(page);
+      }
+      case 'Delete': {
+        // Delete 仅 provider 声明该能力时暴露（object/structured）；否则 invalid_argument
+        // （~help 依 capabilities 宣告 Delete，与此分支一致，不会宣告后无实现）。
+        if (provider.delete_ === undefined) {
+          return wattErrorResponse(
+            c,
+            wattError(
+              'invalid_argument',
+              `provider does not support Delete: ${mount.provider}`,
+              false,
+            ),
+          );
+        }
+        const p = args.path;
+        if (typeof p !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'path is required', false));
+        }
+        const result = await provider.delete_(p);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ deleted: true });
       }
     }
   });

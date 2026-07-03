@@ -251,6 +251,129 @@ describe('POST /htbp/context/<ns> object provider full loop (§4.1)', () => {
   });
 });
 
+describe('POST /htbp/context/<ns> structured provider full loop (§4.1)', () => {
+  it('Write → Get → List → Update → Delete round-trips on a structured mount', async () => {
+    await mount({ namespace: 'feedback/bugs', provider: 'structured' });
+    const token = await signAdmin();
+
+    const write = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Write',
+      arguments: {
+        path: '1235',
+        entry: {
+          contentType: 'text/markdown',
+          content: '## bug\ndetail',
+          metadata: { status: 'open' },
+        },
+      },
+    });
+    expect(write.status).toBe(200);
+    const writeBody = (await write.json()) as { meta: { uri: string; version: string } };
+    expect(writeBody.meta.uri).toBe('context://feedback/bugs/1235');
+    expect(writeBody.meta.version).toBe('1');
+
+    const get = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Get',
+      arguments: { path: '1235' },
+    });
+    expect(get.status).toBe(200);
+    expect(((await get.json()) as { entry: { content: string } }).entry.content).toBe(
+      '## bug\ndetail',
+    );
+
+    const list = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'List',
+      arguments: { path: '', opts: {} },
+    });
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as { items: { uri: string }[] };
+    expect(listBody.items.some((m) => m.uri === 'context://feedback/bugs/1235')).toBe(true);
+
+    const update = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Update',
+      arguments: { path: '1235', patch: { metadata: { status: 'fixed' } } },
+    });
+    expect(update.status).toBe(200);
+    const updateBody = (await update.json()) as {
+      meta: { version: string; metadata: Record<string, string> };
+    };
+    expect(updateBody.meta.version).toBe('2');
+    expect(updateBody.meta.metadata).toEqual({ status: 'fixed' });
+
+    const del = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Delete',
+      arguments: { path: '1235' },
+    });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { deleted: boolean }).deleted).toBe(true);
+
+    const getGone = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Get',
+      arguments: { path: '1235' },
+    });
+    expect(getGone.status).toBe(404);
+  });
+});
+
+describe('POST /htbp/context/<ns> Delete verb (§4.1 Delete)', () => {
+  it('Delete removes an object entry (object provider)', async () => {
+    await mount({ namespace: 'skills/py', provider: 'object' });
+    const token = await signAdmin();
+    await post('/htbp/context/skills/py', token, {
+      tool: 'Write',
+      arguments: { path: 'f', entry: { contentType: 'text/plain', content: 'x' } },
+    });
+    const del = await post('/htbp/context/skills/py', token, {
+      tool: 'Delete',
+      arguments: { path: 'f' },
+    });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { deleted: boolean }).deleted).toBe(true);
+    const get = await post('/htbp/context/skills/py', token, {
+      tool: 'Get',
+      arguments: { path: 'f' },
+    });
+    expect(get.status).toBe(404);
+  });
+
+  it('Delete on a readOnly mount → 403 permission_denied', async () => {
+    await mount({ namespace: 'ro/ns', provider: 'object', readOnly: true });
+    const token = await signAdmin();
+    const res = await post('/htbp/context/ro/ns', token, {
+      tool: 'Delete',
+      arguments: { path: 'f' },
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe('permission_denied');
+  });
+});
+
+describe('POST /htbp/context/<ns> Search routing (§4.1 Search)', () => {
+  // Search happy-path（embed→query→D1）在 provider 单测覆盖（注入 fake AI/Vectorize）；
+  // 此处覆盖不触发 AI/Vectorize 的路由分支（provider 无 search、query 非 string）。
+  it('Search on a structured mount (no search capability) → 400 invalid_argument', async () => {
+    await mount({ namespace: 'feedback/bugs', provider: 'structured' });
+    const token = await signAdmin();
+    const res = await post('/htbp/context/feedback/bugs', token, {
+      tool: 'Search',
+      arguments: { query: 'anything' },
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe('invalid_argument');
+  });
+
+  it('Search on a vector mount with a non-string query → 400 invalid_argument (before embed)', async () => {
+    await mount({ namespace: 'research/vec', provider: 'vector' });
+    const token = await signAdmin();
+    const res = await post('/htbp/context/research/vec', token, {
+      tool: 'Search',
+      arguments: { query: 42 },
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe('invalid_argument');
+  });
+});
+
 describe('POST /htbp/context/<ns> guards (§4.2 / 权限)', () => {
   it('rejects a request with no token: 401', async () => {
     await mount({ namespace: 'skills/py', provider: 'object' });

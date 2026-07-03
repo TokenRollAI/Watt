@@ -239,6 +239,7 @@ function provisionVectorize(name, dimensions, metric) {
   console.log('\n=== Vectorize indexes ===');
   if (listContains(['vectorize', 'list', '--json'], name, 'Vectorize indexes')) {
     note('Vectorize', name, false, `dims=${dimensions}`);
+    provisionVectorizeMetadataIndex(name, 'namespace');
     return true;
   } else {
     const res = wrangler([
@@ -256,13 +257,38 @@ function provisionVectorize(name, dimensions, metric) {
       // "已存在"类错误 → re-list 确认存在则视为幂等成功。
       if (listContains(['vectorize', 'list', '--json'], name, 'Vectorize indexes')) {
         note('Vectorize', name, false, `dims=${dimensions} (existed)`);
+        provisionVectorizeMetadataIndex(name, 'namespace');
         return true;
       }
       fail('Vectorize', name, res.out);
     }
     note('Vectorize', name, true, `dims=${dimensions} metric=${metric}`);
   }
+  provisionVectorizeMetadataIndex(name, 'namespace');
   return true;
+}
+
+// namespace metadata index：Search 的 filter {namespace:{$eq}} 依赖它才能生效（否则 topK 被全
+// 索引跨 namespace 稀释，见 vector.ts Search）。幂等：已存在时 create 报错，视为成功（对齐现有
+// create 容错模式）；无写权限（code 10000）时 noteBlocked 不阻断（补权限后重跑 provision）。
+function provisionVectorizeMetadataIndex(indexName, property) {
+  const res = wrangler([
+    'vectorize',
+    'create-metadata-index',
+    indexName,
+    `--property-name=${property}`,
+    '--type=string',
+  ]);
+  if (res.status === 0) {
+    note('Vectorize-meta-index', `${indexName}.${property}`, true, 'type=string');
+    return;
+  }
+  if (isAuthError(res.out)) {
+    noteBlocked('Vectorize-meta-index', `${indexName}.${property}`, 'token lacks Vectorize write');
+    return;
+  }
+  // 已存在（重跑幂等）→ 视为成功。create-metadata-index 无对应 list 命令做二次确认，故按文案兜底。
+  note('Vectorize-meta-index', `${indexName}.${property}`, false, 'existed');
 }
 
 // ---- 解析工具 --------------------------------------------------------------------

@@ -204,3 +204,26 @@ describe('ContextRegistry TTL lazy reclaim (§4.2 ttl 到期整 namespace 回收
     expect(got).toMatchObject({ namespace: 'perm/keep' });
   });
 });
+
+describe('ContextRegistry alarm GC (§4.2 物理回收 + reschedule, P3 项 5/7)', () => {
+  it('alarm deletes only the expired mount and reschedules to the remaining one', async () => {
+    const stub = freshRegistry();
+    // 两个 ttl 挂载：一个手动过期，一个仍活。
+    await runInDurableObject(stub, (r: ContextRegistry) => {
+      return Promise.all([
+        r.write(M({ namespace: 'dead/one', provider: 'structured', ttl: 60 })),
+        r.write(M({ namespace: 'live/two', provider: 'structured', ttl: 100000 })),
+      ]);
+    });
+    await runInDurableObject(stub, (r: ContextRegistry) => expireMount(r, 'dead/one'));
+    // 触发 alarm：过期行物理清理（含 provider 数据 best-effort）+ 重设 alarm 到剩余到期者。
+    await runInDurableObject(stub, (r: ContextRegistry) => r.alarm());
+    const page = await runInDurableObject(stub, (r: ContextRegistry) => r.list());
+    expect(page.items.map((m) => m.namespace)).toEqual(['live/two']);
+    // getAlarm 指向剩余挂载 live/two 的 expires_at（非 null）。
+    const alarmAt = await runInDurableObject(stub, (r: ContextRegistry) =>
+      (r as unknown as { storage: { getAlarm: () => Promise<number | null> } }).storage.getAlarm(),
+    );
+    expect(alarmAt).not.toBeNull();
+  });
+});

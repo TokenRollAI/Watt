@@ -17,15 +17,25 @@
  * - delete(ns) → 卸载（幂等 no-op）。
  * - resolve(uri) → { provider, path }（core resolveMount + 惰性 TTL：isExpired → 删行 + not_found）。
  *
- * TTL 回收（调研 §4）：主逻辑惰性判定（每次 resolve/get 访问时 isExpired → 删挂载行 + not_found）；
- *   物理 GC 用原生 ctx.storage.setAlarm 兜底（alarm 时扫 expires_at 删过期挂载行）。
- *   注意：alarm 只删 mounts 挂载行，**不物理清理 provider 存储**（R2/D1/Vectorize 里的条目）——
- *   provider 数据物理清理记 TODO 留 backlog（doc-gap 候选；惰性保证语义正确，条目变不可达）。
+ * TTL 回收（调研 §4 + P3 项 5）：主逻辑惰性判定（每次 resolve/get/list 访问时 isExpired → 删挂载行
+ *   + 物理清理 provider 存储 + not_found）；物理 GC 用原生 ctx.storage.setAlarm 兜底（alarm 时扫
+ *   expires_at 删过期挂载行 + 清理 provider 存储）。
+ *   provider 数据物理清理（P3 项 5，修复"重挂同名 namespace 复活旧数据"）：过期回收对 provider 存储做
+ *   真实清理——object:R2 分批 delete；structured/vector:D1 DELETE WHERE namespace；vector 的
+ *   Vectorize 向量凭 D1 path 集合 deleteByIds。best-effort（单库失败 console.error 不阻塞挂载行删除）。
+ *   注意：unmount（registry Delete）保持只卸载不清数据——§4.2 Delete=卸载，数据保留是实现声明
+ *   （doc-gap 候选）；只有 TTL 过期回收才物理清理。
+ *   provider 绑定来源：DO 的 env 携带全部资源绑定（DB_CONTEXT/R2_CONTEXT_OBJECTS/VECTORIZE_CONTEXT/AI），
+ *   故清理在 DO 内完成，惰性与 alarm 两路径收敛（无需路由层参与，alarm 路径也覆盖）。
  */
 
 import { DurableObject } from 'cloudflare:workers';
 import { isExpired, type NamespaceMount, namespaceMountSchema, resolveMount } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
+import type { Bindings } from '../env.ts';
+import { ObjectContextProvider } from './providers/object.ts';
+import { StructuredContextProvider } from './providers/structured.ts';
+import { VectorContextProvider } from './providers/vector.ts';
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
@@ -72,11 +82,13 @@ function computeExpiresAt(mountedAt: string, ttl: number | undefined): string | 
 export class ContextRegistry extends DurableObject {
   private readonly sql: DurableObjectState['storage']['sql'];
   private readonly storage: DurableObjectState['storage'];
+  private readonly bindings: Bindings;
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx as never, env as never);
     this.storage = ctx.storage;
     this.sql = ctx.storage.sql;
+    this.bindings = env as Bindings;
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS mounts (
          namespace       TEXT PRIMARY KEY,
@@ -90,8 +102,8 @@ export class ContextRegistry extends DurableObject {
     );
   }
 
-  /** list（§4.2）——返回 Page，limit 默认 50 钳 200。惰性 TTL：过期挂载不返回并顺手清理。 */
-  list(opts: ListMountsOptions = {}): Page<NamespaceMount> {
+  /** list（§4.2）——返回 Page，limit 默认 50 钳 200。惰性 TTL：过期挂载不返回并顺手清理（含 provider 数据）。 */
+  async list(opts: ListMountsOptions = {}): Promise<Page<NamespaceMount>> {
     const rawLimit = opts.limit ?? DEFAULT_LIST_LIMIT;
     const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
     const rows = this.sql
@@ -101,7 +113,7 @@ export class ContextRegistry extends DurableObject {
     const items: NamespaceMount[] = [];
     for (const row of rows) {
       if (isExpired(row.mounted_at, row.ttl ?? undefined, now)) {
-        this.sql.exec('DELETE FROM mounts WHERE namespace = ?', row.namespace);
+        await this.reclaim(row);
         continue;
       }
       items.push(rowToMount(row));
@@ -109,14 +121,14 @@ export class ContextRegistry extends DurableObject {
     return { items };
   }
 
-  /** get（§4.2）——不存在或已过期 → not_found（过期时顺手清理挂载行）。 */
-  get(namespace: string): NamespaceMount | WattError {
+  /** get（§4.2）——不存在或已过期 → not_found（过期时顺手清理挂载行 + provider 数据）。 */
+  async get(namespace: string): Promise<NamespaceMount | WattError> {
     const row = this.readRow(namespace);
     if (row === null) {
       return wattError('not_found', `no mount for namespace: ${namespace}`, false);
     }
     if (isExpired(row.mounted_at, row.ttl ?? undefined, Date.now())) {
-      this.sql.exec('DELETE FROM mounts WHERE namespace = ?', namespace);
+      await this.reclaim(row);
       return wattError('not_found', `no mount for namespace: ${namespace}`, false);
     }
     return rowToMount(row);
@@ -206,15 +218,15 @@ export class ContextRegistry extends DurableObject {
 
   /**
    * resolve（§4.2）——uri → { provider, path }。全表挂载做 core resolveMount 最长前缀匹配，
-   * 命中后惰性 TTL：isExpired → 删挂载行 + not_found（"过期即不可达"语义）。
+   * 命中后惰性 TTL：isExpired → 删挂载行 + 清理 provider 数据 + not_found（"过期即不可达"语义）。
    */
-  resolve(uri: string): { provider: string; path: string } | WattError {
+  async resolve(uri: string): Promise<{ provider: string; path: string } | WattError> {
     const rows = this.sql.exec<MountRow>('SELECT * FROM mounts').toArray();
     const now = Date.now();
     const live: MountRow[] = [];
     for (const row of rows) {
       if (isExpired(row.mounted_at, row.ttl ?? undefined, now)) {
-        this.sql.exec('DELETE FROM mounts WHERE namespace = ?', row.namespace);
+        await this.reclaim(row);
         continue;
       }
       live.push(row);
@@ -225,14 +237,21 @@ export class ContextRegistry extends DurableObject {
   }
 
   /**
-   * alarm 兜底 GC（物理清理过期挂载行）——扫 expires_at <= now 的行删除。
-   * 只删 mounts 表挂载行，不清理 provider 存储条目（backlog，见文件头注释）。
-   * 删后若仍有未来到期项，重设下一个 alarm。
+   * alarm 兜底 GC（物理清理过期挂载行 + provider 数据）——扫 expires_at <= now 的行，
+   * 逐行清理 provider 存储后删挂载行。删后若仍有未来到期项，重设下一个 alarm。
    */
   override async alarm(): Promise<void> {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();
-    this.sql.exec('DELETE FROM mounts WHERE expires_at IS NOT NULL AND expires_at <= ?', nowIso);
+    const expired = this.sql
+      .exec<MountRow>(
+        'SELECT * FROM mounts WHERE expires_at IS NOT NULL AND expires_at <= ?',
+        nowIso,
+      )
+      .toArray();
+    for (const row of expired) {
+      await this.reclaim(row);
+    }
     // 重设至下一个最近到期时刻（若有）。
     const next = this.sql
       .exec<{ expires_at: string }>(
@@ -262,5 +281,53 @@ export class ContextRegistry extends DurableObject {
       .exec<MountRow>('SELECT * FROM mounts WHERE namespace = ?', namespace)
       .toArray();
     return rows.length > 0 ? (rows[0] ?? null) : null;
+  }
+
+  /**
+   * TTL 过期回收单行（P3 项 5）：先物理清理 provider 存储（best-effort），再删挂载行。
+   * 清理失败仅 console.error，不阻塞挂载行删除（否则一个坏绑定会让过期挂载永不回收）。
+   */
+  private async reclaim(row: MountRow): Promise<void> {
+    try {
+      await this.purgeProviderData(row.provider, row.namespace);
+    } catch (err) {
+      console.error(
+        `context TTL reclaim: purge provider data failed (namespace=${row.namespace}, provider=${row.provider})`,
+        err,
+      );
+    }
+    this.sql.exec('DELETE FROM mounts WHERE namespace = ?', row.namespace);
+  }
+
+  /**
+   * 物理清理某 provider 某 namespace 的全部数据（内置 provider 走各自 purgeNamespace）。
+   * plugin/未知 provider 无内置存储可清（数据在 plugin 侧）——记 doc-gap 候选，此处 no-op。
+   * DO 的 env 携带 DB_CONTEXT/R2_CONTEXT_OBJECTS/VECTORIZE_CONTEXT，故清理在 DO 内完成。
+   */
+  private async purgeProviderData(provider: string, namespace: string): Promise<void> {
+    const env = this.bindings;
+    switch (provider) {
+      case 'object':
+        await new ObjectContextProvider(env.R2_CONTEXT_OBJECTS, namespace).purgeNamespace();
+        return;
+      case 'structured':
+        await new StructuredContextProvider(env.DB_CONTEXT, namespace).purgeNamespace();
+        return;
+      case 'vector':
+        // purge 不 embed（只 D1 DELETE + Vectorize deleteByIds）——注入 no-op embedder。
+        await new VectorContextProvider(
+          env.DB_CONTEXT,
+          {
+            upsert: async () => undefined,
+            query: async () => ({ matches: [] }),
+            deleteByIds: async (ids) => await env.VECTORIZE_CONTEXT.deleteByIds(ids),
+          },
+          { embed: async () => [] },
+          namespace,
+        ).purgeNamespace();
+        return;
+      default:
+        return; // plugin provider：存储在 plugin 侧，DO 无从清理（doc-gap 候选）。
+    }
   }
 }
