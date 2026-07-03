@@ -427,10 +427,13 @@ workflows:
 storage:
   R2: watt-context-objects / watt-artifacts            # M3 object provider（S3 兼容）
   D1: watt-policies / watt-providers / watt-audit / watt-events   # M5 / M8 / M9 / M1 EventStore（留痕，建议 30 天保留期）
+      / watt-context                                    # M3 structured provider（2026-07-03 Phase 3 增补：
+                                                        #   ownership 独立于 M1 留痕库，保留期语义不同）
   KV: watt-authz-cache / watt-tenants                  # M5
   Vectorize: watt-context-index                        # M3 vector provider（1024 维 bge-m3, cosine）
 queues:
   watt-events                                          # M1 EventBus
+  watt-events-dlq                                      # M1 投递重试耗尽死信（2026-07-03 Phase 2 关门增补）
 gateway:
   AI Gateway: 全部 LLM 流量               # M8 / M9
 pages:
