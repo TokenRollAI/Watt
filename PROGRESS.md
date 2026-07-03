@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
 - **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R26（Dashboard 最小版 + PluginRegistry + CLI 完备性——DoD ⑤）
+- **下一目标**：Phase 6 R27 关门（五项 DoD 复验含 @feishu 入站 + 4 维质量关口 + 对抗核查 + llmdoc 沉淀）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 26 — 2026-07-04（Phase 6 R26：Dashboard + PluginRegistry + CLI 完备——DoD ⑤ 地基）
+- 目标：Phase 6 / DoD ⑤（CLI 完备 + 三入口对等）的 Dashboard 与 plugin 面
+- 动作：worker 落地（commits 18b7e3c/16885ee/9fcd3c1）：PluginRegistry（plugin_registrations 表挂 watt-providers 0004 + List/Get/Write/Update + Lifecycle.Health；内置 webhook/feishu adapter 种子注册 kind=channel-adapter）；/htbp/platform/plugin 路由 + CORS 中间件（允许 pages.dev origin）；CLI watt plugin register|list|health；packages/dashboard（Vite+React 静态 SPA：Overview/Agents/Tasks/Cron 写/Audit 五视图 + HTBP 客户端 + token 手填 localStorage）；deploy-all 编排 pages deploy（--skip-dashboard 可跳）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1083 tests**：shared 6 + core 444 + cli 137 + gateway 496+1skip）；`wrangler pages project create watt-dashboard` + deploy → **https://watt-dashboard-4tn.pages.dev 200**；CORS preflight 回 allow-origin 精确匹配；线上 `watt plugin list` 见 channel-webhook/channel-feishu 种子、`plugin health channel-feishu` → healthy:true；audit 已积累 38 行（三入口对等的数据面就绪）。
+- 勾选：无（DoD ⑤ 证据关门轮采集：三入口同操作 AuditLog 对等抽查需 Dashboard 人工/脚本配合）。
+- 沉淀：留关门轮统一。
+- 遗留：R27 关门（五项 DoD 复验 + @feishu 入站真实消息 + M10 CLI 核对清单入账 + 质量关口 workflow——按约不含渗透性安全维度）。
 
 ## Round 25 — 2026-07-03/04（Phase 6 R25：manage/cron Agent——DoD ④ 线上通过）
 - 目标：Phase 6 / DoD ④（manage/cron 对话建 CronJob）+ ②의 WS 入站链路启动验证
