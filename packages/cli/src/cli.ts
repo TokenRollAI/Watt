@@ -44,6 +44,14 @@ import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from 
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatMetricsHuman, metricsQuery } from './metrics.ts';
 import {
+  formatPluginHealthHuman,
+  formatPluginListHuman,
+  type PluginManifest,
+  pluginHealth,
+  pluginList,
+  pluginRegister,
+} from './plugin.ts';
+import {
   formatPolicyListHuman,
   policyAdd,
   policyList,
@@ -1308,6 +1316,90 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const updated = await providerSetDefault(base, token, id, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(updated));
       else out(`Default provider is now ${updated.id}`);
+    });
+
+  // ── watt plugin（§11.1 PluginRegistry + §11.2 PluginLifecycle.Health）──────────
+  const plugin = program
+    .command('plugin')
+    .description('Manage plugins (PluginRegistry; register/list/health)');
+  plugin
+    .command('register')
+    .description('Register a plugin (PluginRegistry.Write; returns jwksUrl + pluginToken)')
+    .argument('<id>', 'plugin id, e.g. feishu-main')
+    .requiredOption(
+      '--kind <kind>',
+      'context-provider | tool-provider | channel-adapter | agent-harness',
+    )
+    .requiredOption(
+      '--interface-version <ver>',
+      'implemented interface version, e.g. tool-provider/v1',
+    )
+    .requiredOption('--endpoint <url>', 'HTTPS base URL or binding:<name>')
+    .option('--health-path <path>', 'health probe path', '/health')
+    .option('--secret-ref <ref>', 'bearer auth secret ref (default: platform-token auth)')
+    .option('--grants <json>', 'requiredGrants as a JSON array of {resources,actions}', '[]')
+    .option('--disabled', 'register the plugin disabled', false)
+    .action(
+      async (
+        id: string,
+        cmdOpts: {
+          kind: string;
+          interfaceVersion: string;
+          endpoint: string;
+          healthPath: string;
+          secretRef?: string;
+          grants: string;
+          disabled: boolean;
+        },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const grants = parseJsonOpt(cmdOpts.grants, '--grants');
+        if (!Array.isArray(grants)) {
+          throw new CliError('--grants must be a JSON array', 2);
+        }
+        const manifest: PluginManifest = {
+          id,
+          kind: cmdOpts.kind,
+          interfaceVersion: cmdOpts.interfaceVersion,
+          endpoint: cmdOpts.endpoint,
+          auth:
+            cmdOpts.secretRef !== undefined
+              ? { kind: 'bearer', secretRef: cmdOpts.secretRef }
+              : { kind: 'platform-token' },
+          requiredGrants: grants as { resources: string[]; actions: string[] }[],
+          healthPath: cmdOpts.healthPath,
+          enabled: !cmdOpts.disabled,
+        };
+        const reg = await pluginRegister(base, token, manifest, { fetch: opts.fetch });
+        if (asJson()) out(JSON.stringify(reg));
+        else
+          out(
+            `Registered plugin ${reg.id} (${reg.kind}); pluginToken issued, jwksUrl ${reg.jwksUrl}`,
+          );
+      },
+    );
+  plugin
+    .command('list')
+    .description('List plugins (PluginRegistry.List)')
+    .option('--kind <kind>', 'filter by plugin kind')
+    .action(async (cmdOpts: { kind?: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const items = await pluginList(base, token, { kind: cmdOpts.kind }, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(items));
+      else out(formatPluginListHuman(items));
+    });
+  plugin
+    .command('health')
+    .description('Check a plugin health (PluginLifecycle.Health)')
+    .argument('<pluginId>', 'plugin id')
+    .action(async (pluginId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const health = await pluginHealth(base, token, pluginId, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(health));
+      else out(formatPluginHealthHuman(pluginId, health));
     });
 
   let exitCode = 0;
