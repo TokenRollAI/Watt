@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 3（Context Layer）三项 DoD 全勾（Round 11/12）**，待关门（质量关口 review + 沉淀）
-- **已勾选**：Phase 0/1/2 全部（关门证据 Round 3/7/10）；Phase 3 全部三项（Round 11 core、Round 12 集成+冒烟）
+- **当前 Phase**：**Phase 3（Context Layer）已关门**（Round 13：16 MAJOR 全修 + DoD 线上复验）
+- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 3 关门（质量关口 Workflow + 确认项修复 + Docs 漂移回查 + llmdoc 沉淀）
+- **下一目标**：Phase 4（Tool Layer + Agent Runtime）项 1——先派 investigator 调研（含 tool-bridge 上游现状,LOOP §2.1）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,18 @@
 ---
 
 # 轮次记录
+
+## Round 13 — 2026-07-03（Phase 3 关门轮）
+- 目标：Phase 3 关门——质量关口 Workflow + 确认项全修 + DoD 线上复验 + 沉淀
+- 动作：
+  - **质量关口 Workflow**（4 维 review + 逐条对抗核查,20 agents）：16 条 MAJOR 全部确认（0 误报,去重后 9 个独立问题）,14 MINOR 记 backlog。
+  - **确认项全修**（2 worker 文件集互斥并行）：
+    - `2299b94` gateway：**vector provider 重构为 D1 sidecar**（权威数据入 DB_CONTEXT:全文/version/metadata;Vectorize 只存 embedding+引用——一举修掉 2048 截断数据丢失、List unavailable 违反 §4.1、Vectorize 最终一致使 read-after-write 不可靠三条;metadata-only Update 不再重算 embedding）;**并发条件写**（D1 UPDATE WHERE version=? + changes 判定;R2 put onlyIf etagMatches/etagDoesNotMatch——并发同 ifVersion 写现在正确 conflict）;**Search namespace filter 下推**（provision 增 create-metadata-index 幂等步骤 + query filter + 本地双保险——修 topK 被全 namespace 稀释）;**Delete 路由接通**（~help 宣告与可调用面矛盾消除）;**TTL 物理清理**（过期回收真实清 R2 前缀/D1 namespace 行/Vectorize 向量;unmount 保持只卸载不清数据,实现声明）;新增 36 测试。
+    - `1e00431` cli+core：CLI put/patch 精确解包 {meta}（删双形态兜底——掩盖漂移;mock 全部对齐 gateway 测试锁定的真实形状,文件头声明真源）;core contextEntryInputSchema 收紧 content 必须存在（曾接受缺省→provider 500）;CLI 测试补 headers 断言。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**511 tests**：shared 6 + core 216 + cli 62 + gateway 227;core 覆盖率 100%：327/327）;`pnpm provision`（metadata index created,重跑幂等）;`pnpm deploy:all` exit 0;**线上 DoD 全链复验**：object mount→put→ls→cat→patch(version 1→2,metadata 合并)→cat --json;vector mount→put×2→**List 可用（sidecar 后新能力）**→cat 返回全文→Search 召回 doc1 居首（metadata filter 生效）;**Delete tool 200 {deleted:true}**（修复前 400）;~help 仍五条 cmd 行;unmount×2。
+- 勾选：无新增（Phase 3 三项 Round 12 已勾;本轮为关门质量修复）→ **Phase 3 正式关门**。
+- 沉淀：doc-gaps #27（Phase 3 关门实现声明簇,见下条修订）;llmdoc 关门沉淀（current-state 翻页/新坑/reflection）本轮触发;Docs 漂移回查——vector List 恢复实现无需改 Docs;附B 已在 Round 11 增补。
+- 遗留：14 条 MINOR backlog（List opts 未校验 NaN、R2 customMetadata 大小上限、基础设施故障统一 500 未分 unavailable、§11.3a List 权限裁剪只做前缀级、成功响应信封 {entry}/{meta}/裸 Page 不一致未成文、List 递归 vs 浅层表述等——均记 doc-gap 候选或 backlog）;下一 Phase 4（Tool Layer + Agent Runtime,含 tool-bridge 上游通道）。
 
 ## Round 12 — 2026-07-03（Phase 3 Round B/C：provider + 路由 + CLI + 部署冒烟）
 - 目标：Phase 3 / DoD 项 1 gateway I/O 面 + 项 2 集成 + 项 3 ~help（三项全闭环）
