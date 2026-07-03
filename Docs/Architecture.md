@@ -162,13 +162,15 @@ Case 1 中 Triage/QA/Review Agent 跑 Light Runtime，Coding Agent 在 Heavy Run
 
 ## M4. Tool Layer
 
-**职责**：为**任何环境**的 Agent 提供统一的发现与调用面。上游聚合 MCP server、HTTP API、平台内置能力；下游以 HTBP（纯 HTTP）与 MCP 双协议供给。Tool Gateway 同时是**整棵 HTBP 树的宿主**：除工具子树外，Context 子树（M3 消费面）与平台管理子树也由它服务——这正是 HTBP/tool-bridge 在 Watt 中的定位：不只是工具桥，而是 Agent 面向平台的单一入口。
+**职责**：为**任何环境**的 Agent 提供统一的发现与调用面。上游聚合 MCP server、HTTP API、平台内置能力；下游以 HTBP（纯 HTTP）与 MCP 双协议供给。
+
+> **树宿主边界（2026-07-03 Phase 4 修订）**：HTBP 树对 Agent 呈现为单一入口，但**物理宿主分治**——`/htbp/platform/*` 与 `/htbp/context/*` 由 watt-gateway 自持（Phase 1~3 已落地，Auth/种子引导/Provider 绑定与其同生命周期，迁移无收益）；`/htbp/tools/*` 由 tool-bridge（watt-toolbridge Worker）承载，watt-gateway 经 service binding 代理并在代理层注入 Auth Check（PEP）与可见性裁剪。原文"Tool Gateway 是整棵 HTBP 树的宿主"描述的是逻辑单一入口，不再要求物理单宿主；tool-bridge 的联邦能力（remote 节点）保留终态迁移可能。
 
 ### 组成
 
 | 组件 | 职责 | 落地 |
 |---|---|---|
-| **Tool Gateway（HTBP 网关本体）** | 整棵 HTBP 树的服务：`/htbp/tools/*`（工具挂载）、`/htbp/context/*`（Context 消费面，代理到 M3 的 Provider）、`/htbp/platform/*`（平台接口）；`~help`/`~skill` 生成、调用代理、上游凭证注入 | tool-bridge（Worker，见 Reference §2.2） |
+| **Tool Gateway（HTBP 工具子树）** | `/htbp/tools/*`（工具挂载树）：`~help`/`~skill` 生成、调用代理、上游凭证注入；platform/context 子树由 watt-gateway 自持（见上）| tool-bridge（Worker，见 Reference §2.2）+ watt-gateway 代理层 PEP |
 | **ToolProvider** | 一种工具源的接入（Plugin）：`mcp`（上游 MCP server）、`http`（任意 HTTP API）、`builtin`（平台能力：websearch、code exec、browser rendering） | tool-bridge adapter |
 | **工程工具挂载（Case 1 依赖）** | Git/PR/CI/CD/部署不是平台内置模块，而是标准的工具挂载：如 `ToolRegistry.Write({path:"eng/github", provider:"mcp", ...})` 挂 GitHub MCP server（create-pr、merge），`eng/ci` 挂 CI 系统的 `http` Provider（trigger、status）、`eng/deploy` 挂部署系统。Coding/QA/Review Agent 经 `ToolProvider.Call` 完成推 PR、触发 CI、部署测试环境 | ToolMount 配置，无需新接口 |
 | **工具虚拟化** | namespace 前缀、rename、hide、description override；按调用者裁剪可见树 | tool-bridge virtualize + Auth 联动 |
