@@ -10,7 +10,12 @@ import { computeSignature, type Event, WATT_HMAC } from '@watt/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { resetSeedGuardForTests } from '../src/authz/seed.ts';
 import { ChannelStore } from '../src/event/channel-store.ts';
-import { type ConsumerDeps, handleQueue, type WebhookDeliverer } from '../src/event/consumer.ts';
+import {
+  type ConsumerDeps,
+  handleQueue,
+  noopSignaler,
+  type WebhookDeliverer,
+} from '../src/event/consumer.ts';
 import type { EventRouter } from '../src/event/event-router.ts';
 import { EventStore } from '../src/event/event-store.ts';
 
@@ -48,6 +53,25 @@ function memDeliverer(): WebhookDeliverer & { delivered: Array<{ url: string; ev
     async deliver(url: string, event: Event) {
       this.delivered.push({ url, event });
     },
+  };
+}
+
+/** 组装生产同构的 ConsumerDeps（单例 router + 真实 EventStore/ChannelStore + no-op signaler）。 */
+function makeConsumerDeps(deliverer: WebhookDeliverer): ConsumerDeps {
+  return {
+    deliverer,
+    router: () => routerStub(),
+    store: new EventStore(env.DB_EVENTS),
+    queue: {
+      async send() {
+        /* 集成链路不驱动内置规则的二次 Publish；no-op。 */
+      },
+    },
+    channels: new ChannelStore(env.DB_EVENTS),
+    signaler: noopSignaler,
+    genId: () => crypto.randomUUID(),
+    now: () => new Date().toISOString(),
+    genTraceId: () => crypto.randomUUID(),
   };
 }
 
@@ -124,7 +148,7 @@ describe('Phase 2 event flow integration (DOD §2 项 2)', () => {
 
     // ④ createMessageBatch + handleQueue 驱动 consumer → webhook sink 收到该 Event。
     const deliverer = memDeliverer();
-    const deps: ConsumerDeps = { deliverer, router: () => routerStub() };
+    const deps: ConsumerDeps = makeConsumerDeps(deliverer);
     const batch = createMessageBatch('watt-events', [
       { id: 'm1', timestamp: new Date(), body: stored, attempts: 1 },
     ]);
@@ -147,6 +171,67 @@ describe('Phase 2 event flow integration (DOD §2 项 2)', () => {
     expect(page2.items).toHaveLength(1);
   });
 
+  it('stops delivering to a sink after unsubscribe (subscribe → deliver → unsubscribe → no delivery)', async () => {
+    const stub = routerStub();
+    const { subscriptionId } = await stub.subscribe({
+      match: { type: 'webhook.*' },
+      sink: { kind: 'webhook', url: 'https://sink.test/hook' },
+    });
+
+    // 第一次入站 + 驱动 consumer → sink 收到。
+    const res = await postInbound(JSON.stringify({ n: 1 }), 'unsub-d1');
+    const firstId = ((await res.json()) as { eventIds: string[] }).eventIds[0]!;
+    const store = new EventStore(env.DB_EVENTS);
+    const firstEvent = await store.list({ filter: { channel: CHANNEL_ID } });
+    if ('code' in firstEvent) throw new Error(firstEvent.message);
+    const stored1 = firstEvent.items.find((e) => e.id === firstId)!;
+
+    const deliverer = memDeliverer();
+    const deps: ConsumerDeps = makeConsumerDeps(deliverer);
+    const batch1 = createMessageBatch('watt-events', [
+      { id: 'u1', timestamp: new Date(), body: stored1, attempts: 1 },
+    ]);
+    const ctx1 = createExecutionContext();
+    await handleQueue(batch1, deps);
+    await getQueueResult(batch1, ctx1);
+    expect(deliverer.delivered).toHaveLength(1);
+
+    // unsubscribe 后：新事件驱动 consumer → 无订阅命中 → sink 不再收到。
+    await stub.unsubscribe(subscriptionId);
+    const res2 = await postInbound(JSON.stringify({ n: 2 }), 'unsub-d2');
+    const secondId = ((await res2.json()) as { eventIds: string[] }).eventIds[0]!;
+    const secondEvent = await store.list({ filter: { channel: CHANNEL_ID } });
+    if ('code' in secondEvent) throw new Error(secondEvent.message);
+    const stored2 = secondEvent.items.find((e) => e.id === secondId)!;
+
+    const batch2 = createMessageBatch('watt-events', [
+      { id: 'u2', timestamp: new Date(), body: stored2, attempts: 1 },
+    ]);
+    const ctx2 = createExecutionContext();
+    await handleQueue(batch2, deps);
+    const result2 = await getQueueResult(batch2, ctx2);
+    expect(result2.explicitAcks).toContain('u2'); // 无订阅 → 无投递 → ack
+    expect(deliverer.delivered).toHaveLength(1); // 仍是 unsubscribe 前那 1 条，未新增
+  });
+
+  it('verifies a non-UTF-8 byte body by exact bytes and passes signature (§2.1 bodyRaw)', async () => {
+    // 含非法 UTF-8 序列的字节 body（0xFF/0xFE 无法 UTF-8 解码）；HMAC 按原字节算。
+    // inbound 侧读 arrayBuffer → 严格 UTF-8 解码失败 → base64 分支；验签仍基于原字节 → 通过 → 200。
+    const bytes = new Uint8Array([0x7b, 0xff, 0xfe, 0x00, 0x80, 0x7d]);
+    const sig = await computeSignature(SECRET, bytes);
+    const res = await SELF.fetch(`${BASE}/channels/${CHANNEL_ID}/inbound`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        [WATT_HMAC.signatureHeader]: sig,
+      },
+      body: bytes,
+    });
+    expect(res.status).toBe(200);
+    const out = (await res.json()) as { eventIds: string[] };
+    expect(out.eventIds).toHaveLength(1);
+  });
+
   it('rejects an inbound request with an invalid signature (403 permission_denied)', async () => {
     const res = await SELF.fetch(`${BASE}/channels/${CHANNEL_ID}/inbound`, {
       method: 'POST',
@@ -159,6 +244,25 @@ describe('Phase 2 event flow integration (DOD §2 项 2)', () => {
     expect(res.status).toBe(403);
     const err = (await res.json()) as { code: string; retryable: boolean };
     expect(err.code).toBe('permission_denied');
+    expect(err.retryable).toBe(false);
+  });
+
+  it('returns 501 unavailable for a channel whose adapter is not implemented (§0.2)', async () => {
+    const channels = new ChannelStore(env.DB_EVENTS);
+    await channels.write({
+      id: 'feishu-hook',
+      adapter: 'feishu', // Phase 2 未落地 → 501（在验签之前短路，无需签名）。
+      enabled: true,
+      settings: { verifySecretRef: SECRET_REF },
+    });
+    const res = await SELF.fetch(`${BASE}/channels/feishu-hook/inbound`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(501);
+    const err = (await res.json()) as { code: string; retryable: boolean };
+    expect(err.code).toBe('unavailable');
     expect(err.retryable).toBe(false);
   });
 

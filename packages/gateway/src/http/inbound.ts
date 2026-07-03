@@ -17,10 +17,11 @@
  * 不兼容，故此处内联 Verify → Decode（await Verify），语义等同 core processInbound（拒收短路）。
  */
 
-import type { Event, EventInput, TokenClaims } from '@watt/core';
+import type { Event, EventInput, PrincipalRef, TokenClaims } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
 import { Authorizer } from '../authz/authorizer.ts';
+import { IdentityMapper } from '../authz/identity-mapper.ts';
 import { PolicyStore } from '../authz/policy-store.ts';
 import type { Bindings } from '../env.ts';
 import { createWebhookAdapter } from '../event/adapters/webhook.ts';
@@ -66,12 +67,16 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
       );
     }
 
-    // ② 按 adapter 构造（Phase 2 仅 webhook）。
+    // ② 按 adapter 构造（Phase 2 仅 webhook）。未落地能力 → HTTP 501（§0.2 补充：未实现
+    //    返回 501 + code:'unavailable'、retryable:false；不走 httpStatusFor 默认的 503）。
     if (config.adapter !== 'webhook') {
-      return wattErrorResponse(
-        c,
-        wattError('unavailable', `channel adapter not implemented: ${config.adapter}`, false),
-      );
+      const body: WattError = {
+        code: 'unavailable',
+        message: `channel adapter not implemented: ${config.adapter}`,
+        retryable: false,
+      };
+      // biome-ignore lint/suspicious/noExplicitAny: 501 非 unavailable 的默认映射（503），此处显式覆盖。
+      return c.json(body, 501 as any);
     }
     const secretRef = config.settings.verifySecretRef;
     if (typeof secretRef !== 'string') {
@@ -90,8 +95,23 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
     const adapter = createWebhookAdapter({ secret, channelId });
 
     // ③ RawInbound：字节级原文透传（§2.1 L217-219，验签依赖字节精确）→ Verify → Decode。
-    const bodyRaw = await c.req.text();
-    const rawInbound = { headers: collectHeaders(c.req.raw), bodyRaw, encoding: 'utf8' as const };
+    //    c.req.text() 会有损解码非 UTF-8 字节（破坏 HMAC），改为读原始 bytes：
+    //    严格 UTF-8 解码成功 → utf8；含非 UTF-8 字节 → 逐字节 base64（webhook adapter 已支持 base64 分支）。
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    let bodyRaw: string;
+    let encoding: 'utf8' | 'base64';
+    try {
+      bodyRaw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      encoding = 'utf8';
+    } catch {
+      let binary = '';
+      for (const b of bytes) {
+        binary += String.fromCharCode(b);
+      }
+      bodyRaw = btoa(binary);
+      encoding = 'base64';
+    }
+    const rawInbound = { headers: collectHeaders(c.req.raw), bodyRaw, encoding };
     const verified = await adapter.Verify(rawInbound);
     if (!verified) {
       // Verify 失败短路：不 Decode 不可信报文（§2.1 拒收）。permission_denied → 403。
@@ -105,6 +125,12 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
     // ④ 每个 Partial<Event> 补齐 + Publish（source 已由 adapter 填 webhook）。
     const store = new EventStore(c.env.DB_EVENTS);
     const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    // IdentityMapper.Resolve 接线（§1 L115-116）：channelUser → principal（查无映射 → 'user:anonymous'）。
+    const identity = new IdentityMapper(c.env.DB_POLICIES);
+    const resolvePrincipal = async (channel: string, userId: string): Promise<PrincipalRef> => {
+      const resolved = await identity.resolve(channel, userId);
+      return resolved.principal;
+    };
     const queue = {
       async send(event: Event): Promise<void> {
         await c.env.QUEUE_EVENTS.send(event);
@@ -117,6 +143,7 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
         authorizer,
         queue,
         claims: ANONYMOUS_CLAIMS,
+        resolvePrincipal,
         genId: () => crypto.randomUUID(),
         now: () => new Date().toISOString(),
         genTraceId: () => crypto.randomUUID(),

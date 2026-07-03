@@ -46,11 +46,17 @@ export interface NormalizeDeps {
 /**
  * 补齐 Publish 入参（Omit<Event,'id'|'traceId'|'occurredAt'>）为完整 Event（§2.3 L259）。
  * - id：genId 生成（可注入以便测试）。
- * - occurredAt：now 生成。
+ * - occurredAt：input 已带则保留（§2.1 Decode 义务字段含 occurredAt，即渠道侧发生时刻），
+ *   缺省才用 now()。EventInput 类型 Omit 了 occurredAt，但 ChannelAdapter.Decode 会在运行时填入
+ *   （见 §2.1 L203），故这里读取运行时可能存在的值。（Proto §2.3 Omit 列表与 §2.1 Decode 义务
+ *   对 occurredAt 的取舍矛盾属 doc-gap，此处依 §2.1 保留渠道时刻。）
  * - traceId：deps.traceId 已有则透传，否则 genTraceId 生成（§0.3 全链路观测）。
  * - principal：不在 Omit 列表，但当 channelUser 存在且 principal 缺省时由 resolvePrincipal 覆写（doc-gap #10）。
  */
-export function normalizeEvent(input: EventInput, deps: NormalizeDeps): Event {
+export function normalizeEvent(
+  input: EventInput & { occurredAt?: string },
+  deps: NormalizeDeps,
+): Event {
   let principal = input.principal;
   if (
     principal === undefined &&
@@ -64,7 +70,7 @@ export function normalizeEvent(input: EventInput, deps: NormalizeDeps): Event {
     ...input,
     principal,
     id: deps.genId(),
-    occurredAt: deps.now(),
+    occurredAt: input.occurredAt ?? deps.now(),
     traceId: deps.traceId ?? deps.genTraceId(),
   };
 }

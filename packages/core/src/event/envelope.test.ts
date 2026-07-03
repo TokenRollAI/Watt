@@ -101,6 +101,19 @@ describe('normalizeEvent (Omit fields platform-filled, §2.3)', () => {
     expect(out.traceId).toBe('tr-inherited');
   });
 
+  it('L5c preserves an occurredAt supplied by the channel Decode (§2.1 Decode obligation)', () => {
+    // Decode 已填渠道发生时刻 → normalizeEvent 保留，不覆写为 now()。
+    const out = normalizeEvent(
+      { ...baseInput(), occurredAt: '2026-06-01T08:00:00.000Z' },
+      {
+        genId: () => 'evt-1',
+        now: () => '2026-07-03T12:00:00.000Z',
+        genTraceId: () => 'tr-1',
+      },
+    );
+    expect(out.occurredAt).toBe('2026-06-01T08:00:00.000Z');
+  });
+
   it('L6 fills principal via resolver when channelUser present and principal absent', () => {
     const out = normalizeEvent(baseInput({ channelUser: { channel: 'feishu', userId: 'ou_x' } }), {
       genId: () => 'evt-1',
