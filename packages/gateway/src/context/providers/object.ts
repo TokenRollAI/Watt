@@ -96,7 +96,14 @@ export class ObjectContextProvider {
     }
     const rawLimit = opts.limit ?? DEFAULT_LIST_LIMIT;
     const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
-    const listed = await this.bucket.list({ prefix: this.key(path), limit });
+    // include customMetadata：R2 list 默认不回 customMetadata，缺了 contentType/version/metadata
+    // 会全部退化为兜底值（2026-07-03 线上冒烟实测）。本包 @cloudflare/workers-types 版本的
+    // R2ListOptions 尚未收录 include 字段（运行时已支持），故显式拓宽类型。
+    const listed = await this.bucket.list({
+      prefix: this.key(path),
+      limit,
+      include: ['customMetadata'],
+    } as Parameters<R2Bucket['list']>[0] & { include: string[] });
     const nsPrefix = `${this.namespace}/`;
     return {
       items: listed.objects.map((obj) => {

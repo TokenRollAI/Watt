@@ -148,8 +148,8 @@ describe('watt context put', () => {
     expect(code).toBe(0);
     const entry = calls[0]?.body.arguments.entry as Record<string, unknown>;
     expect(entry.content).toBe('from-stdin');
-    // 无 --content-type/--metadata 时字段不出现（精确形状，不塞 undefined）。
-    expect('contentType' in entry).toBe(false);
+    // contentType 必填（Proto §4.1 ContextEntryInput）：无 --content-type 时 CLI 缺省 text/plain。
+    expect(entry.contentType).toBe('text/plain');
     expect('metadata' in entry).toBe(false);
   });
 

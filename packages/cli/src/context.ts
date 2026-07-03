@@ -114,7 +114,11 @@ export async function contextGet(
   path: string,
   deps: HttpDeps = {},
 ): Promise<ContextEntry> {
-  return (await contextCall(base, token, namespace, 'Get', { path }, deps)) as ContextEntry;
+  const body = (await contextCall(base, token, namespace, 'Get', { path }, deps)) as {
+    entry?: ContextEntry;
+  };
+  // 服务端 Get 返回 { entry }（context-routes.ts）。
+  return body.entry ?? (body as unknown as ContextEntry);
 }
 
 /** put 的 entry 输入（Write：ContextEntryInput）。 */
@@ -133,8 +137,11 @@ export async function contextPut(
   input: PutEntryInput,
   deps: HttpDeps = {},
 ): Promise<ContextEntryMeta> {
-  const entry: Record<string, unknown> = { content: input.content };
-  if (input.contentType !== undefined) entry.contentType = input.contentType;
+  // ContextEntryInput.contentType 必填（Proto §4.1）；CLI 缺省补 text/plain。
+  const entry: Record<string, unknown> = {
+    content: input.content,
+    contentType: input.contentType ?? 'text/plain',
+  };
   if (input.metadata !== undefined) entry.metadata = input.metadata;
   if (input.ifVersion !== undefined) entry.ifVersion = input.ifVersion;
   const body = (await contextCall(base, token, namespace, 'Write', { path, entry }, deps)) as {
