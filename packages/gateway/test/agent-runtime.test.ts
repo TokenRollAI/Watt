@@ -7,6 +7,7 @@ import type { AgentInstance, AgentInstanceRpc } from '../src/agent/agent-instanc
 import { AgentRegistry } from '../src/agent/agent-registry.ts';
 import { AgentRuntime, type RuntimeDeps } from '../src/agent/agent-runtime.ts';
 import { defaultAgentDeliverer } from '../src/event/agent-deliverer.ts';
+import { EventStore } from '../src/event/event-store.ts';
 
 /**
  * AgentRuntime 集成测试（Proto §3.2 生命周期 + §3.4 结果回传接线）——真实 AgentInstance（Agents SDK）
@@ -91,6 +92,27 @@ describe('AgentRuntime.spawn (§3.2)', () => {
     }
   });
 
+  it('spawn idempotency does not reset children/state on re-spawn (§3.2 same key stable state)', async () => {
+    // 回归 Spawn 幂等 bug：initInstance 曾每次覆盖全新 INITIAL_STATE → 重复 Spawn 抹掉 children/input。
+    const reg = new AgentRegistry(env.DB_PROVIDERS);
+    const name = uniq('idem-stable');
+    await reg.write(D(name));
+    const rt = new AgentRuntime(runtimeDeps());
+    const parent = uniq('p');
+    const child = uniq('c');
+    await rt.spawn({ definition: name, instanceKey: parent, input: { first: true } });
+    // 派生一个子（父 addChild）。
+    await rt.spawn({ definition: name, instanceKey: child }, { parent });
+    const parentRpc = await instanceRpc(parent);
+    expect((await parentRpc.getInfo()).children).toContain(child);
+
+    // 重复 Spawn 同 key（不同 input）——不得重置 children，也不得覆盖初始 input。
+    await rt.spawn({ definition: name, instanceKey: parent, input: { second: true } });
+    const after = await parentRpc.getInfo();
+    expect(after.children).toContain(child); // children 保留（未被抹）
+    expect(after.input).toEqual({ first: true }); // 初始 input 保留（首次初始化为准）
+  });
+
   it('spawn(expect) registers correlation and returns correlationId', async () => {
     const reg = new AgentRegistry(env.DB_PROVIDERS);
     const name = uniq('spawn-expect');
@@ -109,6 +131,31 @@ describe('AgentRuntime.spawn (§3.2)', () => {
     }
     const corr = correlationStub();
     expect(await corr.hasPending('cid-spawn-1')).toBe(true);
+  });
+
+  it('spawn(expect) with echo harness publishes agent.result to EventStore (publishOutcome 留痕全链)', async () => {
+    // 全链：spawn(expect) → syntheticEvent → onEvent → echo → publishOutcome → EventStore.put。
+    const reg = new AgentRegistry(env.DB_PROVIDERS);
+    const name = uniq('spawn-publish');
+    await reg.write(D(name));
+    const rt = new AgentRuntime(runtimeDeps());
+    const cid = `cid-publish-${seq}`;
+    const res = await rt.spawn({
+      definition: name,
+      instanceKey: uniq('key'),
+      input: { hello: 'echo' },
+      expect: { correlationId: cid, timeoutMs: 60_000 },
+    });
+    expect('code' in res).toBe(false);
+    // publishOutcome 已把 echo 的 agent.result 落 EventStore（§2.4 留痕）。
+    const store = new EventStore(env.DB_EVENTS);
+    const page = await store.list({ filter: { type: 'agent.result' } });
+    if ('code' in page) throw new Error(page.message);
+    const trace = page.items.find(
+      (e) => (e.payload as { correlationId?: string }).correlationId === cid,
+    );
+    expect(trace).toBeDefined();
+    expect((trace?.payload as { output?: unknown }).output).toEqual({ echo: { hello: 'echo' } });
   });
 });
 

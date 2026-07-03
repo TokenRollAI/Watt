@@ -26,6 +26,9 @@ import type { ModelCaller, ModelCallRequest } from './types.ts';
 /** 默认中转基址（external-facts / .env ANTHROPIC_BASE_URL）——不含 /v1。 */
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://llm.fantacy.live';
 
+/** 默认单次模型调用超时（实现声明）：60s。超时 → 抛错 → llm harness 归类 failed(reason='error')。 */
+export const DEFAULT_MODEL_TIMEOUT_MS = 60_000;
+
 /** createAnthropic 的 baseURL 需含 /v1（其后拼 /messages）；补齐 base 的 /v1 后缀，去尾斜杠。 */
 function withV1Suffix(base: string): string {
   const trimmed = base.replace(/\/+$/, '');
@@ -36,12 +39,17 @@ function withV1Suffix(base: string): string {
  * 构造真实 Anthropic Messages caller。
  * baseUrl/apiKey 从 env 取（缺省 baseUrl）；maxOutputTokens 保守取 1024（结构化 output 足够）。
  * fetchImpl 可注入（默认全局 fetch，workerd 下即 runtime fetch）。
+ * timeoutMs：单次调用超时（缺省 DEFAULT_MODEL_TIMEOUT_MS）——经 AbortSignal.timeout 传给 generateText，
+ *   超时中止上游请求并抛错（llm harness 捕获 → failed(reason='error')，避免 onEvent 无限挂起吃满
+ *   correlation.timeoutMs 才被平台超时代发）。
  */
 export function createAnthropicCaller(opts: {
   baseUrl?: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }): ModelCaller {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
   const provider = createAnthropic({
     apiKey: opts.apiKey,
     baseURL: withV1Suffix(opts.baseUrl ?? DEFAULT_ANTHROPIC_BASE_URL),
@@ -52,6 +60,7 @@ export function createAnthropicCaller(opts: {
       const { text } = await generateText({
         model: provider(req.model),
         maxOutputTokens: 1024,
+        abortSignal: AbortSignal.timeout(timeoutMs),
         ...(req.system !== undefined ? { system: req.system } : {}),
         prompt: req.prompt,
       });

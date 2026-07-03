@@ -7,7 +7,10 @@ import {
   runInDurableObject,
 } from 'cloudflare:test';
 import type { Event, Subscription } from '@watt/core';
+import { getAgentByName } from 'agents';
 import { describe, expect, it } from 'vitest';
+import type { AgentInstance, AgentInstanceRpc } from '../src/agent/agent-instance.ts';
+import { defaultAgentDeliverer } from '../src/event/agent-deliverer.ts';
 import { ChannelStore } from '../src/event/channel-store.ts';
 import {
   type AgentDeliverer,
@@ -480,5 +483,89 @@ describe('Queue consumer im.bot_joined 自动订阅 (§2.3 规则 2)', () => {
 
     const page = await stub.listSubscriptions();
     expect(page.items).toHaveLength(0);
+  });
+});
+
+/**
+ * §3.4 定向回送在 consumer 层的接线（真实 AgentDeliverer，非 noop）——handleQueue 处理 agent.result
+ * → routeResult 查真实 correlation 单例 → 投递等待方实例；投递失败 → msg.retry() 重放（MAJOR 修正）。
+ */
+async function instanceRpc(key: string): Promise<AgentInstanceRpc> {
+  const stub = await getAgentByName<Cloudflare.Env, AgentInstance>(env.AGENT_INSTANCE, key);
+  return stub as unknown as AgentInstanceRpc;
+}
+
+function realCorrelationStub() {
+  return env.AGENT_CORRELATION.get(env.AGENT_CORRELATION.idFromName('correlation'));
+}
+
+const resultEvt = (correlationId: string, instanceId: string): Event => ({
+  id: `res-${correlationId}`,
+  source: { kind: 'agent', ref: instanceId },
+  type: 'agent.result',
+  payload: { correlationId, instanceId, output: { ok: true } },
+  occurredAt: '2026-07-03T00:00:00.000Z',
+  traceId: 't',
+});
+
+let corrSeq = 0;
+
+describe('Queue consumer real AgentDeliverer wiring (§3.4)', () => {
+  it('handleQueue routes an agent.result through the real deliverer to the waiter instance, then acks', async () => {
+    const corr = realCorrelationStub();
+    const waiterKey = `consumer-waiter-${corrSeq++}`;
+    const waiter = await instanceRpc(waiterKey);
+    await waiter.initInstance({
+      definition: 'p',
+      harness: 'echo',
+      nowIso: '2020-01-01T00:00:00.000Z',
+    });
+    const cid = `cid-consumer-${corrSeq}`;
+    await corr.register(
+      cid,
+      { kind: 'agent', id: waiterKey },
+      'producer',
+      Date.now() + 60_000,
+      't',
+    );
+
+    const stub = freshRouterStub();
+    const deps = makeDeps({
+      deliverer: memDeliverer(),
+      router: () => stub,
+      agent: defaultAgentDeliverer(env),
+    });
+    const batch = createMessageBatch(QUEUE, [
+      { id: 'r1', timestamp: new Date(), body: resultEvt(cid, 'producer'), attempts: 1 },
+    ]);
+    const ctx = createExecutionContext();
+    await handleQueue(batch, deps);
+    const result = await getQueueResult(batch, ctx);
+
+    // 投递成功 → 消息 ack；waiter 实例 onEvent 被触达（lastActiveAt 推进）；correlation settled。
+    expect(result.explicitAcks).toContain('r1');
+    expect((await waiter.getInfo()).lastActiveAt).not.toBe('2020-01-01T00:00:00.000Z');
+    expect(await corr.resolve(cid)).toBeNull();
+  });
+
+  it('retries the message (and rolls correlation back to pending) when waiter delivery throws', async () => {
+    // fake AgentDeliverer：routeResult 抛错 → consumer 返回 false → msg.retry()（不吞错 ack）。
+    const throwingAgent: AgentDeliverer = {
+      async routeResult() {
+        throw new Error('waiter onEvent failed');
+      },
+      async deliverToAgent() {},
+    };
+    const stub = freshRouterStub();
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, agent: throwingAgent });
+    const batch = createMessageBatch(QUEUE, [
+      { id: 'r2', timestamp: new Date(), body: resultEvt('cid-x', 'producer'), attempts: 1 },
+    ]);
+    const ctx = createExecutionContext();
+    await handleQueue(batch, deps);
+    const result = await getQueueResult(batch, ctx);
+
+    expect(result.retryMessages.map((r: { msgId: string }) => r.msgId)).toContain('r2');
+    expect(result.explicitAcks).not.toContain('r2');
   });
 });

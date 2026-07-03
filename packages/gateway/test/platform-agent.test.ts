@@ -185,4 +185,46 @@ describe('AgentRuntime verbs via route (§3.2)', () => {
     expect(res.status).toBe(200);
     expect((await body(res)).terminated).toBe(true);
   });
+
+  it('Send → { accepted, correlationId? } (expect registers correlation)', async () => {
+    const token = await signAdmin();
+    const name = uniq('snd');
+    await call(token, 'Write', { definition: DEF(name) });
+    const key = uniq('k');
+    await call(token, 'Spawn', { request: { definition: name, instanceKey: key } });
+    const res = await call(token, 'Send', {
+      instanceId: key,
+      event: { type: 'agent.message', source: { kind: 'system' }, payload: { ping: 1 } },
+      expect: { correlationId: 'cid-route-send', timeoutMs: 60_000 },
+    });
+    expect(res.status).toBe(200);
+    const sendBody = (await body(res)) as { accepted: boolean; correlationId?: string };
+    expect(sendBody.accepted).toBe(true);
+    expect(sendBody.correlationId).toBe('cid-route-send');
+  });
+
+  it('Spawn with parent → child registered under parent (ListInstances tree shows派生)', async () => {
+    const token = await signAdmin();
+    const name = uniq('par');
+    await call(token, 'Write', { definition: DEF(name) });
+    const parent = uniq('parent');
+    const child = uniq('child');
+    await call(token, 'Spawn', { request: { definition: name, instanceKey: parent } });
+    const spawnChild = await call(token, 'Spawn', {
+      request: { definition: name, instanceKey: child },
+      parent,
+    });
+    expect(spawnChild.status).toBe(200);
+
+    const tree = await call(token, 'ListInstances', { opts: { tree: parent } });
+    expect(tree.status).toBe(200);
+    const treeBody = (await tree.json()) as {
+      items: { instanceId: string; parent?: string; children: string[] }[];
+    };
+    const ids = treeBody.items.map((i) => i.instanceId);
+    expect(ids).toContain(parent);
+    expect(ids).toContain(child);
+    const parentInfo = treeBody.items.find((i) => i.instanceId === parent);
+    expect(parentInfo?.children).toContain(child);
+  });
 });

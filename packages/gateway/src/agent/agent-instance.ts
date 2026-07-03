@@ -11,7 +11,14 @@
  *
  * onEvent 是 §3.3 AgentEndpoint.OnEvent 的实现：平台经 DO RPC 投递事件（consumer agent sink /
  * Runtime.Send），harness（echo/llm）产出 HarnessOutcome → publish agent.result/agent.failed 回
- * QUEUE_EVENTS（带 correlationId → §3.4 定向回送）。长活作动异步（返回 {accepted} 后经事件回传）。
+ * QUEUE_EVENTS（带 correlationId → §3.4 定向回送）。
+ *
+ * 执行语义（2026-07-03 修正）：本实现**同步跑完 harness 才返回 {accepted}**——即 onEvent 返回前
+ *   结果事件已 publish（EventStore.put + QUEUE_EVENTS.send）。规范 §3.3/§11.4e 允许「返回 accepted
+ *   后异步经 agent.result 回传」，但此处不用 ctx.waitUntil 真异步：① DO RPC 返回后实例可能被回收，
+ *   waitUntil 中未跑完的 harness 有结果丢失风险；② 测试直接断言 onEvent 返回后结果已产出（可观测）。
+ *   长活模型调用的上界由 anthropic-caller 的 AbortSignal.timeout 兜住（不会无限挂），故同步阻塞可控。
+ *   Phase 5+ 引入 agentic loop（多轮工具调用）时若需真异步，改由成熟框架的 schedule/queue 承接。
  *
  * 注：不使用 @callable（那是 WebSocket 客户端 RPC 面，需 TS 标准装饰器）——平台侧全部经服务端
  * DO RPC（普通 public 方法 via stub）驱动，见 agent-runtime.ts。
@@ -104,7 +111,10 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
   override initialState: AgentInstanceState = INITIAL_STATE;
 
   /** 初始化实例元数据（Spawn 时调）——definition/harness/model/input/parent 落 state（§3.2）。
-   *  命名 initInstance（非 init）以不覆盖 Agents SDK 基类的 init 钩子。 */
+   *  命名 initInstance（非 init）以不覆盖 Agents SDK 基类的 init 钩子。
+   *  幂等（2026-07-03 修正）：**只在首次初始化**（createdAt 为 INITIAL_STATE 的空串时）落全套 state；
+   *   已初始化的实例重复 Spawn（同 instanceKey）不重置 children/status/input——否则派生子树/运行态会
+   *   被后续 Spawn 抹掉（Spawn 幂等语义 §3.2「同键返回同实例」要求状态稳定）。返回当前 state。 */
   async initInstance(args: {
     definition: string;
     harness: string;
@@ -113,6 +123,10 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
     parent?: string;
     nowIso: string;
   }): Promise<AgentInstanceState> {
+    // 已初始化（非 INITIAL_STATE）：幂等返回现有 state，不重置。
+    if (this.state.createdAt !== '') {
+      return this.state;
+    }
     const next: AgentInstanceState = {
       definition: args.definition,
       status: 'idle',

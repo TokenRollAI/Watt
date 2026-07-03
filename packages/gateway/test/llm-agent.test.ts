@@ -19,7 +19,14 @@ import { llmHarness } from '../src/agent/harness/llm.ts';
 
 // workerd 内无宿主 process.env——门控经 vitest.config 的 miniflare bindings 注入。
 const testEnv = env as unknown as Record<string, string | undefined>;
-const RUN = testEnv.LLM_TESTS === '1' && (testEnv.ANTHROPIC_API_KEY ?? '').length > 0;
+const LLM_ENABLED = testEnv.LLM_TESTS === '1';
+const HAS_KEY = (testEnv.ANTHROPIC_API_KEY ?? '').length > 0;
+// fail-loud（2026-07-03 MINOR）：显式开了 LLM_TESTS=1 却没给 key → 抛错，不静默 skip
+// （否则误以为 @llm 跑过了；缺 key 是配置错误，应显式暴露而非当作"未启用"）。
+if (LLM_ENABLED && !HAS_KEY) {
+  throw new Error('LLM_TESTS=1 but ANTHROPIC_API_KEY is missing — set the key or unset LLM_TESTS');
+}
+const RUN = LLM_ENABLED && HAS_KEY;
 
 describe.skipIf(!RUN)('llm harness — real model (@llm)', () => {
   it('produces a schema-valid agent.result via the real Anthropic Messages relay', async () => {

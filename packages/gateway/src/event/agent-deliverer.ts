@@ -4,9 +4,12 @@
  * routeResult（§3.4 定向回送）：agent.result/agent.failed 进队列被 consumer 消费时，先查
  *   AgentCorrelation DO：
  *     - 无记录（从未登记 / 等待方先消失）→ drop-no-waiter（记 console 审计，规则 5）；
- *     - 已 settled（重复结果 / 超时后晚到）→ drop-duplicate（记 console，规则 6 / 规则 3 幂等）；
- *     - 首次命中 → resolve 得 waiter：kind='agent' → 投递该实例 onEvent（规则 1/2 定向回送）；
- *       kind='task' → Phase 5 Workflows waitForEvent（此处占位记 console）。
+ *     - 已 settled / 投递中（重复结果 / 超时后晚到）→ drop-duplicate（记 console，规则 6 / 规则 3 幂等）；
+ *     - 首次命中 → peekForDelivery 置中间态 'delivering' 并得 waiter：kind='agent' → 投递该实例
+ *       onEvent（规则 1/2），**投递成功后才 confirmDelivery（settle）；失败 rollbackDelivery 回
+ *       pending 并抛错 → consumer msg.retry() 重放**（修复「先 settle 后投递 + 吞错 ack → 结果永久
+ *       丢失」，2026-07-03 MAJOR）；kind='task' → Phase 5 Workflows waitForEvent（占位记 console，
+ *       视为已投递直接 confirm）。
  *
  * deliverToAgent（§2.3 规则 1/2 agent 订阅）：agent sink 命中 → resolveInstanceKey 求实例键 →
  *   AgentRuntime.spawn（复用 = 幂等）+ send 投递事件（无 expect，即发即忘；有订阅语义的结果回送
@@ -57,7 +60,8 @@ export function defaultAgentDeliverer(env: Bindings): AgentDeliverer {
         });
         return;
       }
-      const waiter = await corr.resolve(correlationId);
+      // peek 置中间态 'delivering'（并发去重：已 settled/delivering → null）。
+      const waiter = await corr.peekForDelivery(correlationId);
       if (waiter === null) {
         console.log('agent deliverer: drop-duplicate (rule 6 / rule 3 idempotent)', {
           correlationId,
@@ -67,14 +71,22 @@ export function defaultAgentDeliverer(env: Bindings): AgentDeliverer {
       }
       if (waiter.kind === 'agent') {
         // 规则 1/2：定向回送给等待方实例（其 onEvent 收到 result/failed，无二次 expect）。
-        const stub = await instanceRpc(env, waiter.id);
-        await stub.onEvent({ event });
+        try {
+          const stub = await instanceRpc(env, waiter.id);
+          await stub.onEvent({ event });
+        } catch (err) {
+          // 投递失败 → 回滚到 pending，抛错让 consumer msg.retry() 重放（不永久丢失结果）。
+          await corr.rollbackDelivery(correlationId);
+          throw err;
+        }
+        await corr.confirmDelivery(correlationId); // 投递成功才 settle。
       } else {
-        // Task 等待方 → Phase 5 Workflows waitForEvent（占位）。
+        // Task 等待方 → Phase 5 Workflows waitForEvent（占位）；视为已投递直接 confirm。
         console.log('agent deliverer: task waiter delivery deferred to Phase 5', {
           correlationId,
           waiter: waiter.id,
         });
+        await corr.confirmDelivery(correlationId);
       }
     },
 

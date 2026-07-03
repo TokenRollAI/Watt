@@ -334,10 +334,13 @@ async function handleEvent(event: Event, deps: ConsumerDeps): Promise<boolean> {
     try {
       await deps.agent.routeResult(event);
     } catch (err) {
-      console.error('event consumer: agent result routing failed', {
+      // 投递失败（等待方实例 onEvent 抛错）→ correlation 已回滚到 pending，msg.retry() 重放
+      // （与 webhook sink 一致；不吞错 ack，否则结果永久丢失，2026-07-03 MAJOR）。
+      console.error('event consumer: agent result routing failed, will retry', {
         eventId: event.id,
         err: String(err),
       });
+      return false;
     }
     // 结果事件已定向路由（EventStore 已在 publish 时留痕）；不再进订阅匹配。
     return true;
