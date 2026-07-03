@@ -255,7 +255,10 @@ interface ChannelConfig {
 interface EventBus {
   /** 发布事件（入站规约后 / Agent 出站 / cron 触发统一走这里）。
    *  参数为 Omit<Event,'id'|'traceId'|'occurredAt'>：id/traceId/occurredAt 由平台补齐
-   *  （traceId 已在链路中时透传）；dedupeKey 相同的重复 Publish 在时间窗内幂等返回原 eventId。
+   *  （traceId 已在链路中时透传）。规范性澄清（2026-07-03）：occurredAt 若调用方已提供
+   *  （如 §2.1 Decode 义务字段携带的渠道侧发生时刻）则平台保留不覆写，仅缺省时以接收
+   *  时刻补齐——与 §2.1 的 Decode 义务一致；dedupeKey 相同的重复 Publish 在时间窗内
+   *  幂等返回原 eventId。
    *  鉴权（规范性）：type="outbound.message" 时判定
    *  Check(context, event://<channel>/<target>, 'write')——"Agent 能否向某渠道发消息"
    *  在此收敛；外部系统经 Platform API（Bearer/OAuth，见 §11.3）直接 Publish 时，
