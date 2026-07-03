@@ -1,5 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
+import {
+  agentGet,
+  agentList,
+  agentSend,
+  agentSpawn,
+  agentTerminate,
+  agentTree,
+  formatDefinitionListHuman,
+  formatInstanceTreeHuman,
+} from './agent.ts';
 import { auditList, formatAuditListHuman } from './audit.ts';
 import { channelList, channelSet, formatChannelListHuman } from './channel.ts';
 import { credentialsPath, type FsDeps, requireBaseUrl, requireToken } from './client.ts';
@@ -17,6 +27,12 @@ import { CliError, readEnv } from './env.ts';
 import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
+import {
+  formatProviderListHuman,
+  providerAdd,
+  providerList,
+  providerSetDefault,
+} from './provider.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
 import { formatMountListHuman, toolCall, toolDescribe, toolList, toolMount } from './tool.ts';
 import { formatWhoamiHuman, whoami } from './whoami.ts';
@@ -24,6 +40,45 @@ import { formatWhoamiHuman, whoami } from './whoami.ts';
 /** commander 的可重复选项收集器（`--metadata k=v` 累积成数组）。 */
 function collect(value: string, previous: string[]): string[] {
   return previous.concat(value);
+}
+
+/** 解析 JSON 选项值（agent --input/--payload 等）；非法 → CliError(2)。 */
+function parseJsonOpt(raw: string, flag: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new CliError(`${flag} must be valid JSON`, 2);
+  }
+}
+
+/** 解析正整数选项（--ttl/--priority/--timeout-ms）；非法 → CliError(2)。 */
+function parsePositiveInt(raw: string, flag: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new CliError(`${flag} must be a positive integer`, 2);
+  }
+  return n;
+}
+
+/** 从 spawn/send 选项构造 ExpectSpec（--expect-schema / --correlation-id / --timeout-ms）；均缺 → undefined。 */
+function buildExpect(cmdOpts: {
+  expectSchema?: string;
+  correlationId?: string;
+  timeoutMs?: string;
+}): { correlationId?: string; timeoutMs?: number; schema?: unknown } | undefined {
+  const has =
+    cmdOpts.expectSchema !== undefined ||
+    cmdOpts.correlationId !== undefined ||
+    cmdOpts.timeoutMs !== undefined;
+  if (!has) return undefined;
+  const expect: { correlationId?: string; timeoutMs?: number; schema?: unknown } = {};
+  if (cmdOpts.correlationId !== undefined) expect.correlationId = cmdOpts.correlationId;
+  if (cmdOpts.timeoutMs !== undefined)
+    expect.timeoutMs = parsePositiveInt(cmdOpts.timeoutMs, '--timeout-ms');
+  if (cmdOpts.expectSchema !== undefined) {
+    expect.schema = parseJsonOpt(cmdOpts.expectSchema, '--expect-schema');
+  }
+  return expect;
 }
 
 /** 默认 stdin 读取（context put/patch 无 --content/--file 时用；测试注入 readStdin 覆盖）。 */
@@ -641,6 +696,212 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const res = await toolCall(base, token, path, toolName, args, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(res));
       else out(JSON.stringify(res.result, null, 2));
+    });
+
+  // ── watt agent（§3.1 AgentRegistry + §3.2 AgentRuntime）─────────────────────
+  const agent = program
+    .command('agent')
+    .description('Manage agent definitions and instances (AgentRegistry / AgentRuntime)');
+  agent
+    .command('list')
+    .description('List agent definitions (AgentRegistry.List)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const defs = await agentList(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(defs));
+      else out(formatDefinitionListHuman(defs));
+    });
+  agent
+    .command('get')
+    .description('Get an agent definition by name (AgentRegistry.Get)')
+    .argument('<name>', 'agent definition name')
+    .action(async (name: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const def = await agentGet(base, token, name, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(def));
+      else out(`${def.name}\t${def.runtime}\t${def.description}`);
+    });
+  agent
+    .command('spawn')
+    .description('Spawn an agent instance (AgentRuntime.Spawn)')
+    .argument('<definition>', 'agent definition name')
+    .option('--instance-key <key>', 'idempotency key (same key returns same instance)')
+    .option('--input <json>', 'initial input as a JSON value')
+    .option('--ttl <seconds>', 'auto-terminate after N seconds')
+    .option(
+      '--expect-schema <json>',
+      'expect a result validated by this JSON Schema (returns correlationId)',
+    )
+    .option('--correlation-id <id>', 'explicit correlationId for the expected result')
+    .option('--timeout-ms <ms>', 'expect timeout in ms')
+    .action(
+      async (
+        definition: string,
+        cmdOpts: {
+          instanceKey?: string;
+          input?: string;
+          ttl?: string;
+          expectSchema?: string;
+          correlationId?: string;
+          timeoutMs?: string;
+        },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const request: Parameters<typeof agentSpawn>[2] = { definition };
+        if (cmdOpts.instanceKey !== undefined) request.instanceKey = cmdOpts.instanceKey;
+        if (cmdOpts.input !== undefined) request.input = parseJsonOpt(cmdOpts.input, '--input');
+        if (cmdOpts.ttl !== undefined) request.ttl = parsePositiveInt(cmdOpts.ttl, '--ttl');
+        const expect = buildExpect(cmdOpts);
+        if (expect !== undefined) request.expect = expect;
+        const res = await agentSpawn(base, token, request, { fetch: opts.fetch });
+        if (asJson()) out(JSON.stringify(res));
+        else
+          out(
+            `Spawned ${res.instance.instanceId}${
+              res.correlationId ? ` (correlationId ${res.correlationId})` : ''
+            }`,
+          );
+      },
+    );
+  agent
+    .command('send')
+    .description('Send an event to an agent instance (AgentRuntime.Send)')
+    .argument('<instanceId>', 'target instance id')
+    .option('--type <type>', 'event type', 'agent.message')
+    .option('--payload <json>', 'event payload as a JSON value', '{}')
+    .option(
+      '--expect-schema <json>',
+      'expect a result validated by this JSON Schema (returns correlationId)',
+    )
+    .option('--correlation-id <id>', 'explicit correlationId for the expected result')
+    .option('--timeout-ms <ms>', 'expect timeout in ms')
+    .action(
+      async (
+        instanceId: string,
+        cmdOpts: {
+          type: string;
+          payload: string;
+          expectSchema?: string;
+          correlationId?: string;
+          timeoutMs?: string;
+        },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const event = {
+          source: { kind: 'system' },
+          type: cmdOpts.type,
+          payload: parseJsonOpt(cmdOpts.payload, '--payload'),
+        };
+        const expect = buildExpect(cmdOpts);
+        const res = await agentSend(base, token, instanceId, event, expect, { fetch: opts.fetch });
+        if (asJson()) out(JSON.stringify(res));
+        else
+          out(
+            `Sent (accepted=${res.accepted})${
+              res.correlationId ? ` correlationId ${res.correlationId}` : ''
+            }`,
+          );
+      },
+    );
+  agent
+    .command('terminate')
+    .description('Terminate an agent instance (AgentRuntime.Terminate)')
+    .argument('<instanceId>', 'target instance id')
+    .option('--cascade', 'cascade-terminate the derived subtree', false)
+    .action(async (instanceId: string, cmdOpts: { cascade: boolean }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      await agentTerminate(base, token, instanceId, cmdOpts.cascade, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify({ terminated: true }));
+      else out(`Terminated ${instanceId}${cmdOpts.cascade ? ' (cascade)' : ''}`);
+    });
+  agent
+    .command('tree')
+    .description('List agent instances as a derivation tree (AgentRuntime.ListInstances{tree})')
+    .argument('[root]', 'root instance id (default: all instances)')
+    .action(async (root?: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const items = await agentTree(base, token, root, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(items));
+      else out(formatInstanceTreeHuman(items));
+    });
+
+  // ── watt provider（§9 ModelProviderRegistry 最小版）──────────────────────────
+  const provider = program
+    .command('provider')
+    .description('Manage model providers (ModelProviderRegistry)');
+  provider
+    .command('list')
+    .description('List model providers (ModelProviderRegistry.List; secretRef never shown)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const providers = await providerList(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(providers));
+      else out(formatProviderListHuman(providers));
+    });
+  provider
+    .command('add')
+    .description('Add or replace a model provider (ModelProviderRegistry.Write, upsert)')
+    .argument('<id>', 'provider id, e.g. openrouter-main')
+    .requiredOption('--vendor <vendor>', 'e.g. anthropic | workers-ai | openrouter')
+    .requiredOption('--models <models>', 'comma-separated model names')
+    .requiredOption('--secret-ref <ref>', 'secret reference name (never stored in plaintext)')
+    .option('--priority <n>', 'routing priority', '10')
+    .option('--default', 'make this the global default provider', false)
+    .option('--disabled', 'create the provider disabled', false)
+    .action(
+      async (
+        id: string,
+        cmdOpts: {
+          vendor: string;
+          models: string;
+          secretRef: string;
+          priority: string;
+          default: boolean;
+          disabled: boolean;
+        },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const models = cmdOpts.models
+          .split(',')
+          .map((m) => m.trim())
+          .filter(Boolean);
+        if (!models.length) throw new CliError('--models must list at least one model', 2);
+        const created = await providerAdd(
+          base,
+          token,
+          {
+            id,
+            vendor: cmdOpts.vendor,
+            models,
+            priority: parsePositiveInt(cmdOpts.priority, '--priority'),
+            default: cmdOpts.default,
+            secretRef: cmdOpts.secretRef,
+            enabled: !cmdOpts.disabled,
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(created));
+        else out(`Added provider ${created.id}${created.default ? ' (default)' : ''}`);
+      },
+    );
+  provider
+    .command('set-default')
+    .description('Set a provider as the single global default (ModelProviderRegistry.SetDefault)')
+    .argument('<id>', 'provider id')
+    .action(async (id: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const updated = await providerSetDefault(base, token, id, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(updated));
+      else out(`Default provider is now ${updated.id}`);
     });
 
   let exitCode = 0;

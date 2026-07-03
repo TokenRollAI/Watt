@@ -13,17 +13,35 @@
  * action：List/Get → 'read'；Write/Update/Delete → 'manage'（§6.1 action 集合）。
  */
 
-import type { EventInput, NamespaceMount, Policy, Subscription, ToolMount } from '@watt/core';
+import type {
+  AgentDefinition,
+  EventInput,
+  ModelProvider,
+  NamespaceMount,
+  Policy,
+  Subscription,
+  ToolMount,
+} from '@watt/core';
 import {
+  agentDefinitionSchema,
   channelConfigSchema,
   eventInputSchema,
+  expectSpecSchema,
+  modelProviderSchema,
   namespaceMountSchema,
   policySchema,
+  spawnRequestSchema,
   subscriptionSchema,
   toolMountSchema,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
+import { type ListOptions as AgentListOptions, AgentRegistry } from '../agent/agent-registry.ts';
+import { AgentRuntime, defaultRuntimeDeps, type ExpectSpec } from '../agent/agent-runtime.ts';
+import {
+  ModelProviderRegistry,
+  type ListOptions as ProviderListOptions,
+} from '../agent/model-provider.ts';
 import { Authorizer } from '../authz/authorizer.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
 import { jwksResponse, loadPlatformKeys } from '../authz/keys.ts';
@@ -43,6 +61,8 @@ const RES_EVENT = 'platform://event';
 const RES_CHANNEL = 'platform://channel';
 const RES_CONTEXT = 'platform://context';
 const RES_TOOL = 'platform://tool';
+const RES_AGENT = 'platform://agent';
+const RES_PROVIDER = 'platform://provider';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -630,6 +650,298 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         const result = await registry.update(path, parsedPatch.data as Partial<ToolMount>);
         if (isWattError(result)) return wattErrorResponse(c, result);
         return c.json({ mount: result });
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/agent → AgentRegistry（§3.1）+ AgentRuntime（§3.2）────────
+  // Registry 动词：List/Get/Write/Update；Runtime 动词：Spawn/Send/Status/Terminate/ListInstances。
+  // tool → action（§6.4d）：读=read（List/Get/Status/ListInstances）；
+  //   manage=Write/Update/Spawn/Send/Terminate（"派生/投递/终止/改定义"均为管理动作）。
+  // 资源 URI：platform://agent。Write 时 subscriptions[] 联动 EventRouter.subscribe（§2.3 规则 1）。
+  const AGENT_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Status: 'read',
+    ListInstances: 'read',
+    Write: 'manage',
+    Update: 'manage',
+    Spawn: 'manage',
+    Send: 'manage',
+    Terminate: 'manage',
+  };
+  app.post('/htbp/platform/agent', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const registry = new AgentRegistry(c.env.DB_PROVIDERS);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? AGENT_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_AGENT, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://agent');
+    }
+
+    const router = c.env.EVENT_ROUTER.get(c.env.EVENT_ROUTER.idFromName('router'));
+    const runtime = new AgentRuntime(defaultRuntimeDeps(c.env));
+
+    switch (tool) {
+      // ── Registry（§3.1）──
+      case 'List': {
+        const opts = (args.opts ?? {}) as AgentListOptions;
+        const page = await registry.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const name = args.name;
+        if (typeof name !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'name is required', false));
+        }
+        const def = await registry.get(name);
+        if (isWattError(def)) return wattErrorResponse(c, def);
+        return c.json({ definition: def });
+      }
+      case 'Write': {
+        const parsed = agentDefinitionSchema.safeParse(args.definition);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid definition: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await registry.write(parsed.data as AgentDefinition, router);
+        return c.json({ definition: written });
+      }
+      case 'Update': {
+        const name = args.name;
+        if (typeof name !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'name is required', false));
+        }
+        const parsedPatch = agentDefinitionSchema
+          .omit({ name: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await registry.update(
+          name,
+          parsedPatch.data as Partial<AgentDefinition>,
+          router,
+        );
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ definition: result });
+      }
+      // ── Runtime（§3.2）──
+      case 'Spawn': {
+        const parsed = spawnRequestSchema.safeParse(args.request);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid spawn request: ${parsed.error.message}`, false),
+          );
+        }
+        const res = await runtime.spawn(parsed.data);
+        if (isWattError(res)) return wattErrorResponse(c, res);
+        return c.json(res);
+      }
+      case 'Send': {
+        const instanceId = args.instanceId;
+        if (typeof instanceId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'instanceId is required', false),
+          );
+        }
+        // event 用 eventInputSchema 校验后补齐 Omit 三字段（Send 的 event 是完整信封的最小面）。
+        const eventInput = eventInputSchema.safeParse(args.event);
+        if (!eventInput.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid event: ${eventInput.error.message}`, false),
+          );
+        }
+        let expect: ExpectSpec | undefined;
+        if (args.expect !== undefined) {
+          const parsedExpect = expectSpecSchema.safeParse(args.expect);
+          if (!parsedExpect.success) {
+            return wattErrorResponse(
+              c,
+              wattError('invalid_argument', `invalid expect: ${parsedExpect.error.message}`, false),
+            );
+          }
+          expect = parsedExpect.data;
+        }
+        const event = {
+          ...eventInput.data,
+          id: crypto.randomUUID(),
+          occurredAt: new Date().toISOString(),
+          traceId: c.req.header('X-Watt-Trace') ?? crypto.randomUUID(),
+        };
+        const res = await runtime.send(instanceId, event, expect);
+        if (isWattError(res)) return wattErrorResponse(c, res);
+        return c.json(res);
+      }
+      case 'Status': {
+        const instanceId = args.instanceId;
+        if (typeof instanceId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'instanceId is required', false),
+          );
+        }
+        const info = await runtime.status(instanceId);
+        if (isWattError(info)) return wattErrorResponse(c, info);
+        return c.json({ instance: info });
+      }
+      case 'Terminate': {
+        const instanceId = args.instanceId;
+        if (typeof instanceId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'instanceId is required', false),
+          );
+        }
+        const cascade = args.cascade === true;
+        await runtime.terminate(instanceId, { cascade });
+        return c.json({ terminated: true });
+      }
+      case 'ListInstances': {
+        const opts = (args.opts ?? {}) as { limit?: number; tree?: string };
+        const page = await runtime.listInstances(opts);
+        return c.json(page);
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/provider → ModelProviderRegistry（§9 最小版）────────────
+  // 四动词 List/Get/Write/Update + SetDefault（Case 5 切默认）。
+  // tool → action（§6.4d）：List/Get=read；Write/Update/SetDefault=manage。资源 platform://provider。
+  const PROVIDER_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Update: 'manage',
+    SetDefault: 'manage',
+  };
+  app.post('/htbp/platform/provider', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const registry = new ModelProviderRegistry(c.env.DB_PROVIDERS);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? PROVIDER_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_PROVIDER, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://provider');
+    }
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as ProviderListOptions;
+        const page = await registry.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const providerId = args.providerId;
+        if (typeof providerId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'providerId is required', false),
+          );
+        }
+        const provider = await registry.get(providerId);
+        if (isWattError(provider)) return wattErrorResponse(c, provider);
+        return c.json({ provider });
+      }
+      case 'Write': {
+        const parsed = modelProviderSchema.safeParse(args.provider);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid provider: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await registry.write(parsed.data as ModelProvider);
+        return c.json({ provider: written });
+      }
+      case 'Update': {
+        const providerId = args.providerId;
+        if (typeof providerId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'providerId is required', false),
+          );
+        }
+        const parsedPatch = modelProviderSchema
+          .omit({ id: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await registry.update(
+          providerId,
+          parsedPatch.data as Partial<ModelProvider>,
+        );
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ provider: result });
+      }
+      case 'SetDefault': {
+        const providerId = args.providerId;
+        if (typeof providerId !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'providerId is required', false),
+          );
+        }
+        const result = await registry.setDefault(providerId);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ provider: result });
       }
     }
   });

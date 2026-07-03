@@ -23,6 +23,12 @@ export {
   type ValidateOutcome,
   validateAgentOutput,
 } from './expect-schema.ts';
+// ModelProvider 类型层（§9 最小版）——gateway 经此消费 schema（gateway 不直接 import zod，坑 §26）。
+export {
+  type ModelProvider,
+  type ModelProviderPublic,
+  modelProviderSchema,
+} from './model-provider.ts';
 // §3.4 六规则路由判定 + 超时/终止代发事件构造
 export {
   AGENT_EVENT_TYPES,

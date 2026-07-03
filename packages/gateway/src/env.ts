@@ -17,6 +17,8 @@ import type {
   R2Bucket,
   VectorizeIndex,
 } from '@cloudflare/workers-types';
+import type { AgentCorrelation } from './agent/agent-correlation.ts';
+import type { AgentInstance } from './agent/agent-instance.ts';
 import type { ContextRegistry } from './context/context-registry.ts';
 import type { EventRouter } from './event/event-router.ts';
 
@@ -51,6 +53,11 @@ export interface Bindings {
   // Service binding（M4 Tool Gateway）：/htbp/tools/* 代理到独立 Worker watt-toolbridge
   // （集成方案 A；转发 + Check PEP + 错误形状转换在 http/tools-proxy.ts）。
   TOOLBRIDGE: Fetcher;
+  // Durable Objects（M2 Agent Runtime，Phase 4）
+  //   AGENT_INSTANCE：Agents SDK Agent 实例宿主（每实例一 DO，getAgentByName 恒路由同实例）。
+  //   AGENT_CORRELATION：correlation 等待表（§3.4 定向回送/超时/终止代发，单例 idFromName('correlation')）。
+  AGENT_INSTANCE: DurableObjectNamespace<AgentInstance>;
+  AGENT_CORRELATION: DurableObjectNamespace<AgentCorrelation>;
 
   // secrets / vars
   WATT_JWT_PRIVATE_JWK?: string;
@@ -59,6 +66,10 @@ export interface Bindings {
   WATT_JWT_AUDIENCE?: string;
   /** 平台对外基址（device flow 的 verification_uri 组装用）；缺省取请求 origin。 */
   WATT_BASE_URL?: string;
+  /** 模型中转 key（§9 / DoD §6 项3 @llm）——Anthropic Messages 格式，x-api-key。 */
+  ANTHROPIC_API_KEY?: string;
+  /** 模型中转基址（缺省 https://llm.fantacy.live）。 */
+  ANTHROPIC_BASE_URL?: string;
 }
 
 /** token iss/aud 缺省值（与 core TokenMeta 对齐）。 */

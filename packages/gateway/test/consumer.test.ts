@@ -10,8 +10,10 @@ import type { Event, Subscription } from '@watt/core';
 import { describe, expect, it } from 'vitest';
 import { ChannelStore } from '../src/event/channel-store.ts';
 import {
+  type AgentDeliverer,
   type ConsumerDeps,
   handleQueue,
+  noopAgentDeliverer,
   type TaskSignaler,
   type WebhookDeliverer,
 } from '../src/event/consumer.ts';
@@ -81,6 +83,7 @@ function makeDeps(over: {
   queue?: EventQueueSender;
   channels?: ChannelStore;
   signaler?: TaskSignaler;
+  agent?: AgentDeliverer;
 }): ConsumerDeps {
   return {
     deliverer: over.deliverer,
@@ -89,6 +92,7 @@ function makeDeps(over: {
     queue: over.queue ?? memQueue(),
     channels: over.channels ?? new ChannelStore(env.DB_EVENTS),
     signaler: over.signaler ?? recordingSignaler(),
+    agent: over.agent ?? noopAgentDeliverer,
     genId: () => 'gen-id',
     now: () => '2026-07-03T00:00:00.000Z',
     genTraceId: () => 'gen-trace',

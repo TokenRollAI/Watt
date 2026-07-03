@@ -31,6 +31,7 @@ import {
   type OutboundMessage,
 } from '@watt/core';
 import type { Bindings } from '../env.ts';
+import { defaultAgentDeliverer } from './agent-deliverer.ts';
 import { ChannelStore } from './channel-store.ts';
 import type { EventQueueSender } from './event-bus.ts';
 import type { EventRouter } from './event-router.ts';
@@ -142,6 +143,24 @@ export const noopSignaler: TaskSignaler = {
   },
 };
 
+/**
+ * AgentDeliverer（§3.2 agent sink 真实投递 + §3.4 结果路由）——Phase 4 接线点。
+ * 注入以便 consumer 测试（fake deliverer 断言投递/路由，无需真实 DO/Runtime）。
+ *  - routeResult(event)：agent.result/agent.failed 进 consumer 时先走 §3.4 定向回送
+ *    （查 correlation：deliver 投等待方 / drop-duplicate·drop-no-waiter 记 console）。
+ *  - deliverToAgent(sub, event)：agent 订阅命中 → resolveInstanceKey → Spawn/Send 实例（§2.3）。
+ */
+export interface AgentDeliverer {
+  routeResult(event: Event): Promise<void>;
+  deliverToAgent(definition: string, instanceBy: string, event: Event): Promise<void>;
+}
+
+/** Phase 4 前的 no-op agent deliverer（占位；生产由 defaultConsumerDeps 注入真实实现）。 */
+export const noopAgentDeliverer: AgentDeliverer = {
+  async routeResult() {},
+  async deliverToAgent() {},
+};
+
 /** consumer 的可注入依赖（webhook 投递 + 单例 router stub 解析）。 */
 export interface ConsumerDeps {
   deliverer: WebhookDeliverer;
@@ -155,6 +174,8 @@ export interface ConsumerDeps {
   channels: ChannelStore;
   /** im.action signal 桩（§1.1 规则 2）。 */
   signaler: TaskSignaler;
+  /** agent sink 真实投递 + §3.4 结果路由（Phase 4）。 */
+  agent: AgentDeliverer;
   /** 补齐 outbound.message 的 Omit 三字段（可注入以便测试）。 */
   genId: () => string;
   now: () => string;
@@ -174,6 +195,7 @@ export function defaultConsumerDeps(env: Bindings): ConsumerDeps {
     },
     channels: new ChannelStore(env.DB_EVENTS),
     signaler: noopSignaler,
+    agent: defaultAgentDeliverer(env),
     genId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     genTraceId: () => crypto.randomUUID(),
@@ -306,6 +328,21 @@ async function systemPublish(input: EventInput, source: Event, deps: ConsumerDep
  * agent/task sink 占位（不阻塞、不影响 ack），投递留 Phase 4/5。
  */
 async function handleEvent(event: Event, deps: ConsumerDeps): Promise<boolean> {
+  // §3.4 定向回送：带 correlationId 的 agent.result/agent.failed 不进通用订阅匹配（规则 1），
+  // 由 AgentDeliverer 查 correlation 表投给等待方 / drop-duplicate / drop-no-waiter。
+  if (event.type === 'agent.result' || event.type === 'agent.failed') {
+    try {
+      await deps.agent.routeResult(event);
+    } catch (err) {
+      console.error('event consumer: agent result routing failed', {
+        eventId: event.id,
+        err: String(err),
+      });
+    }
+    // 结果事件已定向路由（EventStore 已在 publish 时留痕）；不再进订阅匹配。
+    return true;
+  }
+
   // 内置 system subscriber 规则（不占用户订阅表；失败不阻塞用户订阅分发）。
   await runSystemSubscribers(event, deps);
 
@@ -328,13 +365,18 @@ async function handleEvent(event: Event, deps: ConsumerDeps): Promise<boolean> {
         break;
       }
       case 'agent': {
-        // Session Mapper 记映射（Phase 4 真实 spawn 铺垫）；投递占位。
-        const mapping = await router.resolveSessionInstance(sub.sink, event);
-        console.log('event consumer: agent sink (delivery deferred to Phase 4)', {
-          eventId: event.id,
-          definition: sub.sink.definition,
-          instance: 'instanceKey' in mapping ? mapping.instanceKey : `error:${mapping.error}`,
-        });
+        // §2.3 规则 1/2：agent 订阅命中 → resolveInstanceKey → Spawn（幂等复用）+ Send 投递（§3.2）。
+        // Session Mapper 映射仍记（会话粘性可视化）；真实投递由 AgentDeliverer 执行。
+        await router.resolveSessionInstance(sub.sink, event);
+        try {
+          await deps.agent.deliverToAgent(sub.sink.definition, sub.sink.instanceBy, event);
+        } catch (err) {
+          console.error('event consumer: agent sink delivery failed', {
+            eventId: event.id,
+            definition: sub.sink.definition,
+            err: String(err),
+          });
+        }
         break;
       }
       case 'task': {

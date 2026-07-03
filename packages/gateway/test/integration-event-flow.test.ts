@@ -13,6 +13,7 @@ import { ChannelStore } from '../src/event/channel-store.ts';
 import {
   type ConsumerDeps,
   handleQueue,
+  noopAgentDeliverer,
   noopSignaler,
   type WebhookDeliverer,
 } from '../src/event/consumer.ts';
@@ -69,6 +70,7 @@ function makeConsumerDeps(deliverer: WebhookDeliverer): ConsumerDeps {
     },
     channels: new ChannelStore(env.DB_EVENTS),
     signaler: noopSignaler,
+    agent: noopAgentDeliverer,
     genId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     genTraceId: () => crypto.randomUUID(),

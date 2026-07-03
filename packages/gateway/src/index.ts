@@ -14,6 +14,10 @@ import { toolsProxyRoutes } from './http/tools-proxy.ts';
 
 // MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types）。
 
+// AgentCorrelation DO（M2 correlation 等待表，§3.4）从入口 export，供 wrangler DO 绑定实例化。
+export { AgentCorrelation } from './agent/agent-correlation.ts';
+// AgentInstance DO（M2 Agents SDK Agent 实例宿主，§3.2/§3.3）从入口 export，供 wrangler DO 绑定实例化。
+export { AgentInstance } from './agent/agent-instance.ts';
 // ContextRegistry DO（M3 namespace 挂载注册表 + TTL）从入口 export，供 wrangler DO 绑定实例化。
 export { ContextRegistry } from './context/context-registry.ts';
 // EventRouter DO（M1 订阅表 + Session Mapper）从入口 export，供 wrangler DO 绑定实例化。
@@ -51,12 +55,9 @@ app.route('/', inboundRoutes());
  * 注意：`/htbp/platform/event` 已在 Phase 2 落地（platformRoutes），从此表移除。
  * 注意：`/htbp/context` 已在 Phase 3 落地（contextRoutes 消费面 + platformRoutes 管理面），从此表移除。
  * 注意：`/htbp/tools` 已在 Phase 4 落地（toolsProxyRoutes 消费面代理到 watt-toolbridge），从此表移除。
+ * 注意：`/htbp/platform/agent` 已在 Phase 4 落地（platformRoutes：AgentRegistry §3.1 + AgentRuntime §3.2），从此表移除。
  */
-const SPEC_TREE_PREFIXES = [
-  '/htbp/platform/agent',
-  '/htbp/platform/task',
-  '/htbp/platform/scheduler',
-];
+const SPEC_TREE_PREFIXES = ['/htbp/platform/task', '/htbp/platform/scheduler'];
 
 for (const prefix of SPEC_TREE_PREFIXES) {
   const handler = (c: Context) => {

@@ -62,12 +62,17 @@ describe('notFound / onError bare WattError contract (§0.2 / §11.3)', () => {
     expect(body.retryable).toBe(false);
   });
 
-  it('specified-but-unimplemented tree path returns 501 unavailable', async () => {
-    // /htbp/platform/agent 属 §11.3a 规范树，但 Phase 1 未落地 → 501。
-    const res = await SELF.fetch('https://gateway.test/htbp/platform/agent', { method: 'POST' });
-    expect(res.status).toBe(501);
+  it('Phase 4 implemented platform/agent is no longer 501 — requires auth (401 without token)', async () => {
+    // /htbp/platform/agent 已在 Phase 4 落地（AgentRegistry §3.1 + AgentRuntime §3.2），
+    // 从 SPEC_TREE_PREFIXES 移除；无 token → 401（认证中间件），不再 501。
+    const res = await SELF.fetch('https://gateway.test/htbp/platform/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tool: 'List', arguments: {} }),
+    });
+    expect(res.status).toBe(401);
     const body = (await res.json()) as { code: string; retryable: boolean };
-    expect(body.code).toBe('unavailable');
+    expect(body.code).toBe('permission_denied');
     expect(body.retryable).toBe(false);
   });
 
