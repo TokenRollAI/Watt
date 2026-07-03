@@ -24,13 +24,14 @@
  * DO RPC（普通 public 方法 via stub）驱动，见 agent-runtime.ts。
  */
 
-import type { Event } from '@watt/core';
+import type { Event, TokenClaims } from '@watt/core';
 import { Agent } from 'agents';
 import type { Bindings } from '../env.ts';
 import { createAnthropicCaller, DEFAULT_ANTHROPIC_BASE_URL } from './harness/anthropic-caller.ts';
 import { echoHarness } from './harness/echo.ts';
 import { llmHarness } from './harness/llm.ts';
 import type { HarnessOutcome, ModelCaller } from './harness/types.ts';
+import { resolveManageBinding } from './manage/manage-defs.ts';
 
 /** 实例状态（§3.2 AgentInstanceInfo 的可变面 + spawn 上下文 + 派生关系）。 */
 export interface AgentInstanceState {
@@ -75,6 +76,12 @@ export interface DeliverArgs {
   schema?: unknown;
   /** 最大重试次数（实现声明缺省 3）。 */
   maxAttempts?: number;
+  /**
+   * 调用者 claims（委托链，§6.4a）——manage/* Agent 的工具 execute 用它过 Authorizer.Check +
+   *   作 createdBy（agent 替调用者操作才有其权限，M10）。TokenClaims 是纯 JSON，可跨 DO 序列化。
+   *   缺省（echo / 无工具 llm / 系统合成事件）不影响行为。
+   */
+  claims?: TokenClaims;
 }
 
 /**
@@ -203,16 +210,30 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       const modelCaller = caller ?? this.buildDefaultCaller();
       const model = this.state.model ?? 'glm-5.2';
       const usages: { inputTokens: number; outputTokens: number }[] = [];
+
+      // manage/* Agent：解出该层 ~skill system prompt + 工具（execute 过 Check + 调 Manager，
+      //   claims = 委托链）。工具仅在 claims 存在时构造（无 claims 无法过 Check）——非 manage 层
+      //   或缺 claims 时 tools/systemOverride 为空，走原有单次调用行为（零回归）。
+      const binding = resolveManageBinding(this.state.definition);
+      const env = this.env as Bindings;
+      const tools =
+        binding !== undefined && args.claims !== undefined
+          ? binding.buildTools(env, args.claims, args.event.traceId)
+          : undefined;
+      const systemOverride = binding?.systemPrompt;
+
       const outcome = await llmHarness(
         {
           input: this.state.input ?? args.event.payload,
           schema: args.schema,
           model,
           maxAttempts: args.maxAttempts,
+          ...(tools !== undefined && tools.length > 0 ? { tools } : {}),
         },
         modelCaller,
         // Metrics 打点（§10）：每次模型调用产一条 usage，收集后统一写（重试多次则多行）。
         (usage) => usages.push(usage),
+        systemOverride,
       );
       // usage 写在 onEvent 主路径内（onEvent 同步跑完才返回，见文件头执行语义）——await 保落库。
       for (const usage of usages) await this.recordUsage(model, usage);

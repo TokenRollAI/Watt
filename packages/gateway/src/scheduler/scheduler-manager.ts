@@ -16,6 +16,9 @@ import { getAgentByName } from 'agents';
 import type { Bindings } from '../env.ts';
 import type { SchedulerHub, SchedulerHubRpc, TriggerResult } from './scheduler-hub.ts';
 
+/** Scheduler 资源 URI（§6.4d PEP 主体）——routes 与 manage/cron 工具面共用同一常量。 */
+export const RES_SCHEDULER = 'platform://scheduler';
+
 /** 单例 Hub stub（Agents SDK getAgentByName 恒路由同名实例，'hub'）。 */
 async function hubStub(env: Bindings): Promise<SchedulerHubRpc> {
   const stub = await getAgentByName<Cloudflare.Env, SchedulerHub>(env.SCHEDULER_HUB, 'hub');

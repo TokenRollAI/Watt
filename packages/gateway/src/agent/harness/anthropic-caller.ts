@@ -17,11 +17,16 @@
  *
  * 此 harness = 单次调用（generateText，文本进/文本出）；schema 校验重试在 llm.ts（保留协议语义
  * §3.4 携带违规反馈退回重发，不交给 SDK 的黑盒重试）。测试用 fake caller 不走此实现（不触网络）。
+ *
+ * 工具调用扩展（R25 DoD④ manage/* Agent）：ModelCallRequest.tools 非空时走 AI SDK 原生 agentic
+ *   loop（generateText 的 tools + stopWhen: stepCountIs）——模型多轮调工具（execute 直调 platform
+ *   Manager）后产最终文本。这是成熟框架承接的多轮工具循环（LOOP 纪律 4：不自写 loop）；无 tools 的
+ *   def 保持单次调用行为不变（零回归）。schema 校验重试与工具循环正交（均保留）。
  */
 
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { generateText } from 'ai';
-import type { ModelCaller, ModelCallRequest, ModelCallResult } from './types.ts';
+import { generateText, jsonSchema, stepCountIs, type ToolSet, tool } from 'ai';
+import type { HarnessTool, ModelCaller, ModelCallRequest, ModelCallResult } from './types.ts';
 
 /** 默认中转基址（external-facts / .env ANTHROPIC_BASE_URL）——不含 /v1。 */
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://llm.fantacy.live';
@@ -29,10 +34,30 @@ export const DEFAULT_ANTHROPIC_BASE_URL = 'https://llm.fantacy.live';
 /** 默认单次模型调用超时（实现声明）：60s。超时 → 抛错 → llm harness 归类 failed(reason='error')。 */
 export const DEFAULT_MODEL_TIMEOUT_MS = 60_000;
 
+/** agentic loop 最大步数（工具调用轮次上界，实现声明）——防模型无限调工具挂死。 */
+export const DEFAULT_MAX_STEPS = 8;
+
 /** createAnthropic 的 baseURL 需含 /v1（其后拼 /messages）；补齐 base 的 /v1 后缀，去尾斜杠。 */
 function withV1Suffix(base: string): string {
   const trimmed = base.replace(/\/+$/, '');
   return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+/**
+ * 把 HarnessTool[] 转成 AI SDK 的 ToolSet（键=工具名）：inputSchema（JSON Schema）经 jsonSchema()
+ *   转 SDK Schema，execute 直转发 harness 侧 execute。SDK 在 agentic loop 内校验参数 + 调 execute +
+ *   把结果回喂模型。
+ */
+function toToolSet(tools: HarnessTool[]): ToolSet {
+  const set: ToolSet = {};
+  for (const t of tools) {
+    set[t.name] = tool({
+      description: t.description,
+      inputSchema: jsonSchema(t.inputSchema),
+      execute: async (args: unknown) => t.execute((args ?? {}) as Record<string, unknown>),
+    });
+  }
+  return set;
 }
 
 /**
@@ -57,14 +82,25 @@ export function createAnthropicCaller(opts: {
   });
   return {
     async call(req: ModelCallRequest): Promise<ModelCallResult> {
+      // 有 tools → agentic loop（stopWhen stepCountIs）：模型可多轮调工具后产最终文本；
+      //   无 tools → 单次调用（stopWhen 缺省 stepCountIs(1)，行为不变，无回归）。
+      const hasTools = req.tools !== undefined && req.tools.length > 0;
       const { text, usage } = await generateText({
         model: provider(req.model),
         maxOutputTokens: 1024,
         abortSignal: AbortSignal.timeout(timeoutMs),
         ...(req.system !== undefined ? { system: req.system } : {}),
         prompt: req.prompt,
+        ...(hasTools
+          ? {
+              tools: toToolSet(req.tools as HarnessTool[]),
+              stopWhen: stepCountIs(DEFAULT_MAX_STEPS),
+            }
+          : {}),
       });
-      if (typeof text !== 'string' || text.length === 0) {
+      // 有 tools 的最终步可能只含工具结果而无文本（模型直接以工具完成）——此时 text 为空是合法的，
+      //   不抛错（工具已执行即达成副作用，如建 CronJob）；无 tools 时空文本仍视为异常（原语义）。
+      if (typeof text !== 'string' || (text.length === 0 && !hasTools)) {
         throw new Error('anthropic messages response missing content text');
       }
       // AI SDK usage：inputTokens/outputTokens（ai@6）；缺省时省略（打点侧按 0 处理）。

@@ -12,11 +12,12 @@
  *
  * §7 E2E 约定：断言协议事实（schema 合法的 agent.result），不断言 LLM 文本内容。
  *
- * 边界声明（LOOP 纪律 4）：本 harness = 单次模型调用 + expect.schema 校验重试（§3.2/§3.4），
- *   **不是** agentic loop——重试是同一提示携带违规反馈重发，不是多轮工具调用循环。多轮工具调用
- *   循环到来时（Phase 5+ deep-research 等）必须用成熟框架（Agents SDK AIChatAgent / Claude Agent SDK
- *   / Flue），禁止在此文件自增 loop 或手拼多轮工具调度。模型调用本身经官方 @anthropic-ai/sdk
- *   （见 anthropic-caller.ts），不手拼 HTTP。
+ * 边界声明（LOOP 纪律 4）：本 harness = 单次模型调用 + expect.schema 校验重试（§3.2/§3.4）。
+ *   多轮工具调用循环（R25 DoD④ manage/* Agent）由 LlmHarnessInput.tools 触发，**循环本身交给成熟
+ *   框架**（AI SDK generateText 的 tools + stopWhen，见 anthropic-caller.ts）——本文件不自增 loop、
+ *   不手拼多轮工具调度，只把 tools 透传给注入的 ModelCaller。systemOverride（manage/* def 的 ~skill
+ *   system prompt）优先于 schema 约束提示。模型调用本身经官方 @anthropic-ai/sdk（见 anthropic-caller.ts），
+ *   不手拼 HTTP。
  */
 
 import {
@@ -25,7 +26,13 @@ import {
   shouldRetry,
   validateAgentOutput,
 } from '@watt/core';
-import type { HarnessOutcome, ModelCaller, ModelCallRequest, ModelUsage } from './types.ts';
+import type {
+  HarnessOutcome,
+  HarnessTool,
+  ModelCaller,
+  ModelCallRequest,
+  ModelUsage,
+} from './types.ts';
 
 /** llm harness 输入：spawn input + 可选 expect.schema + 模型名。 */
 export interface LlmHarnessInput {
@@ -37,16 +44,29 @@ export interface LlmHarnessInput {
   model: string;
   /** 最大尝试次数（实现声明缺省 3）。 */
   maxAttempts?: number;
+  /**
+   * 可选工具集（agentic loop，R25 DoD④ manage/* Agent）——非空时 caller 走多步工具调用
+   *   （模型多轮调工具后产最终文本）；缺省时保持单次调用（无回归）。工具循环与 schema 重试正交：
+   *   有 schema 时最终文本仍走 validateAgentOutput 校验重试；无 schema（manage/* 常态）时最终文本直接作 output。
+   */
+  tools?: HarnessTool[];
+}
+
+/** 覆盖系统提示（manage/* Agent 的 def system prompt 内嵌该层 ~skill）——存在则替代 schema 约束提示。 */
+export interface LlmSystemOverride {
+  system?: string;
 }
 
 /** 把 input 拼成模型提示（携带 schema 约束提示 + 可能的重试违规反馈）。 */
 function buildRequest(
   input: LlmHarnessInput,
   retryViolations: SchemaViolation[] | undefined,
+  systemOverride?: string,
 ): ModelCallRequest {
   const promptBody = typeof input.input === 'string' ? input.input : JSON.stringify(input.input);
-  let system: string | undefined;
-  if (input.schema !== undefined) {
+  // system 优先级：def 显式 systemOverride（manage/* ~skill）＞ schema 约束提示 ＞ 无。
+  let system: string | undefined = systemOverride;
+  if (system === undefined && input.schema !== undefined) {
     system = `Respond with a single JSON value that conforms to this JSON Schema: ${JSON.stringify(
       input.schema,
     )}. Output only the JSON, no prose.`;
@@ -57,7 +77,12 @@ function buildRequest(
     const summary = retryViolations.map((v) => `${v.path || '<root>'}: ${v.message}`).join('; ');
     prompt = `${promptBody}\n\nYour previous output failed schema validation: ${summary}. Fix it and respond with valid JSON only.`;
   }
-  return { system, prompt, model: input.model };
+  return {
+    system,
+    prompt,
+    model: input.model,
+    ...(input.tools !== undefined ? { tools: input.tools } : {}),
+  };
 }
 
 /** 尝试把模型文本解析成结构化 output；非 JSON → 原样文本。 */
@@ -81,6 +106,7 @@ export async function llmHarness(
   input: LlmHarnessInput,
   caller: ModelCaller,
   onUsage?: (usage: ModelUsage) => void,
+  systemOverride?: string,
 ): Promise<HarnessOutcome> {
   const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   let lastViolations: SchemaViolation[] | undefined;
@@ -88,7 +114,7 @@ export async function llmHarness(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let text: string;
     try {
-      const result = await caller.call(buildRequest(input, lastViolations));
+      const result = await caller.call(buildRequest(input, lastViolations, systemOverride));
       text = result.text;
       if (result.usage !== undefined && onUsage !== undefined) onUsage(result.usage);
     } catch (cause) {

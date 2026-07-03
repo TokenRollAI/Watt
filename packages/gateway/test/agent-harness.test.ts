@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { echoHarness } from '../src/agent/harness/echo.ts';
 import { llmHarness } from '../src/agent/harness/llm.ts';
-import type { ModelCaller, ModelCallRequest } from '../src/agent/harness/types.ts';
+import type { HarnessTool, ModelCaller, ModelCallRequest } from '../src/agent/harness/types.ts';
 
 /**
  * harness 纯逻辑单测（Proto §3.3 / §3.4）——无 DO、无网络。
@@ -100,5 +100,84 @@ describe('llm harness — with schema, retry (§3.4 校验重试)', () => {
     expect(outcome).toMatchObject({ kind: 'failed', reason: 'invalid_output' });
     // 首次 + 2 次重试 = 3 次尝试（DEFAULT_MAX_ATTEMPTS 语义）。
     expect(caller.calls).toHaveLength(3);
+  });
+});
+
+describe('llm harness — tool calling loop (§3.3 / R25 DoD④)', () => {
+  /**
+   * fake ModelCaller 模拟 AI SDK 的 agentic loop（真实循环在 anthropic-caller，此处不触网络）：
+   *   收到 req.tools 时按 toolPlan 调对应工具的 execute（喂给它参数），最后返回确认文本。
+   *   这验证 llm.ts 把 tools 透传给 caller + systemOverride 生效，工具 execute 被驱动。
+   */
+  function toolLoopCaller(
+    toolPlan: { name: string; args: Record<string, unknown> }[],
+    finalText: string,
+  ): ModelCaller & { seenTools: string[]; seenSystem: (string | undefined)[] } {
+    const seenTools: string[] = [];
+    const seenSystem: (string | undefined)[] = [];
+    return {
+      seenTools,
+      seenSystem,
+      async call(req: ModelCallRequest) {
+        seenSystem.push(req.system);
+        for (const step of toolPlan) {
+          const tool = req.tools?.find((t) => t.name === step.name);
+          if (tool !== undefined) {
+            seenTools.push(step.name);
+            await tool.execute(step.args);
+          }
+        }
+        return { text: finalText };
+      },
+    };
+  }
+
+  it('passes tools + systemOverride to caller and drives tool execute', async () => {
+    const executed: Record<string, unknown>[] = [];
+    const tools: HarnessTool[] = [
+      {
+        name: 'scheduler_write',
+        description: 'create cron',
+        inputSchema: { type: 'object' },
+        async execute(args) {
+          executed.push(args);
+          return { job: { id: 'j1' } };
+        },
+      },
+    ];
+    const caller = toolLoopCaller(
+      [{ name: 'scheduler_write', args: { schedule: '0 9 * * *' } }],
+      '已为你创建每天 UTC 09:00 的 token 日报任务。',
+    );
+    const outcome = await llmHarness(
+      { input: '每天9点发token日报', model: 'glm-5.2', tools },
+      caller,
+      undefined,
+      'SYSTEM: cron skill',
+    );
+    // 无 schema → 最终文本直接作 output（非 JSON 保留纯文本）。
+    expect(outcome).toEqual({
+      kind: 'result',
+      output: '已为你创建每天 UTC 09:00 的 token 日报任务。',
+    });
+    // 工具被驱动一次，参数透传。
+    expect(executed).toEqual([{ schedule: '0 9 * * *' }]);
+    expect(caller.seenTools).toEqual(['scheduler_write']);
+    // systemOverride（~skill）覆盖了默认 system。
+    expect(caller.seenSystem[0]).toBe('SYSTEM: cron skill');
+  });
+
+  it('no tools → single call unchanged (zero regression)', async () => {
+    let sawTools: HarnessTool[] | undefined = [];
+    const caller: ModelCaller = {
+      async call(req) {
+        sawTools = req.tools;
+        return { text: 'plain answer' };
+      },
+    };
+    const outcome = await llmHarness({ input: 'hi', model: 'glm-5.2' }, caller);
+    expect(outcome).toEqual({ kind: 'result', output: 'plain answer' });
+    // 无 tools 的 def：req.tools 为 undefined（不注入空数组），行为不变。
+    expect(sawTools).toBeUndefined();
   });
 });

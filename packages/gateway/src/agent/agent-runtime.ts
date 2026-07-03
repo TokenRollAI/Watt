@@ -26,6 +26,7 @@ import {
   genCorrelationId,
   resolveInstanceKey,
   type SpawnRequest,
+  type TokenClaims,
   validateCorrelationId,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
@@ -129,7 +130,7 @@ export class AgentRuntime {
    */
   async spawn(
     req: SpawnRequest,
-    opts: { parent?: string; taskWaiter?: string } = {},
+    opts: { parent?: string; taskWaiter?: string; claims?: TokenClaims } = {},
   ): Promise<SpawnResult | WattError> {
     const def = await this.registry.get(req.definition);
     if ('code' in def) return def; // not_found
@@ -179,6 +180,7 @@ export class AgentRuntime {
         event: this.syntheticEvent(nowIso),
         correlationId: cid.correlationId,
         schema: req.expect.schema,
+        ...(opts.claims !== undefined ? { claims: opts.claims } : {}),
       });
     }
     return result;
@@ -193,6 +195,7 @@ export class AgentRuntime {
     event: Event,
     expect?: ExpectSpec,
     caller?: Waiter,
+    claims?: TokenClaims,
   ): Promise<SendResult | WattError> {
     const stub = await instanceStub(this.deps.env, instanceId);
     let correlationId: string | undefined;
@@ -205,7 +208,12 @@ export class AgentRuntime {
       if ('code' in cid) return cid;
       correlationId = cid.correlationId;
     }
-    const res = await stub.onEvent({ event, correlationId, schema: expect?.schema });
+    const res = await stub.onEvent({
+      event,
+      correlationId,
+      schema: expect?.schema,
+      ...(claims !== undefined ? { claims } : {}),
+    });
     return { accepted: res.accepted, correlationId };
   }
 

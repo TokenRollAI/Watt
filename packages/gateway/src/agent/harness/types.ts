@@ -15,6 +15,28 @@ export type HarnessOutcome =
   | { kind: 'result'; output: unknown }
   | { kind: 'failed'; reason: AgentFailedReason; errorMessage?: string };
 
+/**
+ * 一个可供模型调用的工具（agentic loop）——名/描述/JSON Schema 入参 + execute。
+ *
+ * 这是 harness 侧的 provider 中立工具面（不绑 AI SDK 类型）：inputSchema 是 JSON Schema
+ *   对象（execute 前由 caller 侧转成 SDK Schema），execute 收到模型给的参数、产出结果对象
+ *   （回喂模型继续多步）。manage/* Agent 的 platform 接口（如 scheduler_write/list）经此暴露，
+ *   execute 内直调对应 Manager + 过 Authorizer.Check（委托链见 claims）。
+ *
+ * 边界（LOOP 纪律 4）：工具循环由 AI SDK generateText 的 stopWhen 承接（不自写 loop）；
+ *   本类型只声明工具契约，不含循环控制。
+ */
+export interface HarnessTool {
+  /** 工具名（模型据此选调；须匹配 [a-zA-Z0-9_-]，AI SDK 工具键约束）。 */
+  name: string;
+  /** 工具描述（模型据此判断何时/如何调用）。 */
+  description: string;
+  /** 入参 JSON Schema（object）——caller 侧转成 AI SDK Schema 校验模型给的参数。 */
+  inputSchema: Record<string, unknown>;
+  /** 执行工具：收到模型参数 → 产出结果对象（回喂模型）。抛错由 SDK 捕获为工具错误结果。 */
+  execute(args: Record<string, unknown>): Promise<unknown>;
+}
+
 /** 一次模型调用的请求（Anthropic Messages 最小面）。 */
 export interface ModelCallRequest {
   /** 系统提示（可选，携带 schema 约束提示）。 */
@@ -23,6 +45,11 @@ export interface ModelCallRequest {
   prompt: string;
   /** 模型名（由 ModelProvider 解析或 env 缺省）。 */
   model: string;
+  /**
+   * 可选工具集（agentic loop）——非空时 caller 走多步工具调用（generateText tools + stopWhen），
+   *   模型可多轮调工具后产最终文本；缺省（undefined/空）时 caller 保持单次调用（无回归）。
+   */
+  tools?: HarnessTool[];
 }
 
 /** 一次模型调用的 token 用量（Metrics 打点，§10）——AI SDK result.usage 投影。 */

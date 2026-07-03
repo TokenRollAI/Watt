@@ -41,6 +41,7 @@ import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
 import { type ListOptions as AgentListOptions, AgentRegistry } from '../agent/agent-registry.ts';
 import { AgentRuntime, defaultRuntimeDeps, type ExpectSpec } from '../agent/agent-runtime.ts';
+import { ensureManageDefsSeeded } from '../agent/manage/manage-defs.ts';
 import {
   ModelProviderRegistry,
   type ListOptions as ProviderListOptions,
@@ -56,7 +57,7 @@ import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/c
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
 import { METRIC_NAMES, type MetricQuery, Metrics } from '../metrics/metrics.ts';
-import { SchedulerManager } from '../scheduler/scheduler-manager.ts';
+import { RES_SCHEDULER, SchedulerManager } from '../scheduler/scheduler-manager.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
 import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
@@ -72,7 +73,6 @@ const RES_TOOL = 'platform://tool';
 const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
-const RES_SCHEDULER = 'platform://scheduler';
 const RES_METRICS = 'platform://metrics';
 
 function isWattError(v: unknown): v is WattError {
@@ -109,6 +109,8 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     const store = new PolicyStore(c.env.DB_POLICIES);
     const identities = new IdentityMapper(c.env.DB_POLICIES);
     await ensureSeedPolicy(store, identities, c.env.WATT_ADMIN_PRINCIPAL);
+    // manage/* 内置 AgentDefinition 种子（M10）：与策略种子同幂等语义，供 manage/cron 等对话入口 spawn。
+    await ensureManageDefsSeeded(new AgentRegistry(c.env.DB_PROVIDERS));
     await next();
   });
 
@@ -858,7 +860,9 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         }
         // parent（可选）：派生关系（§3.4 规则 2 / ListInstances tree）——路由透传给 runtime。
         const parent = typeof args.parent === 'string' ? args.parent : undefined;
-        const res = await runtime.spawn(parsed.data, { parent });
+        // claims 透传（委托链，§6.4a / M10）：manage/* Agent 的工具 execute 用它过 Check + createdBy
+        //   （agent 替调用者操作）。非 manage / echo def 忽略 claims，无影响。
+        const res = await runtime.spawn(parsed.data, { parent, claims });
         if (isWattError(res)) return wattErrorResponse(c, res);
         return c.json(res);
       }
@@ -895,7 +899,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
           occurredAt: new Date().toISOString(),
           traceId: c.req.header('X-Watt-Trace') ?? crypto.randomUUID(),
         };
-        const res = await runtime.send(instanceId, event, expect);
+        const res = await runtime.send(instanceId, event, expect, undefined, claims);
         if (isWattError(res)) return wattErrorResponse(c, res);
         return c.json(res);
       }
