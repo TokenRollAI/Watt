@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
 - **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R25（@feishu 真实进出集成 + manage/cron Agent 对话建 CronJob——DoD ②④）
+- **下一目标**：Phase 6 R26（Dashboard 最小版 + PluginRegistry + CLI 完备性——DoD ⑤）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 25 — 2026-07-03/04（Phase 6 R25：manage/cron Agent——DoD ④ 线上通过）
+- 目标：Phase 6 / DoD ④（manage/cron 对话建 CronJob）+ ②의 WS 入站链路启动验证
+- 动作：worker 落地：llm harness 加 **agentic tool loop**（Vercel AI SDK generateText tools+maxSteps；无 tools 的 def 行为不变零回归）；scheduler-tools（scheduler_write/list 工具 execute 直调 SchedulerManager，Check 经 Authorizer wrapper 自带审计——工具面选型 B：不过 builtin 树，gateway 内直连，理由已注释声明）；manage-defs（manage/cron 种子 def：中文 ~skill prompt 内嵌 cron 语义/三 action/输出纪律 + tools:['scheduler'] + grants platform://scheduler；manage/platform 一并种子纯对话；ensureManageDefsSeeded 挂路由中间件与策略种子同幂等语义）；+16 测试（fake 模型工具轨迹断言全链）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1037 tests**：shared 6 + core 435 + cli 128 + gateway 468+1skip）；部署 exit 0；**DoD ④ 线上 @llm 一次**：`watt agent spawn manage/cron` → send "每天早上 9 点（UTC）发一份 token 用量日报到测试群 <chat_id>" → 真实模型两步工具调用 → `watt cron list` 见 **CronJob{schedule:"0 9 * * *", action:publish report.daily.tokens, payload.target=<chat_id>, description 中文正确}** → 清理（cron rm + terminate）。**WS 入站链路**：`watt channel connect feishu-main` 起真实长连接 → SDK "ws client ready"（订阅方式需在飞书后台配置为长连接——链路侧已就绪；真实群消息入站需人工发消息配合，留关门轮）。
+- 勾选：无（DoD ④ 证据已备，随关门一并勾）。
+- 沉淀：决策候选 manage-agent-tool-loop（选型 B 直连 vs builtin 树）。
+- 遗留：R26（Dashboard 最小版 + PluginRegistry + CLI 完备性——DoD ⑤）；R27 关门（DoD ①②③④⑤ 复验 + @feishu 入站人工配合 + 质量关口）。
 
 ## Round 24 — 2026-07-03（Phase 6 R24：飞书 ChannelAdapter——入站规约 + 出站接线 + CLI connect）
 - 目标：Phase 6 / DoD ①（飞书单测四面）+ ②（@feishu 集成）的地基（真实收发留 R25）
