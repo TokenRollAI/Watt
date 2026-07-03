@@ -32,6 +32,20 @@ import { Agent } from 'agents';
 import type { Bindings } from '../env.ts';
 import { executeCronAction, type ScriptRunner } from './actions.ts';
 
+/**
+ * 一次性 ISO 时刻已过期判定（gateway-local，不改 core parseCronSchedule 的纯语法契约）。
+ * parsed 为 cron 型或已过语法校验的 once → 只对 once 且 at <= now 返回 invalid_argument，否则 undefined。
+ */
+function expiredOnce(
+  parsed: Exclude<ReturnType<typeof parseCronSchedule>, WattError>,
+): WattError | undefined {
+  if (!('kind' in parsed) || parsed.kind !== 'once') return undefined;
+  if (Date.parse(parsed.at) <= Date.now()) {
+    return wattError('invalid_argument', `one-time schedule is in the past: ${parsed.at}`, false);
+  }
+  return undefined;
+}
+
 /** Hub 无单实例状态（CronJob 存 SQL 表）——state 仅占位。 */
 export interface SchedulerHubState {
   initialized: boolean;
@@ -93,11 +107,18 @@ export class SchedulerHub extends Agent<Cloudflare.Env, SchedulerHubState> {
     this.ensureTable();
     const parsed = parseCronSchedule(job.schedule);
     if ('code' in parsed) return parsed; // 非法 cron/ISO → invalid_argument。
+    // 一次性 ISO 且已过期 → invalid_argument（登记过去时刻的 schedule 无意义/立即触发）。
+    // core parseCronSchedule 只校验语法不校验时序，过期判定放 gateway（不改 core）；仅 enabled
+    //   时拒（禁用不登记 schedule，与"过去 once 无法有效触发"边界一致）。
+    if (job.enabled) {
+      const expired = expiredOnce(parsed);
+      if (expired !== undefined) return expired;
+    }
 
     // 已存在同 id：先取消旧 schedule（重排）。
     const existing = this.readRow(job.id);
     if (existing?.schedule_id) {
-      await this.cancelScheduleSafe(existing.schedule_id);
+      await this.cancelScheduleSafe(existing.schedule_id, job.id);
     }
 
     const scheduleId = job.enabled ? await this.registerSchedule(job) : null;
@@ -122,6 +143,10 @@ export class SchedulerHub extends Agent<Cloudflare.Env, SchedulerHubState> {
 
     const parsed = parseCronSchedule(next.schedule);
     if ('code' in parsed) return parsed;
+    if (next.enabled) {
+      const expired = expiredOnce(parsed);
+      if (expired !== undefined) return expired;
+    }
 
     // schedule/enabled/action 变化 → 取消旧 schedule 后按新状态重排（enabled=false → 不登记）。
     const needsReschedule =
@@ -130,7 +155,7 @@ export class SchedulerHub extends Agent<Cloudflare.Env, SchedulerHubState> {
       JSON.stringify(next.action) !== JSON.stringify(current.action);
     let scheduleId = row.schedule_id;
     if (needsReschedule) {
-      if (row.schedule_id) await this.cancelScheduleSafe(row.schedule_id);
+      if (row.schedule_id) await this.cancelScheduleSafe(row.schedule_id, jobId);
       scheduleId = next.enabled ? await this.registerSchedule(next) : null;
     }
     this
@@ -143,7 +168,7 @@ export class SchedulerHub extends Agent<Cloudflare.Env, SchedulerHubState> {
     this.ensureTable();
     const row = this.readRow(jobId);
     if (row === undefined) return;
-    if (row.schedule_id) await this.cancelScheduleSafe(row.schedule_id);
+    if (row.schedule_id) await this.cancelScheduleSafe(row.schedule_id, jobId);
     this.sql`DELETE FROM cron_jobs WHERE id = ${jobId}`;
   }
 
@@ -219,12 +244,19 @@ export class SchedulerHub extends Agent<Cloudflare.Env, SchedulerHubState> {
     return s.id;
   }
 
-  /** cancelSchedule 幂等封装（schedule 已触发/不存在 → 吞 false，不抛）。 */
-  private async cancelScheduleSafe(scheduleId: string): Promise<void> {
+  /**
+   * cancelSchedule 幂等封装（schedule 已触发/不存在 → 不抛，保持 Write/Update/Delete 幂等）。
+   * 失败只提升可观测（console.error 带 jobId/scheduleId 上下文）——不改返回形状，调用侧继续重排/删行。
+   */
+  private async cancelScheduleSafe(scheduleId: string, jobId: string): Promise<void> {
     try {
       await this.cancelSchedule(scheduleId);
     } catch (err) {
-      console.log('scheduler hub: cancelSchedule non-fatal', { scheduleId, err: String(err) });
+      console.error('scheduler hub: cancelSchedule failed (non-fatal, continuing)', {
+        jobId,
+        scheduleId,
+        err: String(err),
+      });
     }
   }
 

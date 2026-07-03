@@ -84,11 +84,13 @@ type Primitive = string | number | boolean | null;
 type FlatRecord = { [k: string]: Primitive };
 /** 人类确认信号 payload（TaskManager.Signal 发的 { decision, payload? } 形状）。 */
 type SignalEventPayload = { decision: string; payload?: Primitive | FlatRecord };
-/** agent 结果归并 payload（§3.4：result/failed 归并，status 分支）。 */
+/** agent 结果归并 payload（§3.4：result/failed 归并，status 分支）。
+ *  reason：failed 时的 AgentFailedPayload.reason 五态（string，Primitive，不破一层深约束）。 */
 type AgentResultEventPayload = {
   status: string;
   output?: Primitive | FlatRecord;
   error?: Primitive | FlatRecord;
+  reason?: string;
 };
 
 export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowParams> {

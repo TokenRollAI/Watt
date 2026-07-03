@@ -91,6 +91,39 @@ describe('SchedulerHub — Write / List / Get / schedule 登记 (§7)', () => {
     expect('code' in got && (got as { code: string }).code).toBe('not_found');
   });
 
+  it('enabled one-time schedule in the past → invalid_argument (not stored)', async () => {
+    const stub = await hub(hubName());
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const res = await runInDurableObject(stub, (h: SchedulerHub) =>
+      h.writeJob(PUBLISH_JOB('c-past', { schedule: past })),
+    );
+    expect('code' in res && (res as { code: string }).code).toBe('invalid_argument');
+    const got = await runInDurableObject(stub, (h: SchedulerHub) => h.getJob('c-past'));
+    expect('code' in got && (got as { code: string }).code).toBe('not_found');
+  });
+
+  it('enabled one-time schedule in the future → stored + schedule registered (once)', async () => {
+    const stub = await hub(hubName());
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    const res = await runInDurableObject(stub, (h: SchedulerHub) =>
+      h.writeJob(PUBLISH_JOB('c-future', { schedule: future })),
+    );
+    expect('code' in res).toBe(false);
+    const schedules = await runInDurableObject(stub, (h: SchedulerHub) => h.listSchedules());
+    expect(schedules.length).toBe(1);
+  });
+
+  it('disabled past one-time schedule stores (no schedule) — expiry only gates enabled', async () => {
+    const stub = await hub(hubName());
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const res = await runInDurableObject(stub, (h: SchedulerHub) =>
+      h.writeJob(PUBLISH_JOB('c-past-off', { schedule: past, enabled: false })),
+    );
+    expect('code' in res).toBe(false);
+    const schedules = await runInDurableObject(stub, (h: SchedulerHub) => h.listSchedules());
+    expect(schedules.length).toBe(0);
+  });
+
   it('List returns all stored jobs', async () => {
     const stub = await hub(hubName());
     await runInDurableObject(stub, (h: SchedulerHub) => h.writeJob(PUBLISH_JOB('c-a')));

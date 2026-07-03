@@ -108,8 +108,19 @@ export async function executeCronAction(args: ExecuteArgs): Promise<ExecuteResul
       traceId: firedEvent.traceId, // 链路透传（§0.3）：completed 与 fired 同 trace。
     },
   );
-  await new EventStore(env.DB_EVENTS).put(completedEvent);
-  await env.QUEUE_EVENTS.send(completedEvent);
+  // completed 留痕是 best-effort：fired 已发、action 已执行（副作用已落地）。若此处抛错向上传播，
+  //   Agents SDK 会重跑整个 onCronFire → action 二次执行（重复副作用）。宁缺一条 completed 留痕，
+  //   也不重放已执行的 action——留痕失败只 console.error（不改幂等语义/返回形状）。
+  try {
+    await new EventStore(env.DB_EVENTS).put(completedEvent);
+    await env.QUEUE_EVENTS.send(completedEvent);
+  } catch (err) {
+    console.error('scheduler: cron.completed persistence failed (best-effort, not retried)', {
+      jobId: job.id,
+      actionKind: job.action.kind,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return { eventId };
 }

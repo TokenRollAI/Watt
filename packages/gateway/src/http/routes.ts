@@ -1006,8 +1006,18 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
 
     switch (tool) {
       case 'List': {
-        const opts = (args.opts ?? {}) as { limit?: number };
-        const page = await scheduler.list(opts);
+        const opts = (args.opts ?? {}) as Record<string, unknown>;
+        // Scheduler List 只支持 limit（Hub.listJobs 无 filter/cursor）——对齐 task List 口径：
+        //   未声明键给 invalid_argument（不静默丢弃，避免调用方以为 filter 生效实则被吞）。
+        for (const key of Object.keys(opts)) {
+          if (key !== 'limit') {
+            return wattErrorResponse(
+              c,
+              wattError('invalid_argument', `unknown list option: ${key}`, false),
+            );
+          }
+        }
+        const page = await scheduler.list(opts as { limit?: number });
         return c.json(page);
       }
       case 'Get': {

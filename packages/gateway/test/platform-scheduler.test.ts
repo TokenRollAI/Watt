@@ -116,6 +116,23 @@ describe('POST /htbp/platform/scheduler — Write / Get / List (§7)', () => {
     const res = await call(token, 'Get', { jobId: 'missing' });
     expect(res.status).toBe(404);
   });
+
+  it('List rejects unknown opts key → invalid_argument (对齐 task List 口径)', async () => {
+    const token = await signAdmin();
+    // Scheduler List 只支持 limit；filter/cursor 等未声明键必须报错而非静默丢弃。
+    const res = await call(token, 'List', { opts: { filter: { state: 'x' } } });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe('invalid_argument');
+  });
+
+  it('List accepts limit (声明键透传)', async () => {
+    const token = await signAdmin();
+    await call(token, 'Write', { job: PUBLISH_JOB('c-lim') });
+    const res = await call(token, 'List', { opts: { limit: 10 } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { id: string }[] };
+    expect(body.items.some((j) => j.id === 'c-lim')).toBe(true);
+  });
 });
 
 describe('POST /htbp/platform/scheduler — Update / Delete (§7)', () => {

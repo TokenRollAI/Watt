@@ -66,15 +66,26 @@ export async function deliverTaskResult(
   await instance.sendEvent({ type, payload: result });
 }
 
-/** agent.result/failed 事件 → deliverTaskResult 的归并 payload（consumer.routeResult 用）。 */
+/**
+ * agent.result/failed 事件 → deliverTaskResult 的归并 payload（consumer.routeResult 用）。
+ * failed 分支保留 AgentFailedPayload.reason（五态：error/timeout/terminated/rejected/invalid_output，
+ *   core types.ts）——error 仅在 reason='error'/'invalid_output' 时携带，reason 是唯一恒在的失败原因，
+ *   丢掉它 Workflow 侧就只剩笼统 'failed'。作为独立 reason 字段并入（非塞进 error，保留 error 的
+ *   WattError 形状语义），consumer 侧 watt-task-workflow.ts 的 AgentResultEventPayload 同步声明。
+ */
 export function toMergedResultPayload(event: Event): {
   status: 'result' | 'failed';
   output?: unknown;
   error?: unknown;
+  reason?: string;
 } {
-  const p = (event.payload ?? {}) as { output?: unknown; error?: unknown };
+  const p = (event.payload ?? {}) as { output?: unknown; error?: unknown; reason?: unknown };
   if (event.type === 'agent.failed') {
-    return { status: 'failed', error: p.error };
+    return {
+      status: 'failed',
+      error: p.error,
+      reason: typeof p.reason === 'string' ? p.reason : undefined,
+    };
   }
   return { status: 'result', output: p.output };
 }
