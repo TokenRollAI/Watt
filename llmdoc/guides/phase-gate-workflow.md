@@ -11,7 +11,7 @@
 
 ### ② 质量关口 Workflow：5 维 review → 对抗核查
 
-- **5 维并行 review**：correctness / contract（与 Proto 契约一致性）/ security / ops / test-quality，各维独立派 review agent。
+- **5 维并行 review**：correctness / contract（与 Proto 契约一致性） / ops / test-quality，各维独立派 review agent。
 - **逐条对抗核查**：每条 BLOCKER/MAJOR finding 再派一个核查 agent，prompt 要求**"先假设这是误报去求证"**——拿着 finding 去读源码/规范原文，只有证伪失败才确认成立。
 - MINOR 不阻塞关门，记入 backlog（PROGRESS 遗留节）。
 
