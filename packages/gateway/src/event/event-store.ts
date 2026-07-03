@@ -68,7 +68,8 @@ export class EventStore {
       }
     }
     const rawLimit = opts.limit ?? DEFAULT_LIST_LIMIT;
-    const limit = Math.min(rawLimit, MAX_LIST_LIMIT);
+    // 下界 1、上界 200：负数/0 若直通 SQLite LIMIT（-1 = 无限）会拉全表，故先钳到 [1, 200]。
+    const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
 
     const clauses: string[] = [];
     const binds: string[] = [];
@@ -143,6 +144,14 @@ export class EventStore {
       )
       .run();
     return event;
+  }
+
+  /**
+   * Delete——按 id 删除留痕（best-effort 补偿用）。§2.3 Publish 在 queue.send 失败后调用，
+   * 抹掉已 put 的记录使同 dedupeKey 重投不被幂等短路。不存在 → 无操作（DELETE 幂等）。
+   */
+  async delete(eventId: string): Promise<void> {
+    await this.db.prepare('DELETE FROM events WHERE id = ?').bind(eventId).run();
   }
 
   /**

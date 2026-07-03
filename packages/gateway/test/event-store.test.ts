@@ -58,6 +58,19 @@ describe('EventStore.put / get (§2.4)', () => {
     expect(page.items).toHaveLength(1);
     expect(page.items[0]?.type).toBe('b.y');
   });
+
+  it('delete removes a stored event; get then returns not_found', async () => {
+    const store = new EventStore(env.DB_EVENTS);
+    await store.put(E({ id: 'e1' }));
+    await store.delete('e1');
+    const got = await store.get('e1');
+    expect(got).toMatchObject({ code: 'not_found' });
+  });
+
+  it('delete is a no-op for a missing id (idempotent)', async () => {
+    const store = new EventStore(env.DB_EVENTS);
+    await expect(store.delete('nope')).resolves.toBeUndefined();
+  });
 });
 
 describe('EventStore.list (§2.4 / §0.2)', () => {
@@ -102,13 +115,27 @@ describe('EventStore.list (§2.4 / §0.2)', () => {
     expect(page.items.map((e) => e.id)).toEqual(['c', 'b', 'a']);
   });
 
-  it('clamps limit to the 200 max (§0.2)', async () => {
+  it('clamps a non-positive limit up to 1 (guards against SQLite LIMIT -1 full scan) (§0.2)', async () => {
     const store = new EventStore(env.DB_EVENTS);
-    await store.put(E({ id: 'a' }));
-    await store.put(E({ id: 'b' }));
+    await store.put(E({ id: 'a', occurredAt: '2026-07-01T00:00:00.000Z' }));
+    await store.put(E({ id: 'b', occurredAt: '2026-07-02T00:00:00.000Z' }));
+    await store.put(E({ id: 'c', occurredAt: '2026-07-03T00:00:00.000Z' }));
+    // limit:-5 若直通 SQLite（-1 语义 = 无限）会拉全表 3 条；钳到下界 1 → 只回最新 1 条。
+    const page = await store.list({ limit: -5 });
+    if ('code' in page) throw new Error('expected Page');
+    expect(page.items.map((e) => e.id)).toEqual(['c']);
+  });
+
+  it('clamps an over-large limit down to the 200 max (§0.2)', async () => {
+    const store = new EventStore(env.DB_EVENTS);
+    // 插 201 条 → limit 9999 请求，钳到 200 → 恰回 200 条（有判别力）。
+    for (let i = 0; i < 201; i++) {
+      const n = String(i).padStart(3, '0');
+      await store.put(E({ id: `e${n}`, occurredAt: `2026-07-03T00:00:00.${n}Z` }));
+    }
     const page = await store.list({ limit: 9999 });
     if ('code' in page) throw new Error('expected Page');
-    expect(page.items).toHaveLength(2);
+    expect(page.items).toHaveLength(200);
   });
 
   it('rejects an unknown filter key with invalid_argument (§0.2)', async () => {

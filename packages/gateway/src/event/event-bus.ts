@@ -3,11 +3,12 @@
  *
  * 规范流程（§2.3 L259-262 + §1 尺寸 + §2.3 幂等）：
  *   ① type='outbound.message' → 先出站鉴权 Check(event://<channel>/<target>,'write')；deny → permission_denied。
- *   ② core normalizeEvent 补齐 id/traceId/occurredAt/principal（Omit 三字段）。
- *   ③ validateEventSize（128KB 上限）→ 超限 invalid_argument。
- *   ④ dedupeKey 有值 → EventStore.findByDedupeKey 窗内命中 → 幂等返回原 eventId，**不再留痕/不再投递**。
- *   ⑤ EventStore.put 留痕（§2.4）。
- *   ⑥ 送 Queue（consumer 侧再匹配订阅分发）→ 返回 { eventId }。
+ *   ② channelUser 存在且 principal 缺省 → await resolvePrincipal 补齐 principal（§1 L115-116，未映射 anonymous）。
+ *   ③ core normalizeEvent 补齐 id/traceId/occurredAt（occurredAt 渠道已填则保留）。
+ *   ④ validateEventSize（128KB 上限）→ 超限 invalid_argument。
+ *   ⑤ dedupeKey 有值 → EventStore.findByDedupeKey 窗内命中 → 幂等返回原 eventId，**不再留痕/不再投递**。
+ *   ⑥ EventStore.put 留痕（§2.4）。
+ *   ⑦ 送 Queue（consumer 侧再匹配订阅分发）→ 返回 { eventId }。send 失败 → 补偿删留痕 + unavailable(retryable)。
  *
  * 出站鉴权接线：用 core outboundAccessRequest 从事件派生 (event://<channel>/<target>, 'write')，
  * 再交 gateway 侧 Authorizer.check（复用 PolicyStore.resolveCandidatePolicies + core.authorize
@@ -19,6 +20,7 @@ import {
   type EventInput,
   normalizeEvent,
   outboundAccessRequest,
+  type PrincipalRef,
   type TokenClaims,
   validateEventSize,
 } from '@watt/core';
@@ -45,6 +47,12 @@ export interface PublishDeps {
   traceId?: string;
   /** dedupe 窗判定的当前时刻（epoch ms，可注入以便测试）；缺省 Date.now()。 */
   nowMs?: () => number;
+  /**
+   * channelUser → principal 解析（§1 L115-116：Publish 前以 channelUser 调 IdentityMapper.Resolve
+   * 补齐 principal）。async 因走 D1；未映射时约定 resolver 返回 'user:anonymous'（§6.3）。
+   * 仅在 input.channelUser 存在且 input.principal 缺省时调用。缺省则不解析（保持 principal 原状）。
+   */
+  resolvePrincipal?: (channel: string, userId: string) => Promise<PrincipalRef>;
 }
 
 export interface PublishResult {
@@ -74,19 +82,35 @@ export async function publish(
     }
   }
 
-  // ② 补齐 Omit 三字段（+ channelUser 存在时补 principal，由 core 处理）。
-  const event = normalizeEvent(input, {
+  // ② 接线 IdentityMapper.Resolve（§1 L115-116）：channelUser 存在且 principal 缺省时，
+  //    Publish 前 await 解析补齐 principal（未映射时 resolver 返回 'user:anonymous'，§6.3）。
+  //    async 解析下沉此处；core normalizeEvent 的同步注入点保留不动。
+  let resolvedInput = input;
+  if (
+    input.principal === undefined &&
+    input.channelUser !== undefined &&
+    deps.resolvePrincipal !== undefined
+  ) {
+    const principal = await deps.resolvePrincipal(
+      input.channelUser.channel,
+      input.channelUser.userId,
+    );
+    resolvedInput = { ...input, principal };
+  }
+
+  // ③ 补齐 Omit 三字段（principal 已由上一步解析注入，走透传分支）。
+  const event = normalizeEvent(resolvedInput, {
     genId: deps.genId,
     now: deps.now,
     genTraceId: deps.genTraceId,
     traceId: deps.traceId,
   });
 
-  // ③ 尺寸校验（128KB）。
+  // ④ 尺寸校验（128KB）。
   const sizeErr = validateEventSize(event);
   if (sizeErr !== null) return sizeErr;
 
-  // ④ dedupeKey 幂等：窗内命中原事件 → 返回原 eventId，不再留痕/投递。
+  // ⑤ dedupeKey 幂等：窗内命中原事件 → 返回原 eventId，不再留痕/投递。
   if (event.dedupeKey !== undefined) {
     const nowMs = (deps.nowMs ?? Date.now)();
     const existing = await deps.store.findByDedupeKey(event.dedupeKey, nowMs);
@@ -95,11 +119,23 @@ export async function publish(
     }
   }
 
-  // ⑤ 留痕（§2.4）。
+  // ⑥ 留痕（§2.4）。
   await deps.store.put(event);
 
-  // ⑥ 送 Queue（consumer 侧匹配订阅分发）。
-  await deps.queue.send(event);
+  // ⑦ 送 Queue（consumer 侧匹配订阅分发）。put 成功但 send 失败时：best-effort 删留痕，
+  //    使调用方重投不被 dedupe 短路（否则投递永久丢失），返回 unavailable + retryable 引导重试。
+  try {
+    await deps.queue.send(event);
+  } catch (_sendErr) {
+    // 补偿删除本身失败时仅留痕（best-effort 边界：无法保证补偿一定成功，
+    // 但仍返回 unavailable 让调用方重试；重投若命中残留 dedupe 会返回原 eventId，语义可接受）。
+    try {
+      await deps.store.delete(event.id);
+    } catch (delErr) {
+      console.error('event-bus: compensating delete failed after queue.send error', delErr);
+    }
+    return wattError('unavailable', 'event enqueue failed; retry', true);
+  }
 
   return { eventId: event.id };
 }

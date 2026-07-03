@@ -31,6 +31,15 @@ function countingQueue(): EventQueueSender & { count: number; last?: Event } {
   };
 }
 
+/** 恒抛错的 queue：模拟 queue.send 失败（触发 publish 的补偿删除路径）。 */
+function throwingQueue(): EventQueueSender {
+  return {
+    async send() {
+      throw new Error('queue unavailable');
+    },
+  };
+}
+
 /** 恒 allow / 恒 deny 的 Authorizer 桩（只实现 publish 用到的 check）。 */
 const allowAuthorizer = {
   async check(): Promise<AccessDecision> {
@@ -107,6 +116,84 @@ describe('EventBus.publish dedupe idempotency (§2.3)', () => {
     expect(second).toEqual({ eventId: 'evt-0' });
     // 只投递一次（第二次命中窗内幂等，短路不投）。
     expect(queue.count).toBe(1);
+  });
+});
+
+describe('EventBus.publish queue.send failure compensation (§2.3)', () => {
+  it('returns unavailable(retryable), removes the trace, and lets a same-key retry re-enqueue', async () => {
+    const store = new EventStore(env.DB_EVENTS);
+    // 第一次：queue.send 抛错 → 返回 unavailable + retryable、补偿删留痕。
+    const res = await publish(
+      inboundInput({ dedupeKey: 'k-retry' }),
+      deps({ store, queue: throwingQueue(), genId: () => 'evt-lost' }),
+    );
+    expect(res).toMatchObject({ code: 'unavailable', retryable: true });
+    // 补偿删除生效：store 不再有该事件（重投不会命中 dedupe）。
+    const got = await store.get('evt-lost');
+    expect(got).toMatchObject({ code: 'not_found' });
+
+    // 第二次：同 dedupeKey 重发，queue 正常 → 成功入队（未被残留 dedupe 短路）。
+    const okQueue = countingQueue();
+    const retry = await publish(
+      inboundInput({ dedupeKey: 'k-retry' }),
+      deps({ store, queue: okQueue, genId: () => 'evt-ok' }),
+    );
+    expect(retry).toEqual({ eventId: 'evt-ok' });
+    expect(okQueue.count).toBe(1);
+  });
+});
+
+describe('EventBus.publish identity resolution wiring (§1 L115-116)', () => {
+  it('resolves principal from channelUser before publish when principal is absent', async () => {
+    const d = deps({
+      resolvePrincipal: async (channel, userId) => {
+        expect(channel).toBe('feishu');
+        expect(userId).toBe('ou_x');
+        return 'user:alice';
+      },
+    });
+    const res = await publish(
+      inboundInput({ channelUser: { channel: 'feishu', userId: 'ou_x' } }),
+      d,
+    );
+    if ('code' in res) throw new Error('expected success');
+    const got = await d.store.get(res.eventId);
+    if ('code' in got) throw new Error('expected stored event');
+    expect(got.principal).toBe('user:alice');
+  });
+
+  it('falls back to user:anonymous when the resolver reports no mapping', async () => {
+    const d = deps({ resolvePrincipal: async () => 'user:anonymous' });
+    const res = await publish(
+      inboundInput({ channelUser: { channel: 'feishu', userId: 'unmapped' } }),
+      d,
+    );
+    if ('code' in res) throw new Error('expected success');
+    const got = await d.store.get(res.eventId);
+    if ('code' in got) throw new Error('expected stored event');
+    expect(got.principal).toBe('user:anonymous');
+  });
+
+  it('does not call the resolver when principal is already provided', async () => {
+    let called = false;
+    const d = deps({
+      resolvePrincipal: async () => {
+        called = true;
+        return 'user:should-not-be-used';
+      },
+    });
+    const res = await publish(
+      inboundInput({
+        principal: 'user:preset',
+        channelUser: { channel: 'feishu', userId: 'ou_x' },
+      }),
+      d,
+    );
+    if ('code' in res) throw new Error('expected success');
+    const got = await d.store.get(res.eventId);
+    if ('code' in got) throw new Error('expected stored event');
+    expect(got.principal).toBe('user:preset');
+    expect(called).toBe(false);
   });
 });
 
