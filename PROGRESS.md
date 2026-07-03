@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）已关门**（Round 18：2 BLOCKER + 10 MAJOR 全修 + DoD 线上复验）
 - **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 5（Task + Scheduler）项 1——先派 investigator 调研（Workflows 适配/Scheduler DO/两个部署模板）
+- **下一目标**：Phase 5 R20（Task/M7：watt-task Workflow + 两模板 + TaskManager + Signal 接线 + CLI task 族）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 19 — 2026-07-03（Phase 5 R19：前置核实 + core 纯逻辑）
+- 目标：Phase 5 / DoD 项 1 纯逻辑面（Signal 状态机、事件名净化、cron 解析、checkpoint guard 下沉）
+- 动作：investigator 先产出 `.llmdoc-tmp/investigations/phase5-task-scheduler.md`（Task=Workflows 全就绪:类型/vitest introspect 本地测/绑定,仅缺 wrangler workflows 段+两模板;Scheduler=Agents SDK this.schedule;script=Dynamic Worker Loader,本地 dry-run 验证 worker_loaders binding 语法可用,线上 open beta 待真部署核实;HITL 只差 noopSignaler→WATT_TASK.sendEvent 接线;@feishu 不涉本 Phase;四轮拆分）。主 assistant 核实 worker_loaders binding dry-run 通过。worker 落地 `packages/core/src/task/`：`types.ts`（TaskInfo 7 态/TaskDetail/SignalRequest/scheduler CronJob 全字段面,与 authz 最小面 CronJob 用别名 SchedulerCronJob 避撞）、`signal.ts`（waiting 外→conflict）、`event-names.ts`（净化不截断,超长→invalid_argument）、`cron.ts`（五段分钟级子集手写——纪律 4 核实:agents/schedule 只导出 LLM zod schema,内部 cron-schedule 未导出纯函数,理由声明）、`checkpoint.ts`（consumer type guard 下沉,gateway 改 import 留 R20）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**833 tests**：shared 6 + core 396 + cli 93 + gateway 338+1skip;core 覆盖率 100%）。
+- 勾选：无（项 1 需 gateway 面合体验收）。
+- 沉淀：调研报告落 `.llmdoc-tmp/`。
+- 遗留：R20（Task/M7:WorkflowEntrypoint watt-task + deep-research/auto-delivery-lite 模板 + TaskManager 服务含 taskId↔instanceId 映射 + Signal 接线+Check(task://,'signal') + CLI task 族 + introspect 集成测）;R21（Scheduler/M6:SchedulerHub DO + 三 action + script isolate/降级 + CLI cron 族）;R22 关门。
 
 ## Round 18 — 2026-07-03（Phase 4 关门轮）
 - 目标：Phase 4 关门——质量关口 Workflow + 确认项全修 + DoD 线上复验 + 沉淀
