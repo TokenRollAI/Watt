@@ -1,4 +1,5 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
+import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { createAnthropicCaller } from '../src/agent/harness/anthropic-caller.ts';
 import { llmHarness } from '../src/agent/harness/llm.ts';
@@ -16,13 +17,15 @@ import { llmHarness } from '../src/agent/harness/llm.ts';
  *   agent.result（结构化 output 满足 JSON Schema），**不断言 LLM 文本内容**。
  */
 
-const RUN = process.env.LLM_TESTS === '1' && (process.env.ANTHROPIC_API_KEY ?? '').length > 0;
+// workerd 内无宿主 process.env——门控经 vitest.config 的 miniflare bindings 注入。
+const testEnv = env as unknown as Record<string, string | undefined>;
+const RUN = testEnv.LLM_TESTS === '1' && (testEnv.ANTHROPIC_API_KEY ?? '').length > 0;
 
 describe.skipIf(!RUN)('llm harness — real model (@llm)', () => {
   it('produces a schema-valid agent.result via the real Anthropic Messages relay', async () => {
     const caller = createAnthropicCaller({
-      apiKey: process.env.ANTHROPIC_API_KEY as string,
-      baseUrl: process.env.ANTHROPIC_BASE_URL,
+      apiKey: testEnv.ANTHROPIC_API_KEY as string,
+      baseUrl: testEnv.ANTHROPIC_BASE_URL,
     });
     // 结构化任务：要求返回符合 schema 的评分对象（fan-in 结构化结果的形状约束）。
     const schema = {
@@ -39,7 +42,7 @@ describe.skipIf(!RUN)('llm harness — real model (@llm)', () => {
           'Classify the sentiment of "I love this product!" and give a score from 0 to 1. ' +
           'Respond as JSON with keys "sentiment" (string) and "score" (number).',
         schema,
-        model: process.env.LLM_MODEL ?? 'glm-5.2',
+        model: testEnv.ANTHROPIC_MODEL || 'glm-5.2',
         maxAttempts: 3,
       },
       caller,

@@ -250,6 +250,18 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
         },
       };
     }
+    // 留痕 + 入队（§2.4/§3.4）：此路径不经 event-bus publish（系统内部产出，无 dedupe/出站鉴权需求），
+    // 必须自行 EventStore.put——否则 agent.result/failed 只进队列被定向路由消费，留痕面查不到
+    // （consumer 注释假设"publish 时已留痕"，2026-07-03 线上冒烟实测修正）。put 失败不阻塞投递。
+    try {
+      const { EventStore } = await import('../event/event-store.ts');
+      await new EventStore(env.DB_EVENTS).put(event);
+    } catch (err) {
+      console.error('agent instance: result event store put failed', {
+        eventId: event.id,
+        err: String(err),
+      });
+    }
     await env.QUEUE_EVENTS.send(event);
   }
 }
