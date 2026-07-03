@@ -463,6 +463,7 @@ const D1_NAMES = ['watt-policies', 'watt-providers', 'watt-audit', 'watt-events'
 // 承载 wrangler 原生 d1 migrations 的库 → migrations_dir（bindingsBlock 回填用；见 §14）。
 const D1_MIGRATIONS_DIRS = {
   'watt-policies': 'migrations',
+  'watt-providers': 'migrations-providers',
   'watt-events': 'migrations-events',
   'watt-context': 'migrations-context',
 };

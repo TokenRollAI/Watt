@@ -13,6 +13,7 @@ declare global {
       TEST_MIGRATIONS: D1Migration[];
       TEST_MIGRATIONS_EVENTS: D1Migration[];
       TEST_MIGRATIONS_CONTEXT: D1Migration[];
+      TEST_MIGRATIONS_PROVIDERS: D1Migration[];
     }
   }
 }

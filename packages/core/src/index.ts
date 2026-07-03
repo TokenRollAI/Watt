@@ -105,7 +105,6 @@ export {
   type ResolveDedupeInput,
   resolveDedupe,
 } from './event/dedupe.ts';
-
 // Event 信封（§1 / §2.3）
 export {
   EVENT_MAX_BYTES,
@@ -154,5 +153,7 @@ export {
   subscriptionSchema,
   subscriptionSinkSchema,
 } from './eventbus/types.ts';
+// Tool Layer 纯逻辑（§5.2 ToolRegistry ToolMount）
+export * from './tools/index.ts';
 // 类型层
 export * from './types.ts';

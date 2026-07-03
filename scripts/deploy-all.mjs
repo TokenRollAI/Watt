@@ -91,6 +91,24 @@ steps.push({
   ],
 });
 
+// watt-providers：Tool Layer ToolRegistry 存储（tool_mounts 表，Proto §5.2）。
+// 同上幂等；migrations_dir=migrations-providers（wrangler.jsonc DB_PROVIDERS 绑定，provision 回填）。
+steps.push({
+  name: 'apply D1 migrations (watt-providers)',
+  cmd: [
+    'pnpm',
+    '--filter',
+    '@watt/gateway',
+    'exec',
+    'wrangler',
+    'd1',
+    'migrations',
+    'apply',
+    'watt-providers',
+    '--remote',
+  ],
+});
+
 steps.push({
   name: 'deploy watt-gateway',
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],

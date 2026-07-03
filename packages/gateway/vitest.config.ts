@@ -21,6 +21,7 @@ const testKey = JSON.parse(readFileSync(testKeyPath, 'utf8')) as {
 const migrations = await readD1Migrations(resolve(here, 'migrations'));
 const migrationsEvents = await readD1Migrations(resolve(here, 'migrations-events'));
 const migrationsContext = await readD1Migrations(resolve(here, 'migrations-context'));
+const migrationsProviders = await readD1Migrations(resolve(here, 'migrations-providers'));
 
 export default defineConfig({
   test: {
@@ -45,6 +46,7 @@ export default defineConfig({
           TEST_MIGRATIONS: migrations,
           TEST_MIGRATIONS_EVENTS: migrationsEvents,
           TEST_MIGRATIONS_CONTEXT: migrationsContext,
+          TEST_MIGRATIONS_PROVIDERS: migrationsProviders,
           // webhook adapter 验签 secret（inbound 集成测试；channel settings.verifySecretRef 指向此名）。
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
         },

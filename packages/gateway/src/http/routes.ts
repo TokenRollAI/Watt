@@ -13,13 +13,14 @@
  * action：List/Get → 'read'；Write/Update/Delete → 'manage'（§6.1 action 集合）。
  */
 
-import type { EventInput, NamespaceMount, Policy, Subscription } from '@watt/core';
+import type { EventInput, NamespaceMount, Policy, Subscription, ToolMount } from '@watt/core';
 import {
   channelConfigSchema,
   eventInputSchema,
   namespaceMountSchema,
   policySchema,
   subscriptionSchema,
+  toolMountSchema,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
@@ -32,6 +33,7 @@ import type { Bindings } from '../env.ts';
 import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/channel-store.ts';
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
+import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
 import { type AuthVars, authMiddleware } from './auth.ts';
 import { forbiddenResponse, wattErrorResponse } from './errors.ts';
 
@@ -40,6 +42,7 @@ const RES_AUDIT = 'platform://audit';
 const RES_EVENT = 'platform://event';
 const RES_CHANNEL = 'platform://channel';
 const RES_CONTEXT = 'platform://context';
+const RES_TOOL = 'platform://tool';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -533,6 +536,100 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         }
         await registry.delete(namespace);
         return c.json({ deleted: true });
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/tool → ToolRegistry 管理面（§5.2 工具源挂载注册表）──────
+  // 四动词 List/Get/Write/Update → ToolRegistry（D1 watt-providers 库 tool_mounts 表）。
+  // tool → action：List/Get=read；Write/Update=manage（对齐 §6.4d，与 policy/context 管理面同）。
+  // 资源 URI：platform://tool（挂载管理面）。
+  //
+  // 重要（边界）：这是 tools **管理面**（挂载 CRUD），资源 platform://tool；与未来 tools
+  // **消费面** `/htbp/tools/<mount-path>/...`（工具 List/描述/调用，资源 tool://...，走 tool-bridge
+  // 代理 + Check PEP）是两个不同的接口。消费面留代理轮（等 tool-bridge 上游 effect/scope 就绪）。
+  const TOOL_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Update: 'manage',
+  };
+  app.post('/htbp/platform/tool', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const registry = new ToolRegistry(c.env.DB_PROVIDERS);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? TOOL_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_TOOL, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://tool');
+    }
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as ToolListOptions;
+        const page = await registry.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const path = args.path;
+        if (typeof path !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'path is required', false));
+        }
+        const mount = await registry.get(path);
+        if (isWattError(mount)) return wattErrorResponse(c, mount);
+        return c.json({ mount });
+      }
+      case 'Write': {
+        const parsed = toolMountSchema.safeParse(args.mount);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid tool mount: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await registry.write(parsed.data as ToolMount);
+        return c.json({ mount: written });
+      }
+      case 'Update': {
+        const path = args.path;
+        if (typeof path !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'path is required', false));
+        }
+        // patch 经 schema 校验（path 不可改、其余可选、严格键集）——防写入畸形字段。
+        const parsedPatch = toolMountSchema
+          .omit({ path: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await registry.update(path, parsedPatch.data as Partial<ToolMount>);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ mount: result });
       }
     }
   });

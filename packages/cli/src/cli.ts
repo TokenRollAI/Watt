@@ -18,6 +18,7 @@ import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from 
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
+import { formatMountListHuman, toolList, toolMount } from './tool.ts';
 import { formatWhoamiHuman, whoami } from './whoami.ts';
 
 /** commander 的可重复选项收集器（`--metadata k=v` 累积成数组）。 */
@@ -553,6 +554,61 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       if (asJson()) out(JSON.stringify(result));
       else out(`Unmounted ${namespace}`);
     });
+
+  const tool = program
+    .command('tool')
+    .description('Manage tool source mounts (ToolRegistry; describe/call arrive with the proxy)');
+  tool
+    .command('ls')
+    .description('List tool mounts (ToolRegistry.List, management view)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const mounts = await toolList(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(mounts));
+      else out(formatMountListHuman(mounts));
+    });
+  tool
+    .command('mount')
+    .description('Mount a tool source (ToolRegistry.Write, idempotent upsert)')
+    .argument('<path>', 'tool tree path, e.g. observability/logs')
+    .requiredOption('--provider <provider>', 'mcp | http | builtin | <plugin-id>')
+    .option(
+      '--config <json>',
+      'provider-specific config as a JSON object (endpoint, secretRef, ...)',
+    )
+    .option('--disabled', 'create the mount in a disabled state', false)
+    .action(
+      async (path: string, cmdOpts: { provider: string; config?: string; disabled: boolean }) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        let providerConfig: Record<string, unknown> | undefined;
+        if (cmdOpts.config !== undefined) {
+          try {
+            const p = JSON.parse(cmdOpts.config);
+            if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+              throw new Error('not an object');
+            }
+            providerConfig = p as Record<string, unknown>;
+          } catch {
+            throw new CliError('--config must be a JSON object', 2);
+          }
+        }
+        const mount = await toolMount(
+          base,
+          token,
+          {
+            path,
+            provider: cmdOpts.provider,
+            providerConfig,
+            enabled: !cmdOpts.disabled,
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(mount));
+        else out(`Mounted ${mount.path ?? path} → ${mount.provider ?? cmdOpts.provider}`);
+      },
+    );
 
   let exitCode = 0;
   try {
