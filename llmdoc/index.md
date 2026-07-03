@@ -32,6 +32,7 @@
 - [memory/reflections/2026-07-02-round1-scaffold.md](memory/reflections/2026-07-02-round1-scaffold.md) — Round 1 worker 派发反思：prompt 三件套模板、Reflection Handoff、派发前 proto-map 自查指令契约细节。
 - [memory/reflections/2026-07-02-round7-phase1-gate.md](memory/reflections/2026-07-02-round7-phase1-gate.md) — Round 7 关门轮反思：派发检查清单（filter 名对照 package.json name、跨包契约改动先 grep 全部消费方、文件集预留连带改动报告出口）、独立 mock 掩盖跨包错配、deploy 后旧 isolate 误判、worker 有理偏离评审建议的良性案例。
 - [memory/reflections/2026-07-03-round10-phase2-gate.md](memory/reflections/2026-07-03-round10-phase2-gate.md) — Round 10 关门轮反思：并行 worker 共享工作树的类型契约耦合污染（git worktree 隔离验证自救）、4 维评审裁剪不降质（0 误报）、对抗核查价值=修严重度+补证据链、注释与死测试合谋锁 bug、代理环境 NODE_USE_ENV_PROXY 与 token 1h 有效期。
+- [memory/reflections/2026-07-03-round13-phase3-gate.md](memory/reflections/2026-07-03-round13-phase3-gate.md) — Round 13 关门轮反思：宽容解析是契约漂移温床（"mock 全绿线上坏"四连击→解析失败就报错）、评审 finding 聚类找共同根因再决定补丁 vs 重构（vector 三 MAJOR 同根=D1 sidecar 一个架构动作）、对抗核查连续四 Phase 0 误报（价值=修严重度+补代码事实+doc-gaps 比对滤实现自由）、worker idle≠done（验收指令置 prompt 末尾）。
 
 ## 检索路由
 
