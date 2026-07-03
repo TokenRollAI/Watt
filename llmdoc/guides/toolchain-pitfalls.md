@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -201,3 +201,30 @@
 
 - 现象：wrangler.jsonc 有 `"ai"` 绑定时，vitest-pool-workers 会尝试为 AI 起远程代理会话，多账户非交互环境必失败（`user account selection unavailable`）。
 - 解法：vitest.config 里 `remoteBindings: false`；vector provider 等对 AI 的调用走依赖注入 fake（测试从不读 env.AI），真实 embeddings 验证留部署后冒烟（Round 12 实测）。
+
+## 36. agents 包传递依赖 core-js-pure 的 build script 阻塞 vitest
+
+- 现象：装 `agents`（Agents SDK）后，其传递依赖 `core-js-pure` 带 postinstall build script，被 pnpm 门禁 ignore → vitest 的 depsStatusCheck 检出 ignored build 并阻塞测试启动。
+- 解法：`pnpm-workspace.yaml` 的 `allowBuilds` 显式声明 `core-js-pure: false`（明确"不构建也没关系"，消除 ignored 状态），vitest 恢复运行。
+
+## 37. ai SDK 版本必须跟 agents 的 peer 走
+
+- 现象：`agents@0.17.3` 的 peer 是 `ai@^6`；直接装最新 `ai@7` 会 peer 冲突（安装期报错或运行时行为漂移）。
+- 纪律：装 Vercel AI SDK 前先查 `agents` 当前版本的 peerDependencies，锁对应大版本（本仓库 ai@6 + @ai-sdk/anthropic@3，决策见 memory/decisions/model-call-sdk.md）。升级 agents 时同步核对 ai peer。
+
+## 38. HTBP tools call 的请求形状契约（§34 的请求形状对偶）
+
+- 上游 tool-bridge 契约：**工具名走 URL end-path**（`.../<node>/<toolName>`），**body 是 `{arguments}` 信封**；http adapter 会把 body 整包转发给目标端点。
+- 教训：CLI 曾把 `{tool,arguments}` 发到节点级 URL——对 http/mcp provider 必炸，但线上 echo 服务"什么都吞"恰好掩盖（Round 18 BLOCKER）。
+- 修法：CLI call 拼 end-path + `{arguments}` 信封；gateway 代理按 provider 归一化——**http 拆信封发裸参数、mcp/builtin 透传**。
+- 测试纪律：**fake 必须按节点 type 分派、忠实上游各 provider 语义**——echo 型"什么都吞"的测试替身是契约漂移的天然掩盖器（与 §34 同根：真源只能有一个）。
+
+## 39. 系统代发事件与外部事件共用消费管道时的去重误杀
+
+- 现象：correlation 超时代发 agent.failed 走与外部事件相同的消费/去重管道，**去重判定把自产事件当重复吞掉**——failed 永远到不了 waiter（Round 18 BLOCKER，§3.4 规则 3/4 根因）。
+- 纪律：系统代发路径**要么直投**（本仓库解法：AgentCorrelation DO 直投 waiter，绕开 routeResult 去重）、**要么显式标记绕开去重**；不要让自产事件裸走公共去重面。
+- 关联修法：routeResult 投递改三态 peek(delivering)→deliver→confirm，失败 rollback + msg.retry，投递成功才 settle。
+
+## 40. R2 条件写用 `.etag`，不是 `.httpEtag`
+
+- R2 对象的 `httpEtag` 带双引号（HTTP 头格式），传给 `onlyIf: { etagMatches }` 会匹配失败/报错；条件写必须用**裸 `.etag`** 字段（gateway `src/context/providers/object.ts` 即此写法）。
