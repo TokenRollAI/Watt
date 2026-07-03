@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）已关门**（Round 18：2 BLOCKER + 10 MAJOR 全修 + DoD 线上复验）
 - **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 5 R20（Task/M7：watt-task Workflow + 两模板 + TaskManager + Signal 接线 + CLI task 族）
+- **下一目标**：Phase 5 R21（Scheduler/M6：SchedulerHub DO + 三 action + script isolate + CLI cron 族）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 20 — 2026-07-03（Phase 5 R20：Task/M7 on Cloudflare Workflows）
+- 目标：Phase 5 / Task 侧（WorkflowEntrypoint + 两模板 + TaskManager + Signal 闭环 + CLI task 族）
+- 动作：worker 落地（commit 91fc573）：wrangler workflows 段（watt-task/WATT_TASK/WattTaskWorkflow）;两模板（deep-research:真实 spawn(expect,taskWaiter) N=2 fan-in;auto-delivery-lite:登记→echo 桩→confirm-release checkpoint;human waitForEvent 10min/agent 5min 显式短超时——doc-gap #11 收口）;**taskId 即 Workflows instanceId,免映射表**（doc-gap 收口,决策待记）;TaskStore（watt-events 0002,归属理由声明）;TaskManager 七动词;**HITL 闭环接通**（consumer noopSignaler→真实 TaskSignaler+Check(task://,'signal'),principal 从 event.principal 取、缺省拒绝）;agent-deliverer task waiter 真实回送（sendEvent agent-result-<cid> 归并）;/htbp/platform/task 路由 + CLI 六命令;34 新测试含真实 Workflows introspect 全链。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**864 tests**：shared 6 + core 396 + cli 99 + gateway 363+1skip）;`pnpm deploy:all` exit 0（Workflows 绑定上线）;**线上全链**：`watt task run auto-delivery-lite` → pending→（冒烟发现:模板依赖 echo agent def 未注册导致卡 running——注册 def 后 Workflows 重试推进,**模板依赖的 agent def 需要种子/文档,记 backlog**）→ waiting_human@confirm-release → `watt task signal --decision approve` → **done**;第二任务 `watt task cancel` → **cancelled**。
+- 勾选：无（DoD 项 1 单测面已含 core+gateway,项 2 集成链已通,待 R21 Scheduler 后一并勾——项 2 原文含 cron 链）。
+- 沉淀：决策候选 task-workflow-instance-id;pitfalls 候选（本地 Workflows hibernate status 报 running——测试以状态表为真源;Serializable 递归类型 TS2589 用浅 record）。
+- 遗留：R21（Scheduler/M6:SchedulerHub DO + publish/agent/script 三 action + script isolate LOADER/降级 + cron.fired/completed 留痕 + CLI cron 族）→ 勾项 1/2;R22 关门(项 3 部署冒烟已可提前采证)。backlog:模板 agent def 种子化。
 
 ## Round 19 — 2026-07-03（Phase 5 R19：前置核实 + core 纯逻辑）
 - 目标：Phase 5 / DoD 项 1 纯逻辑面（Signal 状态机、事件名净化、cron 解析、checkpoint guard 下沉）
