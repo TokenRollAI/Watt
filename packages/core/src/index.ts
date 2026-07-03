@@ -97,6 +97,17 @@ export {
   subjectMatches,
 } from './authz/match.ts';
 export { toolActionFor } from './authz/tool-action.ts';
+// 飞书 ChannelAdapter 规约纯逻辑（§2.1 push 型 / §1.1）
+export {
+  type DecodeDeps,
+  decodeFeishuEvent,
+  encodeFeishuOutbound,
+  FEISHU_CHANNEL,
+  FEISHU_MESSAGE_PATH,
+  type FeishuDecodeResult,
+  type FeishuEvent,
+  type FeishuOutboundPayload,
+} from './channel/feishu.ts';
 // Context Layer 纯逻辑（§4.1 ContextProvider / §4.2 ContextRegistry）
 export * from './context/index.ts';
 export {

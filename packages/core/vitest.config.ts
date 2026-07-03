@@ -10,6 +10,7 @@ export default defineConfig({
       // 只统计被测的纯逻辑源文件；类型/schema/桶文件按需纳入。
       include: [
         'src/authz/**/*.ts',
+        'src/channel/**/*.ts',
         'src/context/**/*.ts',
         'src/event/**/*.ts',
         'src/eventbus/**/*.ts',
