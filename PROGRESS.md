@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
 - **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R24（飞书 ChannelAdapter：core 规约纯逻辑 + IdentityMapper 映射表 + 出站接线 + `watt channel connect`）
+- **下一目标**：Phase 6 R25（@feishu 真实进出集成 + manage/cron Agent 对话建 CronJob——DoD ②④）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,19 @@
 ---
 
 # 轮次记录
+
+## Round 24 — 2026-07-03（Phase 6 R24：飞书 ChannelAdapter——入站规约 + 出站接线 + CLI connect）
+- 目标：Phase 6 / DoD ①（飞书单测四面）+ ②（@feishu 集成）的地基（真实收发留 R25）
+- 动作：worker 落地（commits 3 连 + fix）：
+  - **core 规约纯逻辑**：`core/src/channel/feishu.ts`——WS 事件 decode（im.message.receive_v1→type/session=feishu:chat:<id>/channelUser=open_id/dedupeKey=event_id/occurredAt；card.action.trigger→im.action+signal 载荷）+ OutboundMessage encode（text→msg_type:text；actions→interactive 卡片 ActionButton→button.value 信号回传）；33 新测试，core 覆盖率 100% 保持。
+  - **IdentityMapper 渠道映射**：watt-policies 0002（channel_identities 表）+ resolve 查表（未命中 anonymous 保留）+ identity 写入口路由 + CLI。
+  - **出站接线**（调研标注的隐藏工作量）：consumer 加 outbound.message 投递分支（ChannelStore 查 adapter=feishu → feishu-sender 调 REST）；feishu-sender（tenant_access_token 换取 + KV_TENANTS TTL 缓存 + 可注入 fetch）；FEISHU_APP_ID/SECRET 进 gateway secrets（deploy-all 检查清单同步）。
+  - **CLI connect**：装 @larksuiteoapi/node-sdk（cli 包）；`watt channel connect`——WSClient（wsConfig 必填坑）+ supervisor backoff 重连 + core decode → 平台 Publish 转发。
+  - **线上冒烟修复**：feishu-sender 裸 `fetch` 引用在 workerd 抛 Illegal invocation（丢 this）——绑定 globalThis 修复（pitfalls 候选）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1021 tests**：shared 6 + core 435 + cli 128 + gateway 452+1skip）；`pnpm deploy:all` exit 0（watt-policies 0002 线上应用，channel_identities 表实证存在）；**线上出站全链**：`watt channel set feishu-main --adapter feishu` → Platform API Publish outbound.message → consumer → 飞书 REST 投递（首发现 Illegal invocation，修复重发后 tail 日志 0 失败；直连 REST probe code 0 验证 scope/凭据可用）。
+- 勾选：无（DoD ① 单测面已备，随关门与 ② 一并勾）。
+- 沉淀：pitfalls 候选（workerd 裸 fetch 引用 Illegal invocation；WSClient wsConfig 必填）。
+- 遗留：R25（@feishu 真实进出集成 + manage/cron Agent + DoD ④）；R26（Dashboard + PluginRegistry + CLI 完备 DoD ⑤）；R27 关门。注意：飞书 app 缺 im:message.group_msg 读权限（消息列表查不了，发消息 im:message:send 正常——真实收发验证靠 WS 入站+人工/回执）。
 
 ## Round 23 — 2026-07-03（Phase 6 R23：Observability 地基——AuditLog 数据面 + Metrics）
 - 目标：Phase 6 / DoD ③（metrics/status 真实）+ ⑤ 的审计基础（AuditLog 数据面从零到真实）
