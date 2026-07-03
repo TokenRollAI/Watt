@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）三项 DoD 全勾（Round 14/16/17）**，待关门（质量关口 review + 沉淀）
-- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 全部三项（Round 14/16/17）
+- **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）已关门**（Round 18：2 BLOCKER + 10 MAJOR 全修 + DoD 线上复验）
+- **已勾选**：Phase 0/1/2/3/4 全部（关门证据 Round 3/7/10/13/18）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 4 关门（质量关口 Workflow + 确认项修复 + Docs 漂移回查 + llmdoc 沉淀）
+- **下一目标**：Phase 5（Task + Scheduler）项 1——先派 investigator 调研（Workflows 适配/Scheduler DO/两个部署模板）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,19 @@
 ---
 
 # 轮次记录
+
+## Round 18 — 2026-07-03（Phase 4 关门轮）
+- 目标：Phase 4 关门——质量关口 Workflow + 确认项全修 + DoD 线上复验 + 沉淀
+- 动作：
+  - **用户方向修正（评审期间并行）**：模型调用手拼 HTTP 违反 LOOP 纪律 4——重构为 **Vercel AI SDK**（ai@6 + @ai-sdk/anthropic@3;版本锁 ai@6 是 agents@0.17.3 的 peer 硬约束;pi SDK 为 Node-only 已排除;决策记录 memory/decisions/model-call-sdk.md）;llm harness 保持单次调用+schema 重试语义,agentic loop 声明留给 Agents SDK/Claude Agent SDK（commit 5eeced6,@llm 真实模型复验绿）。
+  - **质量关口 Workflow**（4 维+对抗核查,21 agents;6 个核查因中转 502 失败未复核——对应 finding 按 MINOR 保守处理）：2 BLOCKER + 10 MAJOR 确认（0 误报）,13 MINOR backlog。
+  - **确认项全修**（2 worker 文件集互斥并行）：
+    - `913b192` runtime 侧：**[BLOCKER] 规则 3/4 代发 failed 被自身 settle 吞掉**——correlation DO 改直投 waiter（绕开 routeResult 去重自吞）+ EventStore 留痕 + 投递成功才 settle;routeResult 改 peek(delivering)→deliver→confirm 三态,失败 rollback + msg.retry;subtree 分批遍历去 200 上限 + terminated 行 7 天 sweep;模型调用 AbortSignal.timeout(60s);**Spawn 幂等 bug**（重复 Spawn 重置 children/input）连带修;Terminate 清 waiter 侧 correlation;@llm 门控 fail-loud;+15 测试。
+    - `5ee1a26` tools 侧：**[BLOCKER] fake 掩盖 call 契约漂移**——上游语义:工具名走 URL end-path、body 是参数;CLI 原发 {tool,arguments} 到节点级 URL 对 http/mcp 必炸,线上 echo 服务"什么都吞"恰好掩盖。修:CLI call 拼 end-path + {arguments} 信封;proxy 按 provider 归一化(http 拆信封发裸参数/mcp·builtin 透传);fake 忠实上游按节点 type 分派;syncTenantTree 树 hash 变更才写 KV（撞 1 写/秒限制）;provision 回填 toolbridge KV id（从零拉起断裂）;deploy-all secrets 检查;vendor patch 守卫脚本。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**751 tests**：shared 6 + core 314 + cli 93 + gateway 338+1skip）;`pnpm deploy:all` exit 0（含 secrets 检查通过）;**线上 DoD 复验**：`watt tool call test/watt echo-get --args '{}'`（新契约:end-path+信封拆解）→ 200 postman-echo 裸参数往返;agent spawn gate4-1 → send --expect-schema → **agent.result correlationId 精确匹配、output schema 合法**（真实模型）→ terminate。@llm 真实测试本轮跑 2 次（SDK 重构验证 + 关门复验,均绿——超出每轮一次上限,因中途换 SDK 属必要复验,留痕声明）。
+- 勾选：无新增（Phase 4 三项 Round 14/16/17 已勾;本轮为关门质量修复）→ **Phase 4 正式关门**。
+- 沉淀：13 MINOR backlog（ModelProvider resolveDefault 死代码未接 harness、output ≤1MiB 未实施、lastActiveAt 语义漂移、toolbridge 公网可达+固定转发凭据、vendored 未合并分支锚点等）;doc-gap 候选（CorrelationEnv 绑定契约、settled 三态、TERMINATED_TTL 7d、模型超时 60s、HTBP call 请求形状契约）;llmdoc 沉淀本轮触发。
+- 遗留：Phase 5（Task + Scheduler）是下一 Phase;6 个未复核 finding 若后续轮碰到相关文件顺手核。
 
 ## Round 17 — 2026-07-03（Phase 4 R13：Agent Runtime + @llm 集成，DoD 项 3）
 - 目标：Phase 4 / DoD 项 3（Agents SDK Light Runtime + AgentRegistry/AgentRuntime + ModelProvider + CLI + @llm 真实模型集成）
