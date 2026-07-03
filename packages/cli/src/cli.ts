@@ -233,7 +233,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
             since: cmdOpts.since,
           },
           emit,
-          { fetch: opts.fetch, sleep: opts.sleep, intervalMs, once: cmdOpts.once },
+          { fetch: opts.fetch, sleep: opts.sleep, intervalMs, once: cmdOpts.once, stderr: err },
         );
       },
     );

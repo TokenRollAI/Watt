@@ -68,41 +68,67 @@ describe('watt event tail', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toContain('/htbp/platform/event');
     expect(calls[0]?.body.tool).toBe('List');
-    expect(
-      (calls[0]?.body.arguments.opts as { filter: Record<string, string> }).filter.channel,
-    ).toBe('hook');
+    const opts0 = calls[0]?.body.arguments.opts as {
+      filter: Record<string, string>;
+      limit: number;
+    };
+    expect(opts0.filter.channel).toBe('hook');
+    // tail 每轮显式请求服务端上限 limit=200（否则默认 50，单轮新增 >50 时较旧条目被截断而游标越过）。
+    expect(opts0.limit).toBe(200);
     // NDJSON：两行，按 occurredAt 升序（服务端倒序 → tail 升序发出）。
     expect(out).toHaveLength(2);
     expect(JSON.parse(out[0]!).id).toBe('ev-a');
     expect(JSON.parse(out[1]!).id).toBe('ev-b');
   });
 
-  it('advances the since cursor between polls (sleep injected)', async () => {
+  it('advances the since cursor across two real polls without +1ms, deduping same-ms events', async () => {
     const out: string[] = [];
-    let rounds = 0;
-    // 第一轮返回一个事件，之后返回空；sleep 注入即时返回，第 2 轮后手动停止。
-    const { fetch, calls } = scriptedFetch([{ items: [EVENT({ id: 'ev-a' })] }, { items: [] }]);
+    // 第一轮（倒序）：ev-b(00:01) 最新，ev-dup 与 ev-a 同为 00:00。最大 occurredAt = 00:01。
+    // 第二轮（倒序）：since=00:01 含端重查回 ev-b(已见 → 去重)，同毫秒新事件 ev-c 应 emit。
+    const { fetch, calls } = scriptedFetch([
+      {
+        items: [
+          EVENT({ id: 'ev-b', occurredAt: '2026-07-03T00:00:01.000Z' }),
+          EVENT({ id: 'ev-dup' }),
+          EVENT({ id: 'ev-a' }),
+        ],
+      },
+      {
+        items: [
+          EVENT({ id: 'ev-c', occurredAt: '2026-07-03T00:00:01.000Z' }),
+          EVENT({ id: 'ev-b', occurredAt: '2026-07-03T00:00:01.000Z' }),
+        ],
+      },
+    ]);
+    // sleep 第 1 次（第一轮后）放行；第 2 次（第二轮后）才抛停止信号 → 真实发生两轮 List。
+    let sleeps = 0;
     const sleep = vi.fn(async () => {
-      rounds++;
-      if (rounds >= 1) throw new Error('__stop__'); // 第一次 sleep 后中断循环（非 --once 路径）。
+      sleeps++;
+      if (sleeps >= 2) throw new Error('__stop__');
     });
-    const code = await run(['event', 'tail', '--interval', '1'], {
+    const code = await run(['--json', 'event', 'tail', '--interval', '1'], {
       env: ENV,
       fetch,
       sleep,
       stdout: (l) => out.push(l),
       stderr: () => {},
     });
-    // 循环被注入的 sleep 抛错中断 → CliError 之外的错误 exit 1（可接受，测试聚焦游标）。
+    // 循环被第 2 次注入的 sleep 抛错中断 → 非 CliError 走 exit 1（可接受，聚焦游标语义）。
     expect(code).toBe(1);
-    // 至少拉了两轮（sleep 前一轮 + sleep 后第二轮直到抛错前）。
-    expect(calls.length).toBeGreaterThanOrEqual(1);
-    // 第二轮的 since 游标推进到第一轮最大 occurredAt + 1ms。
-    if (calls.length >= 2) {
-      const since = (calls[1]?.body.arguments.opts as { filter: Record<string, string> }).filter
-        .since;
-      expect(since).toBe('2026-07-03T00:00:00.001Z');
-    }
+    // 两轮真实 List 都发生（不再是死代码守卫）。
+    expect(calls).toHaveLength(2);
+    // 第二轮 since 游标 = 第一轮最大 occurredAt，且不带 +1ms（同毫秒晚写入事件不再被永久跳过）。
+    const opts1 = calls[1]?.body.arguments.opts as {
+      filter: Record<string, string>;
+      limit: number;
+    };
+    expect(opts1.filter.since).toBe('2026-07-03T00:00:01.000Z');
+    expect(opts1.limit).toBe(200);
+    // emit 顺序：第一轮升序 ev-a, ev-dup, ev-b；第二轮 ev-b 已见去重、仅 ev-c 新发出。
+    const ids = out.map((l) => JSON.parse(l).id);
+    expect(ids).toEqual(['ev-a', 'ev-dup', 'ev-b', 'ev-c']);
+    // 同毫秒边界事件 ev-b 只 emit 一次（id 去重生效）。
+    expect(ids.filter((id) => id === 'ev-b')).toHaveLength(1);
   });
 });
 
