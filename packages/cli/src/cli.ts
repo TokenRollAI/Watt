@@ -676,7 +676,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
     });
   tool
     .command('call')
-    .description('Call a tool (POST /htbp/tools/<path>, {tool,arguments})')
+    .description('Call a tool (POST /htbp/tools/<path>/<tool>, {arguments})')
     .argument('<path>', 'tool tree path, e.g. finance/reports')
     .argument('<tool>', 'tool name exposed by the resource')
     .option('--args <json>', 'call arguments as a JSON object', '{}')

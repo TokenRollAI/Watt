@@ -251,7 +251,7 @@ describe('watt tool describe', () => {
 });
 
 describe('watt tool call', () => {
-  it('POST /htbp/tools/<path> with {tool,arguments}, unwraps result', async () => {
+  it('POST /htbp/tools/<path>/<tool> with {arguments}, unwraps result', async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) });
@@ -264,8 +264,9 @@ describe('watt tool call', () => {
       stdout: (l) => out.push(l),
     });
     expect(code).toBe(0);
-    expect(calls[0]?.url).toBe('https://x/htbp/tools/finance/reports');
-    expect(calls[0]?.body).toEqual({ tool: 'query', arguments: { limit: 10 } });
+    // 工具名走 URL end-path 段（上游按 path 定位，不读 body tool 字段，toolchain §36）；body 是 {arguments}。
+    expect(calls[0]?.url).toBe('https://x/htbp/tools/finance/reports/query');
+    expect(calls[0]?.body).toEqual({ arguments: { limit: 10 } });
     expect(out.join('\n')).toContain('"ok": true');
   });
 

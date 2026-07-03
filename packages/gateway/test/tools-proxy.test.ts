@@ -1,10 +1,10 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 import { env, SELF } from 'cloudflare:test';
 import { importPrivateJwk, signUserToken, type TokenMeta } from '@watt/core';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSeedGuardForTests } from '../src/authz/seed.ts';
 import { PLATFORM_KID } from '../src/env.ts';
-import { buildUpstreamTree } from '../src/http/tools-proxy.ts';
+import { buildUpstreamTree, resetSyncStateForTests } from '../src/http/tools-proxy.ts';
 import {
   TEST_ADMIN_PRINCIPAL,
   TEST_JWT_AUDIENCE,
@@ -83,9 +83,29 @@ async function mountHttp(token: string, path: string): Promise<void> {
   expect(res.status).toBe(200);
 }
 
+async function mountMcp(token: string, path: string): Promise<void> {
+  const res = await SELF.fetch(`${BASE}/htbp/platform/tool`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      tool: 'Write',
+      arguments: {
+        mount: {
+          path,
+          provider: 'mcp',
+          providerConfig: { endpoint: 'https://mcp.example.com' },
+          enabled: true,
+        },
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+}
+
 beforeEach(async () => {
   await clearDb();
   resetSeedGuardForTests();
+  resetSyncStateForTests();
 });
 
 describe('buildUpstreamTree（ToolMount[] → 上游树映射，纯逻辑）', () => {
@@ -144,10 +164,10 @@ describe('/htbp/tools/* — 认证与 Check PEP', () => {
     await mountHttp(admin, 'finance/reports');
     await seedScopedPolicy();
     const token = await signScoped();
-    const res = await SELF.fetch(`${BASE}/htbp/tools/finance/reports`, {
+    const res = await SELF.fetch(`${BASE}/htbp/tools/finance/reports/ping`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ tool: 'ping', arguments: {} }),
+      body: JSON.stringify({ arguments: {} }),
     });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { code: string };
@@ -171,17 +191,53 @@ describe('/htbp/tools/* — 正常转发（路径重写 + 树同步）', () => {
     expect(ids).toContain('./finance');
   });
 
-  it('admin POST 调用：结果透传（fake 回显 {ok,echo}）', async () => {
+  it('admin POST 调用 http 端点：结果透传（fake 回显 {ok,kind:http}）', async () => {
     const admin = await signAdmin();
     await mountHttp(admin, 'echo/svc');
-    const res = await SELF.fetch(`${BASE}/htbp/tools/echo/svc`, {
+    // http 节点调用走 end-path 段（endpoint 名 ping），body 是 {arguments} 信封（CLI 契约）。
+    const res = await SELF.fetch(`${BASE}/htbp/tools/echo/svc/ping`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${admin}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ tool: 'ping', arguments: { q: 1 } }),
+      body: JSON.stringify({ arguments: { q: 1 } }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { result: { ok: boolean } };
+    const body = (await res.json()) as { result: { ok: boolean; kind: string } };
     expect(body.result.ok).toBe(true);
+    expect(body.result.kind).toBe('http');
+  });
+});
+
+describe('/htbp/tools/* — 调用 body 按 provider 归一化（契约漂移锁定，toolchain §36）', () => {
+  it('http provider：代理拆掉 {arguments} 信封，远端收到裸参数（上游 http 整包转发）', async () => {
+    const admin = await signAdmin();
+    await mountHttp(admin, 'echo/svc');
+    const res = await SELF.fetch(`${BASE}/htbp/tools/echo/svc/ping`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ arguments: { q: 1 } }),
+    });
+    expect(res.status).toBe(200);
+    // fake 的 http 分支回显转发到远端的 body 原样。断言信封已被代理拆掉 → 裸 {q:1}，
+    // 而非 {arguments:{q:1}}（后者即"信封泄漏到远端 API"的漂移）。
+    const body = (await res.json()) as { result: { echo: Record<string, unknown> } };
+    expect(body.result.echo).toEqual({ q: 1 });
+    expect('arguments' in body.result.echo).toBe(false);
+  });
+
+  it('mcp provider：保留 {arguments} 信封透传，上游 extractArguments 解出裸参数', async () => {
+    const admin = await signAdmin();
+    await mountMcp(admin, 'finance/reports');
+    // mcp 节点调用走 end-path 段（工具名 query），上游 extractArguments 解 {arguments} 信封。
+    const res = await SELF.fetch(`${BASE}/htbp/tools/finance/reports/query`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ arguments: { limit: 10 } }),
+    });
+    expect(res.status).toBe(200);
+    // fake 的 mcp 分支回显 extractArguments(input)：{arguments} 信封被解出 → 裸 {limit:10}。
+    const body = (await res.json()) as { result: { kind: string; echo: Record<string, unknown> } };
+    expect(body.result.kind).toBe('mcp');
+    expect(body.result.echo).toEqual({ limit: 10 });
   });
 });
 
@@ -216,5 +272,30 @@ describe('/htbp/tools/* — 错误形状转换', () => {
     const body = (await res.json()) as { code: string; retryable: boolean };
     expect(body.code).toBe('not_found');
     expect(body.retryable).toBe(false);
+  });
+});
+
+describe('/htbp/tools/* — 树同步只在变更时写 KV（finding 3，KV 单键 1 写/秒限流）', () => {
+  it('同树连续两请求：tenant 键只写一次（第二请求命中 isolate 缓存跳过）', async () => {
+    const admin = await signAdmin();
+    await mountHttp(admin, 'echo/svc');
+    resetSyncStateForTests(); // mount 已改树；从干净 isolate 缓存态起测两次同树请求。
+    const putSpy = vi.spyOn(env.KV_TENANTS, 'put');
+    try {
+      for (let i = 0; i < 2; i++) {
+        const res = await SELF.fetch(`${BASE}/htbp/tools/~help`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${admin}` },
+        });
+        expect(res.status).toBe(200);
+      }
+      // tenant:<id> 至多写一次（首请求；第二请求 hash 未变跳过）。apikey 常量键至多写一次。
+      const tenantPuts = putSpy.mock.calls.filter((c) => String(c[0]).startsWith('tenant:'));
+      const apikeyPuts = putSpy.mock.calls.filter((c) => String(c[0]).startsWith('apikey:'));
+      expect(tenantPuts.length).toBeLessThanOrEqual(1);
+      expect(apikeyPuts.length).toBeLessThanOrEqual(1);
+    } finally {
+      putSpy.mockRestore();
+    }
   });
 });

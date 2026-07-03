@@ -24,10 +24,30 @@ const migrationsContext = await readD1Migrations(resolve(here, 'migrations-conte
 const migrationsProviders = await readD1Migrations(resolve(here, 'migrations-providers'));
 
 // Fake watt-toolbridge（service binding TOOLBRIDGE）——真实 watt-toolbridge Worker 是独立部署单元
-// （packages/toolbridge），本地 vitest 无从加载。此 fake 忠实上游契约：读共享 KV（tenant:<id> 树，
-// 由 gateway 代理层 syncTenantTree 写入）→ 按 path 解析 → ~help 返 resources / 调用返 {resource,result}
-// / 缺省节点返上游错误形状 {error:{code:'not_found'}}（HTTP 404）。这样"树同步 + 路径重写 + 错误形状
-// 转换"被真实穿透（proxy 写 KV，fake 从同一 KV 读回并解析），而非 mock 掉转发。
+// （packages/toolbridge），本地 vitest 无从加载。此 fake **忠实复现** vendored 上游 packages/toolbridge/
+// vendor/ 的调用语义（逐项对齐，注释标源）：读共享 KV（tenant:<id> 树，由 gateway 代理层 syncTenantTree
+// 写入）→ 按 findNode 语义解析节点 + adapter sub 段 → 按节点 type 分派 describe/call。关键忠实点（这些正是
+// fake 曾掩盖的契约漂移面）：
+//   - findNode（registry.ts）：directory 逐级下钻，走到非 directory 叶子后剩余段是 adapter sub。
+//   - http adapter（adapters/http.ts）：call 要求 sub.length>0（endpoint 名），否则上游抛
+//     "requires an endpoint name" → 500 internal_error；call 把 input **整包** JSON.stringify 转发到远端
+//     URL（不解 {arguments} 信封）。fake 用回显 body 复现"整包转发"，暴露信封是否被代理层拆掉。
+//   - mcp/builtin adapter（adapters/mcp.ts / builtin.ts）：call 要求 sub.length>0（工具名），
+//     extractArguments 解 {arguments} 信封（或整体当参数）。
+//   - directory adapter（adapters/directory.ts）：call 不可调用 → 上游抛 "not callable" → 500。
+//   - describe：directory/叶子·无 sub → resources[]（列子节点/端点）；叶子·有 sub → endpoint schema。
+//   - 缺省节点 → 上游 NotFoundError → {error:{code:'not_found'}}（HTTP 404）。
+// 这样"树同步 + 路径重写 + body 归一化 + 错误形状转换"被真实穿透（proxy 写 KV，fake 从同一 KV 读回并按
+// 上游语义解析），而非 mock 掉转发。
+//
+// 上游 tools/call 的 arguments 信封容忍逻辑（adapters/mcp.ts extractArguments，builtin 同）。
+function extractArguments(input: unknown): unknown {
+  if (input && typeof input === 'object' && !Array.isArray(input) && 'arguments' in input) {
+    return (input as { arguments?: unknown }).arguments ?? {};
+  }
+  return input ?? {};
+}
+
 async function fakeToolBridge(
   request: Request,
   // biome-ignore lint/suspicious/noExplicitAny: miniflare 实例的窄类型由 pool-workers 提供，此处仅取 KV。
@@ -54,49 +74,79 @@ async function fakeToolBridge(
   if (!mapping?.tenantId) return err(401, 'unauthorized', 'unknown secret key');
   const treeRaw = await kv.get(`tenant:${mapping.tenantId}`);
   if (!treeRaw) return err(404, 'not_found', 'no tenant tree');
-  const tree = JSON.parse(treeRaw) as {
-    children?: Array<{ id: string; type: string; children?: unknown[] }>;
-  };
+  const tree = JSON.parse(treeRaw) as TbNode;
 
   const rest = url.pathname.slice('/htbp'.length).replace(/^\/+/, '');
-  const segs = rest.split('/').filter((s) => s.length > 0);
-  const isHelp = segs[segs.length - 1] === '~help';
-  const pathSegs = isHelp ? segs.slice(0, -1) : segs;
+  const segsAll = rest.split('/').filter((s) => s.length > 0);
+  const isHelp = segsAll[segsAll.length - 1] === '~help';
+  const pathSegs = isHelp ? segsAll.slice(0, -1) : segsAll;
 
-  // 解析节点（只走 directory.children，与上游 findNode 一致）。
-  // biome-ignore lint/suspicious/noExplicitAny: 树节点是弱类型 JSON，fake 内联解析。
-  let node: any = tree;
-  for (const seg of pathSegs) {
-    const child = node.children?.find((c: { id: string }) => c.id === seg);
+  // findNode（registry.ts）：directory 逐级下钻；走到非 directory 叶子后，剩余段是 adapter sub。
+  let node: TbNode = tree;
+  let sub: string[] = [];
+  for (let i = 0; i < pathSegs.length; i++) {
+    if (node.type !== 'directory') {
+      sub = pathSegs.slice(i);
+      break;
+    }
+    const child = node.children?.find((c) => c.id === pathSegs[i]);
     if (!child) return err(404, 'not_found', `No TB resource at '/${pathSegs.join('/')}'.`);
     node = child;
   }
 
   if (isHelp || request.method === 'GET') {
-    // directory / mid-path：resources[] 列子节点（相对 path）。
-    const resources = (node.children ?? []).map((c: { id: string; title?: string }) => ({
-      name: c.title ?? c.id,
-      path: `./${c.id}`,
-    }));
-    return new Response(
-      JSON.stringify({ htbp: 'draft', kind: node.type, title: node.title ?? node.id, resources }),
-      {
-        status: 200,
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-      },
-    );
+    // describe：directory 或叶子·无 sub → resources[]（列子节点/端点名）；叶子·有 sub → endpoint schema。
+    if (node.type === 'directory' || sub.length === 0) {
+      const children = node.type === 'directory' ? (node.children ?? []) : endpointRefs(node);
+      const resources = children.map((c) => ({ name: c.title ?? c.id, path: `./${c.id}` }));
+      return json({ htbp: 'draft', kind: node.type, title: node.title ?? node.id, resources });
+    }
+    return json({ htbp: 'draft', kind: node.type, endpoint: { method: 'POST' } });
   }
   if (request.method === 'POST') {
+    // call：directory 不可调用（directory.ts）；叶子要求 sub.length>0（endpoint/工具名，http.ts/mcp.ts）。
+    if (node.type === 'directory') {
+      return err(500, 'internal_error', `Directory '${node.id}' is not callable.`);
+    }
+    if (sub.length === 0) {
+      return err(
+        500,
+        'internal_error',
+        `Node '${node.id}' requires an endpoint/tool name to call.`,
+      );
+    }
     const input = await request.json().catch(() => ({}));
-    return new Response(
-      JSON.stringify({
-        resource: `/htbp/${pathSegs.join('/')}`,
-        result: { ok: true, echo: input },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json; charset=utf-8' } },
-    );
+    // http adapter：整包转发 input 到远端（不解信封）——fake 回显整个 input，暴露未拆的 {arguments} 信封。
+    // mcp/builtin adapter：extractArguments 解 {arguments} 信封。
+    const forwarded = node.type === 'http' ? (input ?? {}) : extractArguments(input);
+    return json({
+      resource: `/htbp/${pathSegs.join('/')}`,
+      result: { ok: true, kind: node.type, echo: forwarded },
+    });
   }
   return err(400, 'method_not_allowed', 'use GET ~help or POST');
+}
+
+// http 节点的端点作为 describe resources[]（endpoints[].name → ./name）；非 http 叶子无内嵌端点列表。
+function endpointRefs(node: TbNode): Array<{ id: string; title?: string }> {
+  const endpoints = Array.isArray(node.endpoints) ? node.endpoints : [];
+  return endpoints.map((e) => ({ id: String(e.name), title: String(e.name) }));
+}
+
+// 上游树节点的弱类型投影（fake 内联解析用；对齐 registry.ts TreeNode 形状的子集）。
+interface TbNode {
+  type: string;
+  id: string;
+  title?: string;
+  children?: TbNode[];
+  endpoints?: Array<{ name: string }>;
+}
+
+function json(data: unknown): Response {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
 }
 
 export default defineConfig({

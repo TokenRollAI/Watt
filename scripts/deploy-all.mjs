@@ -132,3 +132,42 @@ for (const step of steps) {
   }
 }
 console.log('\ndeploy-all: done.');
+
+// gateway 运行时必需 secrets 预检（非阻断警告）：缺了不 fail（部署本身能成，只是运行时端点会崩），
+// 但提前提示可省一轮"部署成功→端点 500→查半天"。@llm（ANTHROPIC_API_KEY）为可选，缺仅警告。
+// 放在 deploy 之后：wrangler secret list 需 Worker 已存在（首次从零拉起时 Worker 刚由上面部署出来）。
+checkGatewaySecrets();
+
+function checkGatewaySecrets() {
+  console.log('\n=== check gateway secrets (advisory) ===');
+  const res = spawnSync(
+    'pnpm',
+    ['--filter', '@watt/gateway', 'exec', 'wrangler', 'secret', 'list'],
+    { env: childEnv, encoding: 'utf8' },
+  );
+  if (res.status !== 0) {
+    console.warn('deploy-all: could not list gateway secrets (skip check); wrangler output tail:');
+    console.warn(`${res.stdout ?? ''}${res.stderr ?? ''}`.split('\n').slice(-8).join('\n'));
+    return;
+  }
+  // secret list 输出可能是 JSON 数组或 name 行；用 substring 匹配名字（避开 env-token banner，§7）。
+  const listed = `${res.stdout ?? ''}`;
+  const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL'];
+  const OPTIONAL = ['ANTHROPIC_API_KEY'];
+  const missingReq = REQUIRED.filter((n) => !listed.includes(n));
+  const missingOpt = OPTIONAL.filter((n) => !listed.includes(n));
+  if (missingReq.length) {
+    console.warn(
+      `deploy-all: WARNING — gateway 缺必需 secret: ${missingReq.join(', ')}。` +
+        ' 认证端点会 500。补：wrangler secret put <NAME>（见 scripts/gen-jwt-keys.mjs）。',
+    );
+  }
+  if (missingOpt.length) {
+    console.warn(
+      `deploy-all: note — gateway 缺可选 secret: ${missingOpt.join(', ')}（@llm agent 路径不可用，非阻断）。`,
+    );
+  }
+  if (!missingReq.length && !missingOpt.length) {
+    console.log('deploy-all: gateway secrets present (required + optional).');
+  }
+}

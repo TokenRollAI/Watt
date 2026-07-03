@@ -38,6 +38,7 @@ import { childEnvWithCfCreds } from './lib/env.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const wranglerPath = resolve(root, 'packages/gateway/wrangler.jsonc');
+const toolbridgeWranglerPath = resolve(root, 'packages/toolbridge/wrangler.jsonc');
 
 // ---- 载入 .env（仅取 CF 凭据），注入子进程 env，不打印值 -----------------------
 const childEnv = childEnvWithCfCreds('provision');
@@ -458,6 +459,40 @@ function writeBindings(d1Ids, kvIds, vectorizeReady) {
   console.log(`\nprovision: wrote bindings into ${wranglerPath}`);
 }
 
+// toolbridge wrangler.jsonc 的 TENANTS KV binding 与 gateway 共享 watt-tenants namespace（同 id）。
+// 独立部署单元故 id 不在 gateway 的 marker 段——单独回填：只替换 TENANTS binding 那行的 "id" 值。
+// 幂等（§14 金标准）：id 未变则 writeFileSync 前先比对，字节一致则不写（保持 MD5 稳定）。
+// id 无效（权限被拒/解析失败）时跳过，保留文件现有 id，不破坏可部署状态。
+function writeToolbridgeKvId(tenantsId) {
+  if (!isValidId(tenantsId)) {
+    console.log('\nprovision: skip toolbridge KV backfill (watt-tenants id unavailable).');
+    return;
+  }
+  let src;
+  try {
+    src = readFileSync(toolbridgeWranglerPath, 'utf8');
+  } catch {
+    console.log(`\nprovision: skip toolbridge KV backfill (${toolbridgeWranglerPath} not found).`);
+    return;
+  }
+  // 定位 TENANTS binding 对象，替换其 "id": "<hex32>"（binding 名锚定，避免误改他处）。
+  const re = /("binding"\s*:\s*"TENANTS"\s*,\s*"id"\s*:\s*")[0-9a-f]{32}(")/i;
+  if (!re.test(src)) {
+    console.error('\nprovision: FAILED to locate TENANTS KV id in toolbridge wrangler.jsonc.');
+    console.error('  期望形如 { "binding": "TENANTS", "id": "<hex32>" }；回填锚点缺失。');
+    process.exit(1);
+  }
+  const next = src.replace(re, `$1${tenantsId}$2`);
+  if (next === src) {
+    console.log(`\nprovision: toolbridge KV id unchanged (id=${tenantsId.slice(0, 8)}…).`);
+    return;
+  }
+  writeFileSync(toolbridgeWranglerPath, next, 'utf8');
+  console.log(
+    `\nprovision: wrote TENANTS KV id into ${toolbridgeWranglerPath} (id=${tenantsId.slice(0, 8)}…).`,
+  );
+}
+
 // ---- 资源名常量 ------------------------------------------------------------------
 const D1_NAMES = ['watt-policies', 'watt-providers', 'watt-audit', 'watt-events', 'watt-context'];
 // 承载 wrangler 原生 d1 migrations 的库 → migrations_dir（bindingsBlock 回填用；见 §14）。
@@ -485,6 +520,7 @@ provisionQueues(QUEUE_NAMES);
 const vectorizeReady = provisionVectorize(VECTORIZE_NAME, VECTORIZE_DIMS, VECTORIZE_METRIC);
 
 writeBindings(d1Ids, kvIds, vectorizeReady);
+writeToolbridgeKvId(kvIds[KV_TENANTS]);
 
 console.log('\n=== summary ===');
 console.log(`created: ${created.length ? created.join(', ') : '(none)'}`);

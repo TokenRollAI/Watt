@@ -21,6 +21,8 @@
     "OAUTH_REQUIRED_AUDIENCE": ""
   },
   "kv_namespaces": [
+    // provision:toolbridge-kv — watt-tenants id 由 scripts/provision.mjs 回填（与 gateway 共享同一
+    // namespace）。回填锚点：脚本按 binding 名 TENANTS 定位本行、替换其中的 "id": "<hex32>"。
     { "binding": "TENANTS", "id": "fdddc1ead658483bac3cc67561f2db39" }
   ]
 }

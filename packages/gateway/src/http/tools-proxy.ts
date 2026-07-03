@@ -12,7 +12,11 @@
  *      则 action=scope 字符串，否则缺省 'invoke'（§6.4d：无 scope → "invoke"）。deny → 403。
  *   3. 树同步：把调用者可见（enabled）的 ToolMount 集合转成上游树 JSON，写入共享 KV（tenant:<id> +
  *      apikey:<hash>），用固定 Secret Key 作 Bearer 转发——树配置的运行时同步（无需重部署）。
- *   4. 转发：service binding fetch，路径重写 /htbp/tools/<rest> → 上游 /htbp/<rest>。
+ *   4. 转发：service binding fetch，路径重写 /htbp/tools/<rest> → 上游 /htbp/<rest>。调用 body 按
+ *      provider 归一化（§6.4d 补丁）：上游用 URL end-path 段定位端点/工具，body 是参数——mcp/builtin
+ *      的 adapter 走 extractArguments（解 {arguments} 信封或整体当参数），http adapter 把 body **整包**
+ *      转发到远端 URL（不解信封）。故对 http provider，代理在转发前拆掉 {arguments} 信封发裸参数，
+ *      否则远端 API 会收到 {arguments:{...}} 包裹（线上 echo 回显掩盖、真实 API 报错的漂移面）。
  *   5. 错误形状转换：上游 {error:{code,message}} → 裸 WattError（CODE_MAP）。
  *   6. 可见性裁剪：~help 的 resources[]/endpoint.tools[] 按调用者对各子 path 的 Check('read') 过滤，
  *      deny 的剔除（最小实现，量级见 trimHelpVisibility 注释）。
@@ -111,24 +115,64 @@ export function buildUpstreamTree(mounts: ToolMount[]): TreeNode {
   return root;
 }
 
-/** hex sha256（KV apikey 键；与上游 tenant.ts sha256Hex 一致）。 */
+/** hex sha256（KV apikey 键 / 树 hash；与上游 tenant.ts sha256Hex 一致）。 */
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// isolate 级同步状态（KV 单键 1 写/秒限制：每请求盲写会撞限流）。
+//   lastTreeHash：上次写入 KV 的树 JSON hash——树未变则跳过 tenant:<id> 写。冷启动为 undefined，
+//     首请求会 get KV 现值算 hash 比对（避免冷启动误重写），仍不匹配才写。
+//   apikeyWritten：apikey:<hash> 常量映射键的 once-guard——写过一次后本 isolate 不再 get/put。
+let lastTreeHash: string | undefined;
+let apikeyWritten = false;
+
+// 测试复位（同文件 isolate 跨用例存活模块级单例，对齐 seed once-guard 复位，toolchain §23）。
+export function resetSyncStateForTests(): void {
+  lastTreeHash = undefined;
+  apikeyWritten = false;
+}
+
 /**
  * 把当前 ToolRegistry 的树写入共享 KV，返回转发用的 Secret Key。
  * 写 tenant:<id>（树 JSON）+ apikey:<hash>（key→tenant 映射），上游按 Secret Key 加载该租户树。
+ *
+ * KV 限流规避（finding 3）：**变更时才写**——树 JSON hash 与 isolate 缓存（或冷启动时 KV 现值）比对，
+ * 变了才 put tenant 键；apikey 常量键只在缺失时写一次（isolate once-guard + KV get 判存在）。
+ * 稳态（树不变的热 isolate）对这两个键零写，不再撞 KV 单键 1 写/秒限制。
  */
 async function syncTenantTree(env: Bindings): Promise<string> {
   const registry = new ToolRegistry(env.DB_PROVIDERS);
   const page = await registry.list({ limit: 200 });
   const mounts = isWattError(page) ? [] : page.items;
-  const tree = buildUpstreamTree(mounts);
-  const hash = await sha256Hex(PROXY_SECRET_KEY);
-  await env.KV_TENANTS.put(`tenant:${PROXY_TENANT_ID}`, JSON.stringify(tree));
-  await env.KV_TENANTS.put(`apikey:${hash}`, JSON.stringify({ tenantId: PROXY_TENANT_ID }));
+  const treeJson = JSON.stringify(buildUpstreamTree(mounts));
+  const treeHash = await sha256Hex(treeJson);
+  const tenantKey = `tenant:${PROXY_TENANT_ID}`;
+
+  if (lastTreeHash !== treeHash) {
+    // isolate 缓存未命中（冷启动/首请求）：先看 KV 现值是否已是同树，是则只更新缓存、不写。
+    if (lastTreeHash === undefined) {
+      const existing = await env.KV_TENANTS.get(tenantKey);
+      if (existing !== null && (await sha256Hex(existing)) === treeHash) {
+        lastTreeHash = treeHash;
+      }
+    }
+    if (lastTreeHash !== treeHash) {
+      await env.KV_TENANTS.put(tenantKey, treeJson);
+      lastTreeHash = treeHash;
+    }
+  }
+
+  if (!apikeyWritten) {
+    const apikeyKey = `apikey:${await sha256Hex(PROXY_SECRET_KEY)}`;
+    const existing = await env.KV_TENANTS.get(apikeyKey);
+    if (existing === null) {
+      await env.KV_TENANTS.put(apikeyKey, JSON.stringify({ tenantId: PROXY_TENANT_ID }));
+    }
+    apikeyWritten = true;
+  }
+
   return PROXY_SECRET_KEY;
 }
 
@@ -174,6 +218,45 @@ function convertUpstreamError(status: number, body: unknown): WattError {
   return wattError(code, message);
 }
 
+/**
+ * 从含 end-path 段的 toolPath 解出对应的 ToolMount：mount.path 是节点路径（如 echo/svc），toolPath
+ * 含端点/工具名（如 echo/svc/ping）。从最长前缀逐级回退 get，命中即返回（对齐上游 findNode 走到叶子、
+ * 剩余段作 adapter sub 的语义）。全不命中 → undefined（provider 未知，body 按 mcp/builtin 默认透传）。
+ */
+async function resolveMount(
+  registry: ToolRegistry,
+  toolPath: string,
+): Promise<ToolMount | undefined> {
+  const segs = toolPath.split('/').filter((s) => s.length > 0);
+  for (let end = segs.length; end >= 1; end--) {
+    const candidate = segs.slice(0, end).join('/');
+    const mount = await registry.get(candidate);
+    if (!isWattError(mount)) return mount;
+  }
+  return undefined;
+}
+
+/**
+ * 按 provider 归一化调用 body（见文件头步骤 4）：CLI 统一发 {arguments:{...}} 信封。
+ * - http：上游 http adapter 把 body **整包**转发到远端 URL（不解信封）→ 代理拆掉信封发裸参数，
+ *   否则远端 API 收到 {arguments:{...}} 包裹（漂移面）。
+ * - mcp/builtin/其他/未知：原样透传——上游 adapter 的 extractArguments 解 {arguments} 信封（或整体
+ *   当参数），透传信封是它期待的形状；未知 provider 也按此保守透传（不猜测远端语义）。
+ */
+function normalizeCallBody(rawBody: string, provider: string | undefined): string {
+  if (provider !== 'http') return rawBody;
+  let parsed: unknown;
+  try {
+    parsed = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    return rawBody; // 非 JSON body 原样透传（上游会自行报错）。
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'arguments' in parsed) {
+    return JSON.stringify((parsed as { arguments?: unknown }).arguments ?? {});
+  }
+  return rawBody;
+}
+
 export function toolsProxyRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars }> {
   const app = new Hono<{ Bindings: Bindings; Variables: AuthVars }>();
 
@@ -206,16 +289,22 @@ async function handle(c: ToolsContext): Promise<Response> {
   const isCall = c.req.method === 'POST' && !isHelp;
   const resource = `tool://${toolPath}`;
 
+  // 调用时按 provider 归一化 body（见文件头步骤 4）：http 拆信封，故先解出 mount 的 provider。
+  // toolPath 含 end-path 段（工具/端点名），mount.path 是节点路径 → 从最长前缀逐级回退匹配。
+  let provider: string | undefined;
+
   // ── Check PEP（§6.4d）─────────────────────────────────────────────────
   // 调用（POST 非 ~help）→ PEP 门禁：action 由 mount 的 scope 决定（无 scope → 'invoke'，§6.4d）；
   // deny → 403。List/~help（read）**不做顶层门禁**——按 Proto §5.1 由 Tool Gateway 对结果做可见性裁剪
   // （见 trimHelpVisibility），根节点始终可发现（§11.3a 渐进发现），无权子节点在响应里剔除。
   if (isCall) {
     let action = 'invoke';
-    // 从 ToolRegistry 查该 path 的 mount：providerConfig.scope 存在则 action=scope（§6.4d），否则 'invoke'。
+    // 从 ToolRegistry 查该 path 的 mount（节点路径，逐级回退去掉 end-path 段）：
+    // providerConfig.scope 存在则 action=scope（§6.4d），否则 'invoke'；provider 供 body 归一化用。
     const registry = new ToolRegistry(c.env.DB_PROVIDERS);
-    const mount = await registry.get(toolPath);
-    if (!isWattError(mount)) {
+    const mount = await resolveMount(registry, toolPath);
+    if (mount) {
+      provider = mount.provider;
       const scope = (mount.providerConfig as { scope?: unknown } | undefined)?.scope;
       if (typeof scope === 'string' && scope.length > 0) action = scope;
     }
@@ -238,10 +327,11 @@ async function handle(c: ToolsContext): Promise<Response> {
     if (isCall) {
       fwdHeaders.set('Content-Type', 'application/json');
       const rawBody = await c.req.raw.text();
+      const body = normalizeCallBody(rawBody, provider);
       upstreamRes = await c.env.TOOLBRIDGE.fetch(upstreamUrl, {
         method: 'POST',
         headers: fwdHeaders,
-        body: rawBody,
+        body,
       });
     } else {
       upstreamRes = await c.env.TOOLBRIDGE.fetch(upstreamUrl, {

@@ -7,7 +7,8 @@
  *    - mount → Write  arguments:{mount:{path, provider, providerConfig?, virtualize?, enabled}}（幂等 upsert §0.4）
  *  - 消费面 → /htbp/tools/<path>（代理到 watt-toolbridge，Check PEP + 裁剪在 gateway tools-proxy）。
  *    - describe → GET  /htbp/tools/<path>/~help（Accept: text/plain）→ text/plain HTBP DSL（人类可读能力清单）
- *    - call     → POST /htbp/tools/<path> `{tool,arguments}`         → {resource,result}（透传上游调用结果）
+ *    - call     → POST /htbp/tools/<path>/<tool> `{arguments}`       → {resource,result}（透传上游调用结果）
+ *      端点/工具名走 URL end-path 段（上游按 path 定位，不读 body 的 tool 字段，toolchain §36）。
  *
  * 响应形状真源：管理面以 gateway packages/gateway/test/platform-tool.test.ts 为准（Get/Write/Update →
  * { mount }；List → 裸 Page{items}）；消费面以 packages/gateway/test/tools-proxy.test.ts 为准（call →
@@ -117,7 +118,14 @@ export async function toolDescribe(
   return res.text();
 }
 
-/** call → POST /htbp/tools/<path> `{tool,arguments}` → {resource,result}（透传上游结果）。 */
+/**
+ * call → POST /htbp/tools/<path>/<tool> `{arguments}` → {resource,result}（透传上游结果）。
+ *
+ * 契约（toolchain §36）：上游用 **URL path 段** 定位端点/工具（http endpoint 名 / mcp·builtin 工具名），
+ * body 是参数信封。故 toolName 拼进 URL 的 end-path 段（不是 body 的 `tool` 字段——上游根本不读它）。
+ * body 用 `{arguments}` 信封：mcp/builtin 上游 extractArguments 解包；http 由 gateway 代理层按 provider
+ * 拆信封发裸参数（http adapter 整包转发，见 tools-proxy.ts 的 provider-aware body 处理）。
+ */
 export async function toolCall(
   base: string,
   token: string,
@@ -128,7 +136,8 @@ export async function toolCall(
 ): Promise<{ resource?: string; result: unknown }> {
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const clean = path.replace(/^\/+|\/+$/g, '');
-  const url = `${base}/htbp/tools/${clean}`;
+  const tool = toolName.replace(/^\/+|\/+$/g, '');
+  const url = `${base}/htbp/tools/${clean}/${encodeURIComponent(tool)}`;
   let res: Response;
   try {
     res = await fetchImpl(url, {
@@ -138,7 +147,7 @@ export async function toolCall(
         'content-type': 'application/json',
         accept: 'application/json',
       },
-      body: JSON.stringify({ tool: toolName, arguments: args }),
+      body: JSON.stringify({ arguments: args }),
     });
   } catch (cause) {
     throw new CliError(
