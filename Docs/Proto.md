@@ -443,7 +443,7 @@ interface AgentFailedPayload {          // Event.type = "agent.failed"
 
 **correlationId 约束**：字符集 `[A-Za-z0-9_-]`、长度 ≤80（平台生成时保证，透传时校验，违规 → `invalid_argument`）——保证净化后的 Workflows 事件名合法（见下）。
 
-> 与 Cloudflare Workflows 的适配（实现注记）：Workflows `waitForEvent` 的事件 type 仅允许 `[A-Za-z0-9_-]` 且 ≤100 字符，不含 `.`。规范映射：**`agent.result` 与 `agent.failed` 进入 Workflows 时归并为同一事件 type** `agent-result-<correlationId>`，payload 携带 `status: 'result' | 'failed'` 与对应 Payload，由步骤代码分支处理——否则等待 result 的步骤永远收不到 failed。人类确认同理：`waitForEvent("task-signal-<checkpoint>")`。另注意 `waitForEvent` 默认超时 24h、上限 365 天：Task 引擎在 `waiting_human`/`waiting_event` 检查点必须显式设置超时并捕获超时异常转为 checkpoint 超时语义（提醒/升级），而非放任 Workflow 实例 failed（Case 1 的上线确认可能挂数天）。净化只发生在 Workflows 适配层，平台层事件名保持点分。
+> 与 Cloudflare Workflows 的适配（实现注记）：Workflows `waitForEvent` 的事件 type 仅允许 `[A-Za-z0-9_-]` 且 ≤100 字符，不含 `.`。规范映射：**`agent.result` 与 `agent.failed` 进入 Workflows 时归并为同一事件 type** `agent-result-<correlationId>`，payload 携带 `status: 'result' | 'failed'` 与对应 Payload，由步骤代码分支处理——否则等待 result 的步骤永远收不到 failed。人类确认同理：`waitForEvent("task-signal-<checkpoint>")`。另注意 `waitForEvent` 默认超时 24h、上限 365 天：Task 引擎在 `waiting_human`/`waiting_event` 检查点必须显式设置超时并捕获超时异常转为 checkpoint 超时语义（提醒/升级），而非放任 Workflow 实例 failed（Case 1 的上线确认可能挂数天）。净化只发生在 Workflows 适配层，平台层事件名保持点分。**超时基线（2026-07-03 实现声明回写，收口 doc-gap #11）**：human checkpoint 的 `waitForEvent` 超时基线 10 分钟、agent 结果等待基线 5 分钟（部署模板可按业务自定义覆盖）；超时按 §3.4 规则 3 的平台代发 failed 语义处理并落 checkpoint 超时留痕。
 
 ---
 
@@ -794,6 +794,8 @@ interface TaskManager {
    *  调用方必须忽略未知 kind */
   ListDefinitions(opts?: ListOptions): Page<{ name: string, kind: 'deployed' | string,
                                               description: string, checkpoints: string[] }>
+  /** checkpoints 名单由部署的模板代码声明（代码部署产物边界，2026-07-03 实现声明回写，
+   *  收口 doc-gap #14）——引擎不做运行时注册，本接口原样返回模板声明。 */
   /** 启动任务：definition 是**不透明引用**（当前解析为已部署模板名；
    *  未来可解析为其他 kind 的定义，调用方无需感知差异） */
   Write(req: { definition: string, input?: unknown, taskId?: string }): TaskInfo
