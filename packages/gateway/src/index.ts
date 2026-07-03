@@ -22,6 +22,8 @@ export { AgentInstance } from './agent/agent-instance.ts';
 export { ContextRegistry } from './context/context-registry.ts';
 // EventRouter DO（M1 订阅表 + Session Mapper）从入口 export，供 wrangler DO 绑定实例化。
 export { EventRouter } from './event/event-router.ts';
+// WattTaskWorkflow（M7 Task 引擎，WorkflowEntrypoint）从入口 export，供 wrangler workflows 绑定实例化。
+export { WattTaskWorkflow } from './task/watt-task-workflow.ts';
 
 /**
  * watt-gateway Worker。
@@ -56,8 +58,9 @@ app.route('/', inboundRoutes());
  * 注意：`/htbp/context` 已在 Phase 3 落地（contextRoutes 消费面 + platformRoutes 管理面），从此表移除。
  * 注意：`/htbp/tools` 已在 Phase 4 落地（toolsProxyRoutes 消费面代理到 watt-toolbridge），从此表移除。
  * 注意：`/htbp/platform/agent` 已在 Phase 4 落地（platformRoutes：AgentRegistry §3.1 + AgentRuntime §3.2），从此表移除。
+ * 注意：`/htbp/platform/task` 已在 Phase 5 落地（platformRoutes：TaskManager §8），从此表移除。
  */
-const SPEC_TREE_PREFIXES = ['/htbp/platform/task', '/htbp/platform/scheduler'];
+const SPEC_TREE_PREFIXES = ['/htbp/platform/scheduler'];
 
 for (const prefix of SPEC_TREE_PREFIXES) {
   const handler = (c: Context) => {

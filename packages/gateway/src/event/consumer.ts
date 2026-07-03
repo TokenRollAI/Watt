@@ -24,11 +24,14 @@
  */
 
 import {
+  type CheckpointDecision as Decision,
   type Event,
   type EventInput,
   eventSchema,
   normalizeEvent,
   type OutboundMessage,
+  parseImActionSignal,
+  parseTaskCheckpoint,
 } from '@watt/core';
 import type { Bindings } from '../env.ts';
 import { defaultAgentDeliverer } from './agent-deliverer.ts';
@@ -39,69 +42,14 @@ import { EventStore } from './event-store.ts';
 
 // DurableObjectStub / MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types），
 // 与 vitest-pool-workers 期望同源（见 env.ts 注释）。
-// payload 形状用手写 type guard 校验（gateway 无直接 zod 依赖——引入 zod 会污染 global lib 类型，
-// 见 toolchain-pitfalls；§1.1 的规范化 payload 形状小而稳，type guard 足够）。
-
-/** decision 三态（§1 ActionButton.signal / §1.1）。 */
-type Decision = 'approve' | 'reject' | 'custom';
-const DECISIONS = new Set<Decision>(['approve', 'reject', 'custom']);
-function isDecision(v: unknown): v is Decision {
-  return typeof v === 'string' && DECISIONS.has(v as Decision);
-}
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
-
-/** TaskCheckpointPayload（§1.1）——task.checkpoint 事件的 payload 形状。 */
-interface TaskCheckpointPayload {
-  taskId: string;
-  checkpoint: string;
-  prompt: string;
-  options: Decision[];
-  notify: { channel: string; target: string };
-}
-function parseTaskCheckpoint(payload: unknown): TaskCheckpointPayload | null {
-  if (!isRecord(payload)) return null;
-  const { taskId, checkpoint, prompt, options, notify } = payload;
-  if (typeof taskId !== 'string' || typeof checkpoint !== 'string' || typeof prompt !== 'string') {
-    return null;
-  }
-  if (!Array.isArray(options) || options.length === 0 || !options.every(isDecision)) return null;
-  if (
-    !isRecord(notify) ||
-    typeof notify.channel !== 'string' ||
-    typeof notify.target !== 'string'
-  ) {
-    return null;
-  }
-  return {
-    taskId,
-    checkpoint,
-    prompt,
-    options,
-    notify: { channel: notify.channel, target: notify.target },
-  };
-}
-
-/** ImActionPayload（§1.1）——im.action 事件的 payload 形状（signal 可选）。 */
-interface ImActionSignal {
-  taskId: string;
-  checkpoint: string;
-  decision: Decision;
-}
-function parseImActionSignal(payload: unknown): ImActionSignal | null {
-  if (!isRecord(payload)) return null;
-  const signal = payload.signal;
-  if (!isRecord(signal)) return null; // 无 signal 或形状不符 → 非人类确认闭环。
-  if (typeof signal.taskId !== 'string' || typeof signal.checkpoint !== 'string') return null;
-  if (!isDecision(signal.decision)) return null;
-  return { taskId: signal.taskId, checkpoint: signal.checkpoint, decision: signal.decision };
-}
+// task.checkpoint / im.action payload 的 type guard 已下沉 core（packages/core/src/task/checkpoint.ts，
+// 语义与旧本地副本一致）——本文件 import 复用，不再维护副本（Phase 5 R20）。
 
 /** im.bot_joined payload（§2.3 规则 2）——需 channel（查 ChannelConfig.defaultAgent）。 */
 function parseBotJoinedChannel(payload: unknown): string | null {
-  if (!isRecord(payload) || typeof payload.channel !== 'string') return null;
-  return payload.channel;
+  if (typeof payload !== 'object' || payload === null) return null;
+  const channel = (payload as { channel?: unknown }).channel;
+  return typeof channel === 'string' ? channel : null;
 }
 
 /** webhook sink 投递抽象（可注入，便于测试）。投递失败抛错 → 触发消息 retry。 */
@@ -124,18 +72,23 @@ export const fetchDeliverer: WebhookDeliverer = {
 };
 
 /**
- * TaskSignaler（§1.1 规则 2 桩）——im.action 且携带 signal 时回调 TaskManager.Signal 的注入点。
- * Phase 2 无 TaskManager/Workflows（Phase 5 落地），生产注入 noopSignaler（仅记日志）；
- * Phase 5 由 Workflows 侧实现真实 Signal。
+ * TaskSignaler（§1.1 规则 2）——im.action 且携带 signal 时的人类确认回调注入点。
+ * signal(taskId, {checkpoint, decision}, principal?)：先 Check(context, task://<taskId>, 'signal')
+ *   （principal 从事件取，见 handleImAction），再 TaskManager.Signal。principal 缺省 → 拒绝
+ *   （人类确认必须有身份，permission_denied）。测试注入 fake 断言 Check/Signal 被调。
  */
 export interface TaskSignaler {
-  signal(taskId: string, args: { checkpoint: string; decision: Decision }): Promise<void>;
+  signal(
+    taskId: string,
+    args: { checkpoint: string; decision: Decision },
+    principal?: string,
+  ): Promise<void>;
 }
 
-/** Phase 2 no-op signaler（记 taskId/checkpoint/decision，真实 Signal 留 Phase 5）。 */
+/** Phase 2 no-op signaler（记 taskId/checkpoint/decision，真实 Signal 见 defaultTaskSignaler）。 */
 export const noopSignaler: TaskSignaler = {
   async signal(taskId, args) {
-    console.log('event consumer: im.action signal (TaskManager.Signal deferred to Phase 5)', {
+    console.log('event consumer: im.action signal (noop signaler)', {
       taskId,
       checkpoint: args.checkpoint,
       decision: args.decision,
@@ -182,7 +135,7 @@ export interface ConsumerDeps {
   genTraceId: () => string;
 }
 
-/** 生产依赖：默认 fetch 投递 + 单例 router + EventStore/Queue/ChannelStore + no-op signaler。 */
+/** 生产依赖：默认 fetch 投递 + 单例 router + EventStore/Queue/ChannelStore + 真实 TaskSignaler。 */
 export function defaultConsumerDeps(env: Bindings): ConsumerDeps {
   return {
     deliverer: fetchDeliverer,
@@ -194,11 +147,60 @@ export function defaultConsumerDeps(env: Bindings): ConsumerDeps {
       },
     },
     channels: new ChannelStore(env.DB_EVENTS),
-    signaler: noopSignaler,
+    signaler: defaultTaskSignaler(env),
     agent: defaultAgentDeliverer(env),
     genId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     genTraceId: () => crypto.randomUUID(),
+  };
+}
+
+/**
+ * 生产 TaskSignaler（§1.1 规则 2 闭环）——Check(context, task://<taskId>, 'signal') → TaskManager.Signal。
+ * principal 从 im.action 事件取（event.principal，§2.3 平台补齐）；缺省 → permission_denied 拒绝
+ *   （人类确认必须有身份，实现声明）。principal 的 roles 经 IdentityMapper.ResolvePrincipal 实时解析
+ *   （§6.3），构造最小 TokenClaims 交 Authorizer.check。Signal conflict/not_found 由 TaskManager 判定，
+ *   此处只记日志不重投（im.action 是即时人类动作，重投无意义）。
+ */
+export function defaultTaskSignaler(env: Bindings): TaskSignaler {
+  return {
+    async signal(taskId, args, principal) {
+      if (principal === undefined) {
+        console.error('event consumer: im.action signal denied (no principal)', {
+          taskId,
+          checkpoint: args.checkpoint,
+        });
+        return;
+      }
+      const { Authorizer } = await import('../authz/authorizer.ts');
+      const { PolicyStore } = await import('../authz/policy-store.ts');
+      const { IdentityMapper } = await import('../authz/identity-mapper.ts');
+      const { TaskManager, defaultManagerDeps } = await import('../task/task-manager.ts');
+      const resolved = await new IdentityMapper(env.DB_POLICIES).resolvePrincipal(principal);
+      const claims = { sub: principal, roles: resolved.roles };
+      const authorizer = new Authorizer(new PolicyStore(env.DB_POLICIES));
+      const decision = await authorizer.check(claims, `task://${taskId}`, 'signal');
+      if (!decision.allow) {
+        console.error('event consumer: im.action signal denied by authorizer', {
+          taskId,
+          principal,
+          reason: decision.reason,
+        });
+        return;
+      }
+      const manager = new TaskManager(defaultManagerDeps(env));
+      const res = await manager.signal(taskId, {
+        checkpoint: args.checkpoint,
+        decision: args.decision,
+      });
+      if (res && 'code' in res) {
+        console.error('event consumer: im.action signal rejected by TaskManager', {
+          taskId,
+          checkpoint: args.checkpoint,
+          code: res.code,
+        });
+      }
+    },
   };
 }
 
@@ -261,18 +263,18 @@ async function handleTaskCheckpoint(event: Event, deps: ConsumerDeps): Promise<v
 }
 
 /**
- * §1.1 规则 2：im.action 且 payload.signal 存在 → 调 TaskSignaler 桩。
- * 权限校验点 Check(context, task://<taskId>, 'signal')：Phase 2 无 TaskManager 无从校验，
- * TODO——Signal 真实接上（Phase 5）时一并做。payload 不合形状 / 无 signal → 静默跳过。
+ * §1.1 规则 2：im.action 且 payload.signal 存在 → Check(task://<taskId>,'signal') → TaskManager.Signal。
+ * principal 从 event.principal 取（§2.3 平台补齐）并传给 signaler（其内做 Check + Signal，见
+ *   defaultTaskSignaler）。payload 不合形状 / 无 signal → 静默跳过（非人类确认闭环）。
  */
 async function handleImAction(event: Event, deps: ConsumerDeps): Promise<void> {
   const signal = parseImActionSignal(event.payload);
   if (signal === null) return; // 无 signal 的 im.action / 形状不符：非人类确认闭环，不触发 Signal。
-  // TODO(Phase 5): Check(context, task://<signal.taskId>, 'signal') 后再调 Signal。
-  await deps.signaler.signal(signal.taskId, {
-    checkpoint: signal.checkpoint,
-    decision: signal.decision,
-  });
+  await deps.signaler.signal(
+    signal.taskId,
+    { checkpoint: signal.checkpoint, decision: signal.decision },
+    event.principal,
+  );
 }
 
 /**

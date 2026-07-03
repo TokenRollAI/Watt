@@ -34,6 +34,16 @@ import {
   providerSetDefault,
 } from './provider.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
+import {
+  formatDefinitionListHuman as formatTaskDefsHuman,
+  formatTaskListHuman,
+  taskCancel,
+  taskDefs,
+  taskGet,
+  taskList,
+  taskRun,
+  taskSignal,
+} from './task.ts';
 import { formatMountListHuman, toolCall, toolDescribe, toolList, toolMount } from './tool.ts';
 import { formatWhoamiHuman, whoami } from './whoami.ts';
 
@@ -829,6 +839,103 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const items = await agentTree(base, token, root, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(items));
       else out(formatInstanceTreeHuman(items));
+    });
+
+  // ── watt task（§8 TaskManager；DoD §7 CLI 五动词 list|get|run|signal|cancel + defs）─────
+  const task = program
+    .command('task')
+    .description('Manage tasks (TaskManager: Workflows-backed long-running tasks)');
+  task
+    .command('list')
+    .description('List tasks (TaskManager.List)')
+    .option('--state <state>', 'filter by state (pending|running|waiting_human|...)')
+    .option('--definition <name>', 'filter by definition')
+    .option('--limit <n>', 'max results')
+    .action(async (cmdOpts: { state?: string; definition?: string; limit?: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const filter: { state?: string; definition?: string; limit?: number } = {};
+      if (cmdOpts.state !== undefined) filter.state = cmdOpts.state;
+      if (cmdOpts.definition !== undefined) filter.definition = cmdOpts.definition;
+      if (cmdOpts.limit !== undefined) filter.limit = parsePositiveInt(cmdOpts.limit, '--limit');
+      const tasks = await taskList(base, token, filter, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(tasks));
+      else out(formatTaskListHuman(tasks));
+    });
+  task
+    .command('get')
+    .description('Get task detail (TaskManager.Get)')
+    .argument('<taskId>', 'task id')
+    .action(async (taskId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const detail = await taskGet(base, token, taskId, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(detail));
+      else out(JSON.stringify(detail, null, 2));
+    });
+  task
+    .command('run')
+    .description('Start a task (TaskManager.Write; run is the CLI verb per DoD §7)')
+    .argument('<definition>', 'deployed template name (see `watt task defs`)')
+    .option('--input <json>', 'initial input as a JSON value')
+    .option('--task-id <id>', 'explicit task id (idempotent start)')
+    .action(async (definition: string, cmdOpts: { input?: string; taskId?: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const request: { definition: string; input?: unknown; taskId?: string } = { definition };
+      if (cmdOpts.input !== undefined) request.input = parseJsonOpt(cmdOpts.input, '--input');
+      if (cmdOpts.taskId !== undefined) request.taskId = cmdOpts.taskId;
+      const info = await taskRun(base, token, request, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(info));
+      else out(`Started ${info.taskId} (${info.definition}, state=${info.state})`);
+    });
+  task
+    .command('signal')
+    .description('Signal a waiting task (TaskManager.Signal; human confirmation)')
+    .argument('<taskId>', 'task id')
+    .requiredOption('--checkpoint <name>', 'checkpoint name (e.g. confirm-plan)')
+    .requiredOption('--decision <decision>', 'approve | reject | custom')
+    .option('--payload <json>', 'extra payload as a JSON value')
+    .action(
+      async (
+        taskId: string,
+        cmdOpts: { checkpoint: string; decision: string; payload?: string },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const signal: { checkpoint: string; decision: string; payload?: unknown } = {
+          checkpoint: cmdOpts.checkpoint,
+          decision: cmdOpts.decision,
+        };
+        if (cmdOpts.payload !== undefined) {
+          signal.payload = parseJsonOpt(cmdOpts.payload, '--payload');
+        }
+        await taskSignal(base, token, taskId, signal, { fetch: opts.fetch });
+        if (asJson()) out(JSON.stringify({ signalled: true }));
+        else out(`Signalled ${taskId} @${cmdOpts.checkpoint} (${cmdOpts.decision})`);
+      },
+    );
+  task
+    .command('cancel')
+    .description('Cancel a task (TaskManager.Cancel)')
+    .argument('<taskId>', 'task id')
+    .option('--reason <reason>', 'cancellation reason')
+    .action(async (taskId: string, cmdOpts: { reason?: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      await taskCancel(base, token, taskId, cmdOpts.reason, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify({ cancelled: true }));
+      else out(`Cancelled ${taskId}`);
+    });
+  task
+    .command('defs')
+    .description('List deployed task definitions (TaskManager.ListDefinitions)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const defs = await taskDefs(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(defs));
+      else out(formatTaskDefsHuman(defs));
     });
 
   // ── watt provider（§9 ModelProviderRegistry 最小版）──────────────────────────

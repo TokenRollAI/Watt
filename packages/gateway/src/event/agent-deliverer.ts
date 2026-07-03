@@ -22,6 +22,7 @@ import type { AgentCorrelation } from '../agent/agent-correlation.ts';
 import type { AgentInstance, AgentInstanceRpc } from '../agent/agent-instance.ts';
 import { AgentRuntime, defaultRuntimeDeps } from '../agent/agent-runtime.ts';
 import type { Bindings } from '../env.ts';
+import { deliverTaskResult, toMergedResultPayload } from '../task/task-events.ts';
 import type { AgentDeliverer } from './consumer.ts';
 
 const AGENT_RESULT_TYPE = 'agent.result';
@@ -81,11 +82,15 @@ export function defaultAgentDeliverer(env: Bindings): AgentDeliverer {
         }
         await corr.confirmDelivery(correlationId); // 投递成功才 settle。
       } else {
-        // Task 等待方 → Phase 5 Workflows waitForEvent（占位）；视为已投递直接 confirm。
-        console.log('agent deliverer: task waiter delivery deferred to Phase 5', {
-          correlationId,
-          waiter: waiter.id,
-        });
+        // 规则 1（task waiter）：归并投递到 Task 的 Workflow 实例 waitForEvent（M7 fan-in）。
+        // waiter.id = taskId（= Workflows instance id）。投递成功才 confirm；失败回滚 + 抛错重放
+        // （与 agent waiter 同纪律，2026-07-03 MAJOR：不吞错 ack 否则结果永久丢失）。
+        try {
+          await deliverTaskResult(env, waiter.id, correlationId, toMergedResultPayload(event));
+        } catch (err) {
+          await corr.rollbackDelivery(correlationId);
+          throw err;
+        }
         await corr.confirmDelivery(correlationId);
       }
     },

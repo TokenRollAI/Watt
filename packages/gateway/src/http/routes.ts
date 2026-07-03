@@ -30,8 +30,10 @@ import {
   modelProviderSchema,
   namespaceMountSchema,
   policySchema,
+  signalRequestSchema,
   spawnRequestSchema,
   subscriptionSchema,
+  taskWriteRequestSchema,
   toolMountSchema,
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
@@ -51,6 +53,8 @@ import type { Bindings } from '../env.ts';
 import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/channel-store.ts';
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
+import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
+import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
 import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
 import { type AuthVars, authMiddleware } from './auth.ts';
 import { forbiddenResponse, wattErrorResponse } from './errors.ts';
@@ -63,6 +67,7 @@ const RES_CONTEXT = 'platform://context';
 const RES_TOOL = 'platform://tool';
 const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
+const RES_TASK = 'platform://task';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -834,6 +839,121 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         const opts = (args.opts ?? {}) as { limit?: number; tree?: string };
         const page = await runtime.listInstances(opts);
         return c.json(page);
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/task → TaskManager（§8）────────────────────────────
+  // 七动词 List/Get/ListDefinitions/Write/Update/Cancel/Signal。
+  // tool → action（§6.4d）：List/Get/ListDefinitions=read；Write/Update/Cancel=manage；
+  //   Signal=signal（独立 action，与 §1.1 规则 2 的 Check(task://,'signal') 同名——人类确认是
+  //   与"管理任务定义/生命周期"不同的授权维度，故不并入 manage）。资源 platform://task。
+  const TASK_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    ListDefinitions: 'read',
+    Write: 'manage',
+    Update: 'manage',
+    Cancel: 'manage',
+    Signal: 'signal',
+  };
+  app.post('/htbp/platform/task', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? TASK_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_TASK, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://task');
+    }
+
+    const manager = new TaskManager(defaultManagerDeps(c.env));
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as TaskListOptions;
+        const page = await manager.list(opts);
+        if (isWattError(page)) return wattErrorResponse(c, page);
+        return c.json(page);
+      }
+      case 'Get': {
+        const taskId = args.taskId;
+        if (typeof taskId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'taskId is required', false));
+        }
+        const detail = await manager.get(taskId);
+        if (isWattError(detail)) return wattErrorResponse(c, detail);
+        return c.json({ task: detail });
+      }
+      case 'ListDefinitions': {
+        return c.json(manager.listDefinitions());
+      }
+      case 'Write': {
+        const parsed = taskWriteRequestSchema.safeParse(args.request);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid task request: ${parsed.error.message}`, false),
+          );
+        }
+        // createdBy = 调用方 principal（claims.sub，§8 TaskInfo.createdBy）——非入参，防伪造。
+        const info = await manager.write(parsed.data, claims.sub);
+        if (isWattError(info)) return wattErrorResponse(c, info);
+        return c.json({ task: info });
+      }
+      case 'Update': {
+        const taskId = args.taskId;
+        if (typeof taskId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'taskId is required', false));
+        }
+        const patch = (args.patch ?? {}) as { note?: string };
+        const info = await manager.update(taskId, patch);
+        if (isWattError(info)) return wattErrorResponse(c, info);
+        return c.json({ task: info });
+      }
+      case 'Cancel': {
+        const taskId = args.taskId;
+        if (typeof taskId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'taskId is required', false));
+        }
+        const reason = typeof args.reason === 'string' ? args.reason : undefined;
+        const res = await manager.cancel(taskId, reason);
+        if (res && isWattError(res)) return wattErrorResponse(c, res);
+        return c.json({ cancelled: true });
+      }
+      case 'Signal': {
+        const taskId = args.taskId;
+        if (typeof taskId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'taskId is required', false));
+        }
+        const parsed = signalRequestSchema.safeParse(args.signal);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid signal: ${parsed.error.message}`, false),
+          );
+        }
+        const res = await manager.signal(taskId, parsed.data);
+        if (res && isWattError(res)) return wattErrorResponse(c, res);
+        return c.json({ signalled: true });
       }
     }
   });

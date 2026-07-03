@@ -76,8 +76,22 @@ describe('notFound / onError bare WattError contract (§0.2 / §11.3)', () => {
     expect(body.retryable).toBe(false);
   });
 
-  it('remaining unimplemented platform subtrees (task/scheduler) still return 501 unavailable', async () => {
-    for (const path of ['/htbp/platform/task', '/htbp/platform/scheduler']) {
+  it('Phase 5 implemented platform/task is no longer 501 — requires auth (401 without token)', async () => {
+    // /htbp/platform/task 已在 Phase 5 落地（TaskManager §8），从 SPEC_TREE_PREFIXES 移除；
+    // 无 token → 401（认证中间件），不再 501。
+    const res = await SELF.fetch('https://gateway.test/htbp/platform/task', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tool: 'ListDefinitions', arguments: {} }),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { code: string; retryable: boolean };
+    expect(body.code).toBe('permission_denied');
+    expect(body.retryable).toBe(false);
+  });
+
+  it('remaining unimplemented platform subtrees (scheduler) still return 501 unavailable', async () => {
+    for (const path of ['/htbp/platform/scheduler']) {
       const res = await SELF.fetch(`https://gateway.test${path}`, { method: 'POST' });
       expect(res.status).toBe(501);
       const body = (await res.json()) as { code: string };

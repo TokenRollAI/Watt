@@ -21,10 +21,13 @@ import type { AgentCorrelation } from './agent/agent-correlation.ts';
 import type { AgentInstance } from './agent/agent-instance.ts';
 import type { ContextRegistry } from './context/context-registry.ts';
 import type { EventRouter } from './event/event-router.ts';
+import type { TaskWorkflowParams } from './task/watt-task-workflow.ts';
 
 // DurableObjectNamespace 用 tsconfig types 里的 @cloudflare/workers-types ambient global 声明
 // （非 import 版本），与 vitest-pool-workers 的 runInDurableObject 期望的 DurableObjectStub
 // 同源，避免 import 版本与 ambient 版本的 Disposable 分支类型冲突。
+// Workflow<PARAMS> 同理用 ambient global（@cloudflare/workers-types index.d.ts 的 declare abstract
+// class Workflow）——非 module export，不能 import，与 DurableObjectNamespace 同源处理。
 
 export interface Bindings {
   // D1
@@ -58,6 +61,10 @@ export interface Bindings {
   //   AGENT_CORRELATION：correlation 等待表（§3.4 定向回送/超时/终止代发，单例 idFromName('correlation')）。
   AGENT_INSTANCE: DurableObjectNamespace<AgentInstance>;
   AGENT_CORRELATION: DurableObjectNamespace<AgentCorrelation>;
+
+  // Workflows（M7 Task 引擎，Phase 5）：WattTaskWorkflow（§8 TaskManager / §3.4 Workflows 适配）。
+  //   TaskManager 服务经 env.WATT_TASK.create/get/... 编排任务实例；params 见 watt-task-workflow.ts。
+  WATT_TASK: Workflow<TaskWorkflowParams>;
 
   // secrets / vars
   WATT_JWT_PRIVATE_JWK?: string;

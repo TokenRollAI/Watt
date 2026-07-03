@@ -97,6 +97,14 @@
   "services": [
     { "binding": "TOOLBRIDGE", "service": "watt-toolbridge" }
   ],
+  // Workflows（marker 段外——Workflows 绑定不是 provision 管的 storage 资源，手写在此）。
+  //   M7 WattTaskWorkflow：Task 引擎（Cloudflare Workflows，§8 TaskManager / §3.4 Workflows 适配）。
+  //   单一 WorkflowEntrypoint 子类按 params.definition 分派模板（deep-research / auto-delivery-lite）；
+  //   binding WATT_TASK（src/env.ts），从 gateway Worker export（同 EventRouter 的 export 模式）。
+  //   附B 命名 watt-task。
+  "workflows": [
+    { "name": "watt-task", "binding": "WATT_TASK", "class_name": "WattTaskWorkflow" }
+  ],
   // Durable Objects（marker 段外——DO 绑定不是 provision 管的 storage 资源，故手写在此，
   // provision 重跑只覆写 marker 段内内容，不触碰此处）。
   //   M1 EventRouter：订阅表 + Session Mapper。

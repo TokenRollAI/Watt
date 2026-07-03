@@ -122,9 +122,15 @@ export class AgentRuntime {
    * definition 未注册 → not_found；instanceKey 缺省从 (definition, session/event/singleton) 推
    *   （但 SpawnRequest 无 subscription sink，故缺省用 singleton 键 agent:<def>#singleton）。
    * parent 存在 → 记父子关系（父 addChild）+ expect 时 correlation waiter=父实例（规则 2 自动回父）。
+   * taskWaiter 存在 → expect 的 correlation waiter=该 Task（kind='task'，§3.4 规则 1）：子实例结果
+   *   经 consumer.routeResult → correlation → env.WATT_TASK.get(taskWaiter).sendEvent 回 Workflow
+   *   实例的 waitForEvent（M7 Task fan-in）。parent 与 taskWaiter 互斥（Task 派发的 agent 无父实例）。
    * expect 存在 → correlation register + 返 correlationId。
    */
-  async spawn(req: SpawnRequest, opts: { parent?: string } = {}): Promise<SpawnResult | WattError> {
+  async spawn(
+    req: SpawnRequest,
+    opts: { parent?: string; taskWaiter?: string } = {},
+  ): Promise<SpawnResult | WattError> {
     const def = await this.registry.get(req.definition);
     if ('code' in def) return def; // not_found
 
@@ -158,13 +164,14 @@ export class AgentRuntime {
 
     const result: SpawnResult = { instance: toInfo(instanceKey, state) };
 
-    // expect：correlation register（waiter=父实例 → 子结果自动回父，规则 2；无父则 waiter=自身实例）。
+    // expect：correlation register。waiter 优先级：taskWaiter（Task fan-in，规则 1）＞父实例
+    //   （派生自动回父，规则 2）＞自身实例（无父的独立调用）。
     if (req.expect !== undefined) {
-      const cid = await this.registerCorrelation(
-        req.expect,
-        { kind: 'agent', id: opts.parent ?? instanceKey },
-        instanceKey,
-      );
+      const waiter: Waiter =
+        opts.taskWaiter !== undefined
+          ? { kind: 'task', id: opts.taskWaiter }
+          : { kind: 'agent', id: opts.parent ?? instanceKey };
+      const cid = await this.registerCorrelation(req.expect, waiter, instanceKey);
       if ('code' in cid) return cid;
       result.correlationId = cid.correlationId;
       // 子实例产结果时需带此 correlationId：Spawn 后立即 send 触发 harness（input 已在 state）。
