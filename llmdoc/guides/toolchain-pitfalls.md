@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -228,3 +228,28 @@
 ## 40. R2 条件写用 `.etag`，不是 `.httpEtag`
 
 - R2 对象的 `httpEtag` 带双引号（HTTP 头格式），传给 `onlyIf: { etagMatches }` 会匹配失败/报错；条件写必须用**裸 `.etag`** 字段（gateway `src/context/providers/object.ts` 即此写法）。
+
+## 41. 本地 Workflows 实例 hibernate 时 `status()` 仍报 running
+
+- 现象：vitest-pool-workers 里 Workflows 实例在 `step.waitForEvent` 处 hibernate，`instance.status()` 仍报 `'running'`——靠 `waitForStatus('waiting')` 的断言永远等不到。
+- 解法：测试断言以 **TaskStore 状态表为真源**（`waiting_human` 由引擎步骤落库，是平台对外可查的权威态），轮询状态表而非 instance.status（gateway `test/workflow-task.test.ts` 的 `waitForCheckpoint` 即此写法）。
+
+## 42. step.do / waitForEvent 泛型 `T extends Rpc.Serializable<T>` 的类型约束
+
+- bare `unknown` 不满足约束；递归 JSON 类型（`Json = ... | Json[]` 类）会触发 **TS2589 深实例化超限**。
+- 解法：事件 payload 用**一层深的 FlatRecord**（`{ [k: string]: string|number|boolean|null }`，见 `watt-task-workflow.ts` L80-92）——顶层判定够用；嵌套结构的全量不在 Workflow 侧读，存 TaskStore 时用 `unknown` 承载。
+
+## 43. agents 包无 cron 解析纯函数导出
+
+- `agents/schedule` 只导出给 LLM 生成用的 zod schema（cron 当 `z.string()` 透传）；内部 `getNextCronTime` 依赖第三方 cron-schedule 库但**未 re-export 为纯函数**。
+- 后果：core（零运行时依赖）需要 cron 解析时无现成导出可用——自实现分钟级五段子集（`core/src/task/cron.ts`，子集边界与拒绝面在文件头声明）。
+
+## 44. Dynamic Worker Loader：本地无绑定 + env 字段 structured clone 拒收
+
+- ① **本地 vitest-pool-workers 无 LOADER 绑定**（wrangler worker-loader binding 线上 open beta——DJJ 账户已开通实证；本地 workerd 未在 pool-workers 暴露）——依赖 LOADER 的路径必须做成**可注入降级**（ScriptRunner 抽象：生产真 isolate / 测试 fake，见 `gateway/src/scheduler/script-runner.ts` 与 [../memory/decisions/scheduler-script-runner.md](../memory/decisions/scheduler-script-runner.md)）。
+- ② **loader 的 `env` 字段走 structured clone**：plain object 的闭包函数和 **RpcTarget 实例都会被拒**（线上部署冒烟两次实测 "could not be cloned"）。能力 binding 必须经 **entrypoint RPC 调用参数**传入——Cap'n Web 只在 RPC 边界把 RpcTarget 转 stub；故脚本入口约定 `run(watt)` 参数注入（script-runner.ts 文件头有完整迭代记录）。
+
+## 45. getAgentByName 的 stub 直接传 runInDurableObject，勿 cast 成实例类
+
+- `getAgentByName` 返回 DO stub；传给 `runInDurableObject(stub, fn)` 时直接用 stub 类型即可，fn 参数里才是真实 instance。
+- 把 stub cast 成实例类会撞类型冲突（如 `name` 属性：实例类是 `string`，stub 包装后是 `Promise<string>`）——与 §31 的 RPC 包装破坏收窄同源（gateway `test/scheduler-hub.test.ts` 即正确写法）。
