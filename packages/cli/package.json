@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.68.0",
     "@watt/core": "workspace:*",
     "@watt/shared": "workspace:*",
     "commander": "14.0.2"

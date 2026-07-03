@@ -19,6 +19,7 @@ import {
   requireToken,
   resolveToken,
 } from './client.ts';
+import { connectFeishu, consoleLogger, runSupervisor } from './connect.ts';
 import {
   contextGet,
   contextList,
@@ -42,7 +43,13 @@ import { CliError, readEnv } from './env.ts';
 import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatMetricsHuman, metricsQuery } from './metrics.ts';
-import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
+import {
+  formatPolicyListHuman,
+  policyAdd,
+  policyList,
+  policyMapIdentity,
+  policyRm,
+} from './policy.ts';
 import {
   formatProviderListHuman,
   providerAdd,
@@ -352,6 +359,28 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       if (asJson()) out(JSON.stringify(result));
       else out(`Removed policy ${id}`);
     });
+  policy
+    .command('map')
+    .description('Map a channel identity to a principal (IdentityMapper.Resolve, §6.3)')
+    .requiredOption('--channel <channel>', 'e.g. feishu')
+    .requiredOption('--channel-user-id <id>', 'channel-native user id, e.g. feishu open_id')
+    .requiredOption('--principal <principal>', 'e.g. user:alice')
+    .action(async (cmdOpts: { channel: string; channelUserId: string; principal: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const result = await policyMapIdentity(
+        base,
+        token,
+        {
+          channel: cmdOpts.channel,
+          channelUserId: cmdOpts.channelUserId,
+          principal: cmdOpts.principal,
+        },
+        { fetch: opts.fetch },
+      );
+      if (asJson()) out(JSON.stringify(result));
+      else out(`Mapped ${result.channel}:${result.channelUserId} -> ${result.principal}`);
+    });
 
   const audit = program.command('audit').description('Inspect the audit log');
   audit
@@ -547,6 +576,37 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
         else out(`Set channel ${written.id}`);
       },
     );
+  channel
+    .command('connect')
+    .description(
+      'Host a feishu WS long connection locally, forwarding events to the platform (§2.1 push)',
+    )
+    .argument(
+      '<channelId>',
+      'channel id (informational; creds from FEISHU_APP_ID/FEISHU_APP_SECRET env)',
+    )
+    .action(async (channelId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const procEnv = opts.env ?? process.env;
+      const appId = procEnv.FEISHU_APP_ID?.trim();
+      const appSecret = procEnv.FEISHU_APP_SECRET?.trim();
+      if (!appId || !appSecret) {
+        throw new CliError('FEISHU_APP_ID and FEISHU_APP_SECRET must be set to connect', 2);
+      }
+      err(`watt connect: channel ${channelId} → ${base}`);
+      const domain = procEnv.FEISHU_BASE_URL?.trim();
+      await runSupervisor({
+        connectOnce: () =>
+          connectFeishu(
+            base,
+            token,
+            { appId, appSecret, ...(domain ? { domain } : {}) },
+            consoleLogger,
+          ),
+        logger: consoleLogger,
+      });
+    });
 
   const context = program
     .command('context')

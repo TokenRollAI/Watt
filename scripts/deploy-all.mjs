@@ -171,7 +171,7 @@ function checkGatewaySecrets() {
   // secret list 输出可能是 JSON 数组或 name 行；用 substring 匹配名字（避开 env-token banner，§7）。
   const listed = `${res.stdout ?? ''}`;
   const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL'];
-  const OPTIONAL = ['ANTHROPIC_API_KEY'];
+  const OPTIONAL = ['ANTHROPIC_API_KEY', 'FEISHU_APP_ID', 'FEISHU_APP_SECRET'];
   const missingReq = REQUIRED.filter((n) => !listed.includes(n));
   const missingOpt = OPTIONAL.filter((n) => !listed.includes(n));
   if (missingReq.length) {
@@ -182,7 +182,7 @@ function checkGatewaySecrets() {
   }
   if (missingOpt.length) {
     console.warn(
-      `deploy-all: note — gateway 缺可选 secret: ${missingOpt.join(', ')}（@llm agent 路径不可用，非阻断）。`,
+      `deploy-all: note — gateway 缺可选 secret: ${missingOpt.join(', ')}（相关路径不可用：ANTHROPIC_API_KEY→@llm agent，FEISHU_APP_*→飞书出站；非阻断）。`,
     );
   }
   if (!missingReq.length && !missingOpt.length) {

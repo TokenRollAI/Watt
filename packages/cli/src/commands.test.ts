@@ -168,6 +168,40 @@ describe('watt policy', () => {
     expect(code).toBe(0);
     expect((calls[0] as { tool: string }).tool).toBe('Delete');
   });
+
+  it('map sends MapIdentity with channel/channelUserId/principal', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, body: JSON.parse(init.body as string) });
+      return jsonResponse({ channel: 'feishu', channelUserId: 'ou_a', principal: 'user:alice' });
+    }) as unknown as typeof globalThis.fetch;
+    const out: string[] = [];
+    const code = await run(
+      [
+        'policy',
+        'map',
+        '--channel',
+        'feishu',
+        '--channel-user-id',
+        'ou_a',
+        '--principal',
+        'user:alice',
+      ],
+      { env: ENV, fetch, stdout: (l) => out.push(l) },
+    );
+    expect(code).toBe(0);
+    const body = calls[0]?.body as {
+      tool: string;
+      arguments: { channel: string; channelUserId: string; principal: string };
+    };
+    expect(body.tool).toBe('MapIdentity');
+    expect(body.arguments).toEqual({
+      channel: 'feishu',
+      channelUserId: 'ou_a',
+      principal: 'user:alice',
+    });
+    expect(calls[0]?.url).toContain('/htbp/platform/policy');
+  });
 });
 
 describe('watt audit list', () => {
@@ -340,5 +374,17 @@ describe('token resolution order', () => {
       stdout: () => {},
     });
     expect(seen[0]).toBe('Bearer file-token');
+  });
+});
+
+describe('watt channel connect', () => {
+  it('missing FEISHU creds → exit 2', async () => {
+    const errs: string[] = [];
+    const code = await run(['channel', 'connect', 'feishu-main'], {
+      env: { WATT_BASE_URL: 'https://x', WATT_TOKEN: 'tok' },
+      stderr: (l) => errs.push(l),
+    });
+    expect(code).toBe(2);
+    expect(errs.join('\n')).toContain('FEISHU_APP_ID');
   });
 });

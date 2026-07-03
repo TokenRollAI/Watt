@@ -71,6 +71,33 @@ export async function policyRm(
   return (await htbpCall(base, token, 'policy', 'Delete', { id }, deps)) as { deleted: true };
 }
 
+export interface MapIdentityResult {
+  channel: string;
+  channelUserId: string;
+  principal: string;
+}
+
+/**
+ * `watt policy map`：绑定渠道身份 → principal（IdentityMapper.Resolve 数据面，§6.3）。
+ * tool:"MapIdentity"，arguments:{channel, channelUserId, principal}。返回体真源 = gateway 路由
+ * { channel, channelUserId, principal }（精确解包，禁双形态兜底）。
+ */
+export async function policyMapIdentity(
+  base: string,
+  token: string,
+  input: MapIdentityResult,
+  deps: HttpDeps = {},
+): Promise<MapIdentityResult> {
+  return (await htbpCall(
+    base,
+    token,
+    'policy',
+    'MapIdentity',
+    { channel: input.channel, channelUserId: input.channelUserId, principal: input.principal },
+    deps,
+  )) as MapIdentityResult;
+}
+
 export function formatPolicyListHuman(policies: Policy[]): string {
   if (!policies.length) return '(no policies)';
   return policies
