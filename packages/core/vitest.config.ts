@@ -14,6 +14,7 @@ export default defineConfig({
         'src/event/**/*.ts',
         'src/eventbus/**/*.ts',
         'src/auth/**/*.ts',
+        'src/agent/**/*.ts',
       ],
       exclude: ['src/**/*.test.ts', 'src/**/index.ts'],
       thresholds: {

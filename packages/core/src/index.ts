@@ -1,5 +1,43 @@
 // @watt/core — 平台核心纯逻辑（判定算法 + Event 信封 + JWT 签发/验签）。无 Cloudflare 绑定、无 I/O。
 
+// Agent Runtime 纯逻辑（§3.1 / §3.2 / §3.4）——resolveInstanceKey 已由 eventbus 段导出，
+// agent 桶不重复转出（其内部复用同一函数）。
+export {
+  AGENT_EVENT_TYPES,
+  type AgentDefinition,
+  type AgentEntry,
+  type AgentFailedPayload,
+  type AgentFailedReason,
+  type AgentResultPayload,
+  type AgentRuntimeKind,
+  agentDefinitionSchema,
+  agentEntrySchema,
+  agentFailedPayloadSchema,
+  agentFailedReasonSchema,
+  agentResultPayloadSchema,
+  agentRuntimeSchema,
+  type CorrelationTable,
+  DEFAULT_MAX_ATTEMPTS,
+  type ExpectSpec,
+  expectSpecSchema,
+  type FailedEventDeps,
+  type GenIdFn,
+  genCorrelationId,
+  InMemoryCorrelationTable,
+  invalidOutputFailure,
+  type RouteDecision,
+  routeAgentEvent,
+  type SchemaViolation,
+  type SpawnRequest,
+  shouldRetry,
+  spawnRequestSchema,
+  terminatedFailedEvent,
+  timeoutFailedEvent,
+  type ValidateOutcome,
+  validateAgentOutput,
+  validateCorrelationId,
+  type Waiter,
+} from './agent/index.ts';
 // 设备授权 device flow（§6.5d，RFC 8628 最小子集）
 export {
   type CreateDeviceGrantInput,
@@ -23,7 +61,6 @@ export {
   type RandomBytesFn,
   type TokenExchangeOutcome,
 } from './auth/device-flow.ts';
-
 // JWT（§6.4a / §6.5a / §11.2）
 export {
   buildJwks,
