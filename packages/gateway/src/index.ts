@@ -10,6 +10,7 @@ import { contextRoutes } from './http/context-routes.ts';
 import { inboundRoutes } from './http/inbound.ts';
 import { oauthRoutes } from './http/oauth.ts';
 import { platformRoutes } from './http/routes.ts';
+import { toolsProxyRoutes } from './http/tools-proxy.ts';
 
 // MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types）。
 
@@ -49,12 +50,12 @@ app.route('/', inboundRoutes());
  * 命中 → 501 unavailable、retryable:false（"重试无意义，需等实现落地"，Proto §0.2 补充）。
  * 注意：`/htbp/platform/event` 已在 Phase 2 落地（platformRoutes），从此表移除。
  * 注意：`/htbp/context` 已在 Phase 3 落地（contextRoutes 消费面 + platformRoutes 管理面），从此表移除。
+ * 注意：`/htbp/tools` 已在 Phase 4 落地（toolsProxyRoutes 消费面代理到 watt-toolbridge），从此表移除。
  */
 const SPEC_TREE_PREFIXES = [
   '/htbp/platform/agent',
   '/htbp/platform/task',
   '/htbp/platform/scheduler',
-  '/htbp/tools',
 ];
 
 for (const prefix of SPEC_TREE_PREFIXES) {
@@ -76,6 +77,10 @@ app.route('/', platformRoutes());
 // Phase 3：Context Layer 消费面（§4.1 四动词 + Search + ~help）。
 // contextRoutes 内部自管认证顺序：GET .../~help 免认证注册在认证中间件之前（§11.3a 渐进发现）。
 app.route('/', contextRoutes());
+
+// Phase 4：Tool Layer 消费面（§5.1 List/描述/调用）——代理到 watt-toolbridge（service binding）。
+// toolsProxyRoutes 内部认证 + Check PEP（tool://<path>）+ 错误形状转换 + ~help 可见性裁剪。
+app.route('/', toolsProxyRoutes());
 
 // Phase 1：CLI 设备授权 device flow（§6.5d，RFC 8628）。
 app.route('/', oauthRoutes());

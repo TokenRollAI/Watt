@@ -18,7 +18,7 @@ import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from 
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatPolicyListHuman, policyAdd, policyList, policyRm } from './policy.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
-import { formatMountListHuman, toolList, toolMount } from './tool.ts';
+import { formatMountListHuman, toolCall, toolDescribe, toolList, toolMount } from './tool.ts';
 import { formatWhoamiHuman, whoami } from './whoami.ts';
 
 /** commander 的可重复选项收集器（`--metadata k=v` 累积成数组）。 */
@@ -609,6 +609,39 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
         else out(`Mounted ${mount.path ?? path} → ${mount.provider ?? cmdOpts.provider}`);
       },
     );
+  tool
+    .command('describe')
+    .description('Describe a tool resource (GET /htbp/tools/<path>/~help, HTBP DSL text)')
+    .argument('<path>', 'tool tree path, e.g. finance/reports')
+    .action(async (path: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const help = await toolDescribe(base, token, path, { fetch: opts.fetch });
+      out(help);
+    });
+  tool
+    .command('call')
+    .description('Call a tool (POST /htbp/tools/<path>, {tool,arguments})')
+    .argument('<path>', 'tool tree path, e.g. finance/reports')
+    .argument('<tool>', 'tool name exposed by the resource')
+    .option('--args <json>', 'call arguments as a JSON object', '{}')
+    .action(async (path: string, toolName: string, cmdOpts: { args: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      let args: Record<string, unknown>;
+      try {
+        const p = JSON.parse(cmdOpts.args);
+        if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+          throw new Error('not an object');
+        }
+        args = p as Record<string, unknown>;
+      } catch {
+        throw new CliError('--args must be a JSON object', 2);
+      }
+      const res = await toolCall(base, token, path, toolName, args, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(res));
+      else out(JSON.stringify(res.result, null, 2));
+    });
 
   let exitCode = 0;
   try {

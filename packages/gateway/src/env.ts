@@ -11,6 +11,7 @@
 import type {
   Ai,
   D1Database,
+  Fetcher,
   KVNamespace,
   Queue,
   R2Bucket,
@@ -47,6 +48,9 @@ export interface Bindings {
   VECTORIZE_CONTEXT: VectorizeIndex;
   // Workers AI（M3 vector provider embeddings，@cf/baai/bge-m3）
   AI: Ai;
+  // Service binding（M4 Tool Gateway）：/htbp/tools/* 代理到独立 Worker watt-toolbridge
+  // （集成方案 A；转发 + Check PEP + 错误形状转换在 http/tools-proxy.ts）。
+  TOOLBRIDGE: Fetcher;
 
   // secrets / vars
   WATT_JWT_PRIVATE_JWK?: string;

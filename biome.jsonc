@@ -12,6 +12,8 @@
       "!**/coverage",
       "!**/node_modules",
       "!**/.wrangler",
+      // vendored 上游 tool-bridge worker 源码：保持与上游一致，不做本仓库风格 lint（见 packages/toolbridge/README.md）。
+      "!**/vendor",
       "!**/worker-configuration.d.ts",
       "!**/*.jsonc"
     ]

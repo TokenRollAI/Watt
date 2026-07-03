@@ -71,11 +71,21 @@ describe('notFound / onError bare WattError contract (§0.2 / §11.3)', () => {
     expect(body.retryable).toBe(false);
   });
 
-  it('tools/context subtree paths also return 501 unavailable', async () => {
+  it('remaining unimplemented platform subtrees (task/scheduler) still return 501 unavailable', async () => {
+    for (const path of ['/htbp/platform/task', '/htbp/platform/scheduler']) {
+      const res = await SELF.fetch(`https://gateway.test${path}`, { method: 'POST' });
+      expect(res.status).toBe(501);
+      const body = (await res.json()) as { code: string };
+      expect(body.code).toBe('unavailable');
+    }
+  });
+
+  it('tools subtree is live (Phase 4): no longer 501; unauthenticated → 401', async () => {
+    // /htbp/tools/* 已落地（toolsProxyRoutes 代理），从 501 占位表移除 → 无 token 时走认证 401。
     const res = await SELF.fetch('https://gateway.test/htbp/tools/finance/foo', { method: 'POST' });
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(401);
     const body = (await res.json()) as { code: string };
-    expect(body.code).toBe('unavailable');
+    expect(body.code).toBe('permission_denied');
   });
 
   it('an uncaught handler exception returns 500 internal (bare WattError, no leak)', async () => {

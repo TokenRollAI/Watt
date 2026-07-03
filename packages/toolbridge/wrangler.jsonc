@@ -1,0 +1,26 @@
+{
+  // watt-toolbridge Worker — Phase 4 Tool Gateway 部署单元（方案 A：独立 Worker + gateway service binding）。
+  // 真源：DOD.md §6（Tool Layer）、Architecture.md M4、.llmdoc-tmp/investigations/phase4-tool-agent.md。
+  // worker 源码 vendored 自 TokenRollAI/tool-bridge（见 README.md）；本文件是 Watt 侧的部署配置。
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watt-toolbridge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // service binding 内部调用无需 custom domain；workers.dev 保留供部署冒烟直连。
+  "workers_dev": true,
+
+  // 租户模式（TENANT_MODE=true + TENANTS 绑定）：gateway 代理层在转发前把调用者可见的 ToolMount
+  // 集合转成上游树 JSON 写入 KV（tenant:<id> + apikey:<hash>），本 Worker 按 Secret Key 加载该
+  // 租户树——树配置的运行时同步机制。共享 gateway 的 watt-tenants KV（同 id）。
+  "vars": {
+    "TENANT_MODE": "true",
+    "OAUTH_REQUIRED_AUDIENCE": ""
+  },
+  "kv_namespaces": [
+    { "binding": "TENANTS", "id": "fdddc1ead658483bac3cc67561f2db39" }
+  ]
+}

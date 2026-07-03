@@ -91,6 +91,12 @@
   // Workers AI 绑定（marker 段外——AI 是账户级能力，非 provision 管的 storage 资源，绑定即用；
   // provision 重跑只覆写 marker 段内内容，不触碰此处）。M3 vector provider embeddings（@cf/baai/bge-m3）。
   "ai": { "binding": "AI" },
+  // Service binding（marker 段外——service binding 不是 provision 管的 storage 资源，手写在此）。
+  //   M4 Tool Gateway：/htbp/tools/* 代理到独立 Worker watt-toolbridge（部署次序：先 toolbridge 后
+  //   gateway，见 scripts/deploy-all.mjs）。绑定名 TOOLBRIDGE（src/env.ts / src/http/tools-proxy.ts）。
+  "services": [
+    { "binding": "TOOLBRIDGE", "service": "watt-toolbridge" }
+  ],
   // Durable Objects（marker 段外——DO 绑定不是 provision 管的 storage 资源，故手写在此，
   // provision 重跑只覆写 marker 段内内容，不触碰此处）。
   //   M1 EventRouter：订阅表 + Session Mapper。

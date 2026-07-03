@@ -109,6 +109,14 @@ steps.push({
   ],
 });
 
+// watt-toolbridge：Tool Gateway 部署单元（Proto §5 / Architecture M4）。**必须先于 gateway 部署**——
+// gateway 的 service binding TOOLBRIDGE 指向此 Worker，目标 Worker 不存在时 gateway deploy 会失败。
+// 无 D1/migrations（树配置走共享 KV watt-tenants，运行时由 gateway 代理层写入）。
+steps.push({
+  name: 'deploy watt-toolbridge (before gateway; gateway service binding depends on it)',
+  cmd: ['pnpm', '--filter', 'watt-toolbridge', 'exec', 'wrangler', 'deploy'],
+});
+
 steps.push({
   name: 'deploy watt-gateway',
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
