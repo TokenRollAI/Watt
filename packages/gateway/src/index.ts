@@ -22,6 +22,8 @@ export { AgentInstance } from './agent/agent-instance.ts';
 export { ContextRegistry } from './context/context-registry.ts';
 // EventRouter DO（M1 订阅表 + Session Mapper）从入口 export，供 wrangler DO 绑定实例化。
 export { EventRouter } from './event/event-router.ts';
+// SchedulerHub DO（M6 Agents SDK Agent + this.schedule，§7 Scheduler）从入口 export，供 wrangler DO 绑定实例化。
+export { SchedulerHub } from './scheduler/scheduler-hub.ts';
 // WattTaskWorkflow（M7 Task 引擎，WorkflowEntrypoint）从入口 export，供 wrangler workflows 绑定实例化。
 export { WattTaskWorkflow } from './task/watt-task-workflow.ts';
 
@@ -59,8 +61,10 @@ app.route('/', inboundRoutes());
  * 注意：`/htbp/tools` 已在 Phase 4 落地（toolsProxyRoutes 消费面代理到 watt-toolbridge），从此表移除。
  * 注意：`/htbp/platform/agent` 已在 Phase 4 落地（platformRoutes：AgentRegistry §3.1 + AgentRuntime §3.2），从此表移除。
  * 注意：`/htbp/platform/task` 已在 Phase 5 落地（platformRoutes：TaskManager §8），从此表移除。
+ * 注意：`/htbp/platform/scheduler` 已在 Phase 5 落地（platformRoutes：Scheduler §7），从此表移除。
+ * 现所有规范子树均已落地——占位表为空（保留结构，便于未来 Phase 新增子树时复用）。
  */
-const SPEC_TREE_PREFIXES = ['/htbp/platform/scheduler'];
+const SPEC_TREE_PREFIXES: string[] = [];
 
 for (const prefix of SPEC_TREE_PREFIXES) {
   const handler = (c: Context) => {

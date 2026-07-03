@@ -21,6 +21,7 @@ import type { AgentCorrelation } from './agent/agent-correlation.ts';
 import type { AgentInstance } from './agent/agent-instance.ts';
 import type { ContextRegistry } from './context/context-registry.ts';
 import type { EventRouter } from './event/event-router.ts';
+import type { SchedulerHub } from './scheduler/scheduler-hub.ts';
 import type { TaskWorkflowParams } from './task/watt-task-workflow.ts';
 
 // DurableObjectNamespace 用 tsconfig types 里的 @cloudflare/workers-types ambient global 声明
@@ -61,6 +62,11 @@ export interface Bindings {
   //   AGENT_CORRELATION：correlation 等待表（§3.4 定向回送/超时/终止代发，单例 idFromName('correlation')）。
   AGENT_INSTANCE: DurableObjectNamespace<AgentInstance>;
   AGENT_CORRELATION: DurableObjectNamespace<AgentCorrelation>;
+
+  // Durable Objects（M6 Scheduler，Phase 5）：SchedulerHub（Agents SDK Agent + this.schedule；
+  //   全部 CronJob 存单例 Hub，getAgentByName('hub')，附B SchedulerHub）。到点触发走三 action
+  //   （publish|agent|script）+ cron.fired/completed 双留痕（src/scheduler/actions.ts）。
+  SCHEDULER_HUB: DurableObjectNamespace<SchedulerHub>;
 
   // Workflows（M7 Task 引擎，Phase 5）：WattTaskWorkflow（§8 TaskManager / §3.4 Workflows 适配）。
   //   TaskManager 服务经 env.WATT_TASK.create/get/... 编排任务实例；params 见 watt-task-workflow.ts。

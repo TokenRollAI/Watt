@@ -111,20 +111,31 @@
   //   M3 ContextRegistry：namespace 挂载注册表 + TTL 回收。
   //   M2 AgentInstance：Agents SDK Agent 实例宿主（每实例一 DO，state 内嵌 SQLite）。
   //   M2 AgentCorrelation：correlation 等待表宿主（§3.4 定向回送/超时/终止代发，单例 idFromName）。
+  //   M6 SchedulerHub：Agents SDK Agent + this.schedule（§7 CronJob 单例宿主，getAgentByName('hub')）。
   "durable_objects": {
     "bindings": [
       { "name": "EVENT_ROUTER", "class_name": "EventRouter" },
       { "name": "CONTEXT_REGISTRY", "class_name": "ContextRegistry" },
       { "name": "AGENT_INSTANCE", "class_name": "AgentInstance" },
-      { "name": "AGENT_CORRELATION", "class_name": "AgentCorrelation" }
+      { "name": "AGENT_CORRELATION", "class_name": "AgentCorrelation" },
+      { "name": "SCHEDULER_HUB", "class_name": "SchedulerHub" }
     ]
   },
+  // Dynamic Worker Loader（marker 段外——非 provision 管的 storage 资源）：M6 script action 的一次性
+  //   隔离 isolate（§7 步骤 2，Code Mode / Reference §1.4）。binding LOADER；env.LOADER.get(...) 跑脚本，
+  //   grants 经 env 注入、globalOutbound:null 禁网。线上 open beta（Workers Paid，需开通）；本地
+  //   vitest-pool-workers 该绑定不可用——script action 集成测试注入 fake runner，真 isolate 留部署冒烟。
+  "worker_loaders": [
+    { "binding": "LOADER" }
+  ],
   // DO SQLite 迁移（与 D1 的 migrations_dir 是不同概念：此顶层 migrations 键声明 SQLite-backed
   // DO class）。v1：EventRouter class。v2：新增 ContextRegistry class（new_sqlite_classes）。
   //   v3：Agents SDK AgentInstance（Agent 基类内嵌 SQLite state）+ AgentCorrelation（correlation 等待表）。
+  //   v4：Agents SDK SchedulerHub（Agent 基类内嵌 SQLite；CronJob 多行表 + this.schedule alarm）。
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["EventRouter"] },
     { "tag": "v2", "new_sqlite_classes": ["ContextRegistry"] },
-    { "tag": "v3", "new_sqlite_classes": ["AgentInstance", "AgentCorrelation"] }
+    { "tag": "v3", "new_sqlite_classes": ["AgentInstance", "AgentCorrelation"] },
+    { "tag": "v4", "new_sqlite_classes": ["SchedulerHub"] }
   ]
 }

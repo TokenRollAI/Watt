@@ -90,13 +90,17 @@ describe('notFound / onError bare WattError contract (§0.2 / §11.3)', () => {
     expect(body.retryable).toBe(false);
   });
 
-  it('remaining unimplemented platform subtrees (scheduler) still return 501 unavailable', async () => {
-    for (const path of ['/htbp/platform/scheduler']) {
-      const res = await SELF.fetch(`https://gateway.test${path}`, { method: 'POST' });
-      expect(res.status).toBe(501);
-      const body = (await res.json()) as { code: string };
-      expect(body.code).toBe('unavailable');
-    }
+  it('scheduler subtree is live (Phase 5): no longer 501; unauthenticated → 401', async () => {
+    // /htbp/platform/scheduler 已在 Phase 5 落地（Scheduler §7），从 SPEC_TREE_PREFIXES 移除；
+    // 它是最后一个规范占位——占位表现为空。无 token → 401（认证中间件），不再 501。
+    const res = await SELF.fetch('https://gateway.test/htbp/platform/scheduler', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tool: 'List', arguments: {} }),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('permission_denied');
   });
 
   it('tools subtree is live (Phase 4): no longer 501; unauthenticated → 401', async () => {

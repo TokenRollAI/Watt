@@ -30,6 +30,7 @@ import {
   modelProviderSchema,
   namespaceMountSchema,
   policySchema,
+  schedulerCronJobSchema,
   signalRequestSchema,
   spawnRequestSchema,
   subscriptionSchema,
@@ -53,6 +54,7 @@ import type { Bindings } from '../env.ts';
 import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/channel-store.ts';
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
+import { SchedulerManager } from '../scheduler/scheduler-manager.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
 import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
@@ -68,6 +70,7 @@ const RES_TOOL = 'platform://tool';
 const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
+const RES_SCHEDULER = 'platform://scheduler';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -958,8 +961,120 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     }
   });
 
+  // ── POST /htbp/platform/scheduler → Scheduler（§7 CronJob）────────────────────
+  // 六动词 List/Get/Write/Update/Delete + Trigger。
+  // tool → action（§6.4d）：List/Get=read；Write/Update/Delete/Trigger=manage（"登记/改/删/触发"
+  //   均为管理动作）。资源 platform://scheduler。CronJob.createdBy 由路由从 claims.sub 注入（防伪造，
+  //   与 TaskManager.Write 同）——script grants≤createdBy 不做静态校验（§7 步骤 3，推迟到运行时）。
+  const SCHEDULER_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Update: 'manage',
+    Delete: 'manage',
+    Trigger: 'manage',
+  };
+  app.post('/htbp/platform/scheduler', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? SCHEDULER_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_SCHEDULER, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://scheduler');
+    }
+
+    const scheduler = new SchedulerManager(c.env);
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as { limit?: number };
+        const page = await scheduler.list(opts);
+        return c.json(page);
+      }
+      case 'Get': {
+        const jobId = args.jobId;
+        if (typeof jobId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'jobId is required', false));
+        }
+        const job = await scheduler.get(jobId);
+        if (isWattError(job)) return wattErrorResponse(c, job);
+        return c.json({ job });
+      }
+      case 'Write': {
+        // createdBy = 调用方 principal（claims.sub，§7 CronJob.createdBy）——非入参，防伪造。
+        const merged = { ...(args.job as Record<string, unknown>), createdBy: claims.sub };
+        const parsed = schedulerCronJobSchema.safeParse(merged);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid cron job: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await scheduler.write(parsed.data);
+        if (isWattError(written)) return wattErrorResponse(c, written);
+        return c.json({ job: written });
+      }
+      case 'Update': {
+        const jobId = args.jobId;
+        if (typeof jobId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'jobId is required', false));
+        }
+        // patch 经 schema 校验（id/createdBy 不可改、其余可选、严格键集）——防写入畸形字段。
+        const parsedPatch = schedulerCronJobSchema
+          .omit({ id: true, createdBy: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await scheduler.update(jobId, parsedPatch.data);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ job: result });
+      }
+      case 'Delete': {
+        const jobId = args.jobId;
+        if (typeof jobId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'jobId is required', false));
+        }
+        await scheduler.delete(jobId);
+        return c.json({ deleted: true });
+      }
+      case 'Trigger': {
+        const jobId = args.jobId;
+        if (typeof jobId !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'jobId is required', false));
+        }
+        const result = await scheduler.trigger(jobId);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json(result);
+      }
+    }
+  });
+
   // ── POST /htbp/platform/provider → ModelProviderRegistry（§9 最小版）────────────
-  // 四动词 List/Get/Write/Update + SetDefault（Case 5 切默认）。
   // tool → action（§6.4d）：List/Get=read；Write/Update/SetDefault=manage。资源 platform://provider。
   const PROVIDER_TOOL_ACTIONS: Record<string, string> = {
     List: 'read',
