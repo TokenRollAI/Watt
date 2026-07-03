@@ -763,7 +763,9 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
             wattError('invalid_argument', `invalid spawn request: ${parsed.error.message}`, false),
           );
         }
-        const res = await runtime.spawn(parsed.data);
+        // parent（可选）：派生关系（§3.4 规则 2 / ListInstances tree）——路由透传给 runtime。
+        const parent = typeof args.parent === 'string' ? args.parent : undefined;
+        const res = await runtime.spawn(parsed.data, { parent });
         if (isWattError(res)) return wattErrorResponse(c, res);
         return c.json(res);
       }
