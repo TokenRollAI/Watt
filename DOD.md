@@ -70,9 +70,9 @@
 **范围**：`ContextRegistry`（DO：挂载表、TTL 回收、Resolve）；内置 Provider：object（R2）、structured（D1）、vector（Vectorize + Workers AI embeddings，声明 Search）；HTBP Context 子树（`/htbp/context/<ns>/~help` + 四动词调用）；权限拦截（`context://` read/write）；**CLI**：`watt context ls|cat|put|patch|mount|unmount`。
 
 **DoD**：
-- [ ] 单测：四动词语义（Write 幂等 upsert、Update not_found、ifVersion conflict）、TTL 到期回收、URI Resolve。
-- [ ] 集成：`watt context mount` 挂 object namespace → 经 CLI 走完 put→ls→cat→patch 全循环（等价 HTBP 四动词）；挂 vector namespace → put 后 Search 能召回。
-- [ ] `~help` 输出经 HTBP Help DSL 语法检查（一个最小 parser 断言 cmd 行完整）。
+- [x] 单测：四动词语义（Write 幂等 upsert、Update not_found、ifVersion conflict）、TTL 到期回收、URI Resolve。（2026-07-03 Round 11/12：core `src/context/` 43 tests 纯逻辑 + gateway 三 provider/DO/路由 66 tests 真实 I/O；`pnpm verify` 491 tests 全绿，core 覆盖率 100% 保持）
+- [x] 集成：`watt context mount` 挂 object namespace → 经 CLI 走完 put→ls→cat→patch 全循环（等价 HTBP 四动词）；挂 vector namespace → put 后 Search 能召回。（2026-07-03 Round 12：本地 SELF.fetch 全循环测试 + workers.dev 线上真实闭环——mount→put→ls→cat→patch→cat 全通、vector put×2 → Search "edge serverless JavaScript platform" 召回 doc1 居首、unmount 后 404）
+- [x] `~help` 输出经 HTBP Help DSL 语法检查（一个最小 parser 断言 cmd 行完整）。（2026-07-03 Round 12：core parseHelpDsl 最小 parser + gateway 测试断言四动词 cmd 行完整；线上 GET `/htbp/context/<ns>/~help` 返回 text/plain 五条 cmd 行）
 
 ## 6. Phase 4 — Tool Layer + Agent Runtime（M4 + M2）
 

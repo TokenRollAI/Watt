@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 2（Event Gateway）已关门**（Round 10 质量关口 15 MAJOR 全修 + DoD 线上重跑，证据见 Round 10）
-- **已勾选**：Phase 0 全部；Phase 1 全部（关门证据 Round 7）；Phase 2 全部三项（Round 8/9，关门 Round 10）
+- **当前 Phase**：**Phase 3（Context Layer）三项 DoD 全勾（Round 11/12）**，待关门（质量关口 review + 沉淀）
+- **已勾选**：Phase 0/1/2 全部（关门证据 Round 3/7/10）；Phase 3 全部三项（Round 11 core、Round 12 集成+冒烟）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 3（Context Layer）项 1（四动词语义单测）
+- **下一目标**：Phase 3 关门（质量关口 Workflow + 确认项修复 + Docs 漂移回查 + llmdoc 沉淀）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,18 @@
 ---
 
 # 轮次记录
+
+## Round 12 — 2026-07-03（Phase 3 Round B/C：provider + 路由 + CLI + 部署冒烟）
+- 目标：Phase 3 / DoD 项 1 gateway I/O 面 + 项 2 集成 + 项 3 ~help（三项全闭环）
+- 动作：3 个 worker 接力/并行落地：
+  - **p3-providers**：`migrations-context/0001`（entries 复合主键表，挂新库 watt-context——附B 已先行增补,宪法先行）；ContextRegistry DO（mounts 表 + 惰性 TTL + alarm 兜底清挂载行）；三 provider——object（R2,customMetadata 承载 meta,自管整数 version）/structured（DB_CONTEXT）/vector（Vectorize+AI bge-m3,依赖注入 mock,List→unavailable 用 Search）；接线（env/wrangler ai+DO 绑定+migrations v2/provision D1_NAMES/deploy-all 第三库/vitest 三件套 + `remoteBindings:false` 新坑——AI 绑定会触发远程代理会话）。
+  - **p3-routes**：`/htbp/platform/context` 管理面五动词（platform://context read/manage）+ `/htbp/context/<ns>` 消费面四动词+Search（context://<ns>/<path> read/write 拦截,readOnly 写→403,TTL 过期→404）+ GET `~help` 免认证（§11.3a 渐进发现,doc-gap 候选）;SPEC_TREE_PREFIXES 移除 context;19 路由测试。
+  - **p3-cli**：`watt context ls|cat|put|patch|mount|unmount`（消费/管理两挂载点,put 三路 content 输入,请求形状精确断言）;21 测试。
+  - **主 assistant 收口**：provision 跑通（watt-context 创建 id=3e741fe1 回填,MD5 幂等复核过——注意 KV list 在代理 env 下会误报 already exists,不带 proxy 重跑即好）;线上冒烟揪出 3 个跨包错配并修复（CLI put 缺必填 contentType→缺省 text/plain;R2 list 不带 include customMetadata 致 meta 退化;CLI cat 未解包 {entry}）——**Phase 2 教训重演:mock 形状断言挡不住"双方都按自己理解写"的错配,唯有线上全链**。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**491 tests**：shared 6 + core 213 + cli 62 + gateway 210;core 覆盖率 100%）;`pnpm provision` 幂等;`pnpm deploy:all` exit 0（watt-context migrations 应用,AI/DO 绑定上线）;**线上 DoD 全链**（workers.dev,经代理）：`context mount smoke-notes --provider object` → put→ls（真实 contentType/metadata）→cat（content 原文）→patch（metadata 合并,version 1→2）→cat --json 全字段;`mount smoke-vec --provider vector` → put×2 → Search "edge serverless JavaScript platform" 召回 doc1 居首（真实 AI embeddings+Vectorize）;GET ~help → text/plain 五条 cmd 行;unmount×2 → ls 404。
+- 勾选：**Phase 3 三项全勾**（关门待做）。
+- 沉淀：待关门轮统一——新坑候选（AI 绑定 remoteBindings:false/R2 list include/DO RPC 联合类型 narrow-to-never/htbpCall platform 硬编码需抽 base-path）;doc-gap 候选（~help 免认证层级、readOnly 拒绝码 403、vector List unavailable、TTL 物理 GC 不清 provider 条目、contextEntryInputSchema content z.unknown() 接受 undefined 的收紧）。
+- 遗留：Phase 3 关门（质量关口 4 维 review + 对抗核查 + Docs 漂移回查 + llmdoc 沉淀）是下一轮唯一目标。
 
 ## Round 11 — 2026-07-03（Phase 3 Round A：core 纯逻辑）
 - 目标：Phase 3 / DoD 项 1 纯逻辑面 + 项 3 parser（按调研报告 Round A 拆分）
