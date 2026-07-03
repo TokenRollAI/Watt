@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 3（Context Layer）已关门**（Round 13：16 MAJOR 全修 + DoD 线上复验）
-- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 项 1/2（Round 14/16）
+- **当前 Phase**：**Phase 4（Tool Layer + Agent Runtime）三项 DoD 全勾（Round 14/16/17）**，待关门（质量关口 review + 沉淀）
+- **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 全部三项（Round 14/16/17）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 4 项 3（R13：Agents SDK Light Runtime + AgentRegistry/AgentRuntime + ModelProvider 最小版 + @llm 集成）
+- **下一目标**：Phase 4 关门（质量关口 Workflow + 确认项修复 + Docs 漂移回查 + llmdoc 沉淀）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,14 @@
 ---
 
 # 轮次记录
+
+## Round 17 — 2026-07-03（Phase 4 R13：Agent Runtime + @llm 集成，DoD 项 3）
+- 目标：Phase 4 / DoD 项 3（Agents SDK Light Runtime + AgentRegistry/AgentRuntime + ModelProvider + CLI + @llm 真实模型集成）
+- 动作：worker 落地（commit 22c53e0）：**agents 包在 vitest-pool-workers 可用**（冒烟测试确认,调研的首要风险排除）;AgentInstance（Agents SDK Agent 类,echo/llm 双 harness,模型调用注入——fake 测试/真实 Anthropic 中转）;AgentRegistry（providers 库 0002,declarative subscriptions→EventRouter 规则 1 联动）;AgentRuntime（Spawn instanceKey 幂等→idFromName/Send+expect→correlation register/Terminate cascade→failWaiter 产 terminated faileds/ListInstances tree）;consumer agent sink 真实投递,agent.result/failed 先走 core routeAgentEvent（§3.4 定向回送/去重;超时 DO alarm 扫描代发）;ModelProvider 最小版（0003,set-default）;路由 platform/agent+platform/provider;CLI agent 六命令+provider 三命令。主 assistant 收口三个修复:① @llm 测试 env 门控经 miniflare bindings 注入（workerd 无宿主 process.env——此前 skip 假象）;② **agent.result/failed 未落 EventStore**（consumer 注释假设 publish 时已留痕,但 harness 直发 QUEUE——线上冒烟发现 tail/List 查不到,补 put）;③ Spawn 路由未透传 parent → tree 无派生关系（冒烟发现,补透传）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**737 tests**：shared 6 + core 314 + cli 93 + gateway 323+1skip）;**@llm 真实模型测试**（LLM_TESTS=1,中转 llm.fantacy.live,glm-5.2）1 passed——本轮唯一一次 @llm 消耗（LOOP 纪律 3）;`pnpm deploy:all`（ANTHROPIC_API_KEY/BASE_URL secrets 上线）;**线上 DoD 全链**：agent def Write→spawn smoke-1→send --expect-schema(sentiment/score schema)→**agent.result output {"sentiment":"positive","score":0.95} schema 合法、correlationId 与 Send 返回一致**→Spawn(parent:smoke-1)→`watt agent tree` 显示 children:[smoke-child-2]→terminate --cascade → 三实例全 terminated。
+- 勾选：Phase 4 项 3 → **Phase 4 三项全勾**（关门待做）。
+- 沉淀：实现声明待关门轮:harness 选型由 model 声明推导（entry.className 恒 AgentInstance,doc-gap 候选）、correlation 宿主独立 DO AGENT_CORRELATION、registry/model-provider 挂 watt-providers 库、agent.result 留痕由 instance 自行 put(非经 publish)。
+- 遗留：Phase 4 关门（质量关口 4 维 review + 对抗核查 + Docs 漂移回查 + llmdoc 沉淀）是下一轮唯一目标;冒烟发现的 http mount config 形状文档缺口（Round 16 backlog）可关门轮顺手。
 
 ## Round 16 — 2026-07-03（Phase 4 R12 后半：watt-toolbridge 部署 + tools 代理 + DoD 项 2）
 - 目标：Phase 4 / DoD 项 2 后半（/htbp/tools 代理 + Check PEP + watt tool describe|call 闭环）

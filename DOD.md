@@ -83,7 +83,7 @@
 **DoD**：
 - [x] 单测：§3.4 六条规则逐条（定向回送、派生回送、超时代发、终止失败、等待方消失丢弃、去重）；schema 校验失败→重试→invalid_output；correlationId 字符集校验；Spawn 幂等键。（2026-07-03 Round 14：core `src/agent/` 86 新测试，`pnpm verify` 597 tests 全绿，core 覆盖率 100% 保持）
 - [x] 集成：`watt tool mount` 注册一个 http ToolProvider → `watt tool call` 成功；无权限 principal 的 token 下 `watt tool call` → 403 且 `watt tool ls` 不可见（Case 4 的机制预演）。（2026-07-03 Round 16：tools-proxy.test.ts 16 tests——scoped token 调无权树 403 permission_denied + ~help 裁剪不可见；线上 workers.dev：mount http endpoints → describe（经 service binding 代理返回 HTBP help DSL）→ call postman-echo 返回 {resource,result}）
-- [ ] 集成：`watt agent spawn` 一个 LLM Agent（真实模型）→ `watt agent send --expect-schema` → 收到 schema 合法的 agent.result → `watt agent tree` 显示派生关系。**这是第一个消耗真实 token 的测试，单独 tag `@llm`，可跳过。**
+- [x] 集成：`watt agent spawn` 一个 LLM Agent（真实模型）→ `watt agent send --expect-schema` → 收到 schema 合法的 agent.result → `watt agent tree` 显示派生关系。**这是第一个消耗真实 token 的测试，单独 tag `@llm`，可跳过。**（2026-07-03 Round 17：@llm 测试真实中转模型 1 passed（LLM_TESTS=1 门控，verify 中 skip）；线上 workers.dev 全链——agent Write(def)→spawn smoke-1→send --expect-schema→**agent.result output={"sentiment":"positive","score":0.95} schema 合法且 correlationId 一致**→Spawn(parent)→tree 显示 smoke-1→children:[smoke-child-2]→terminate --cascade 三实例全 terminated）
 
 ## 7. Phase 5 — Task + Scheduler（M7 + M6）
 
