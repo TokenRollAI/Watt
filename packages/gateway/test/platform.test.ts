@@ -33,6 +33,7 @@ beforeAll(async () => {
 async function clearDb() {
   await env.DB_POLICIES.prepare('DELETE FROM policies').run();
   await env.DB_POLICIES.prepare('DELETE FROM identity_mappings').run();
+  await env.DB_AUDIT.prepare('DELETE FROM audit_records').run();
 }
 beforeEach(async () => {
   await clearDb();
@@ -235,17 +236,25 @@ describe('POST /htbp/platform/policy', () => {
   });
 });
 
-describe('POST /htbp/platform/audit (Phase 1 interface only)', () => {
-  it('admin List returns empty records structure', async () => {
+describe('POST /htbp/platform/audit (§10 data plane, R23)', () => {
+  it('admin List returns real AuditRecords (its own read Check is audited)', async () => {
     const token = await signAdmin();
     const res = await SELF.fetch(`${BASE}/htbp/platform/audit`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ tool: 'List', arguments: { opts: {} } }),
+      body: JSON.stringify({
+        tool: 'List',
+        arguments: { opts: { filter: { resource: 'platform://audit' } } },
+      }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { items: unknown[] };
-    expect(body.items).toEqual([]);
+    const body = (await res.json()) as {
+      items: { resource: string; action: string; decision: string }[];
+    };
+    // 审计数据面已落地：每个 Check 判定留痕（此 List 的 read Check 亦记一条 allow）。
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.items.every((r) => r.resource === 'platform://audit')).toBe(true);
+    expect(body.items.some((r) => r.action === 'read' && r.decision === 'allow')).toBe(true);
   });
 
   it('non-admin is denied audit read with 403', async () => {

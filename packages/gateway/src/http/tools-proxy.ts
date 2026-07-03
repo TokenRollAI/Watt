@@ -27,7 +27,7 @@
 import type { ToolMount } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { type Context, Hono } from 'hono';
-import { Authorizer } from '../authz/authorizer.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
 import { PolicyStore } from '../authz/policy-store.ts';
 import { ensureSeedPolicy } from '../authz/seed.ts';
@@ -283,7 +283,7 @@ type ToolsContext = Context<{ Bindings: Bindings; Variables: AuthVars }>;
 
 async function handle(c: ToolsContext): Promise<Response> {
   const claims = c.get('claims');
-  const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+  const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
   const url = new URL(c.req.url);
   const { toolPath, isHelp } = toolPathFromUrl(url.pathname);
   const isCall = c.req.method === 'POST' && !isHelp;

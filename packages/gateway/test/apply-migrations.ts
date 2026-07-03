@@ -9,10 +9,12 @@ import { beforeAll } from 'vitest';
  *  - DB_EVENTS   ← migrations-events/（Event Gateway，Proto §2.4/§2.2）
  *  - DB_CONTEXT  ← migrations-context/（Context Layer structured provider，Proto §4.1）
  *  - DB_PROVIDERS ← migrations-providers/（Tool Layer ToolRegistry，Proto §5.2）
+ *  - DB_AUDIT    ← migrations-audit/（Observability：AuditLog + Metrics usage，Proto §10）
  */
 beforeAll(async () => {
   await applyD1Migrations(env.DB_POLICIES, env.TEST_MIGRATIONS);
   await applyD1Migrations(env.DB_EVENTS, env.TEST_MIGRATIONS_EVENTS);
   await applyD1Migrations(env.DB_CONTEXT, env.TEST_MIGRATIONS_CONTEXT);
   await applyD1Migrations(env.DB_PROVIDERS, env.TEST_MIGRATIONS_PROVIDERS);
+  await applyD1Migrations(env.DB_AUDIT, env.TEST_MIGRATIONS_AUDIT);
 });

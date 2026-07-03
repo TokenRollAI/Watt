@@ -22,9 +22,8 @@
 import { type SchedulerCronJob as CronJob, normalizeEvent, type TokenClaims } from '@watt/core';
 import type { WattError } from '@watt/shared';
 import { AgentRuntime, defaultRuntimeDeps } from '../agent/agent-runtime.ts';
-import { Authorizer } from '../authz/authorizer.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
-import { PolicyStore } from '../authz/policy-store.ts';
 import type { Bindings } from '../env.ts';
 import { EventStore } from '../event/event-store.ts';
 import { runScriptAction, type ScriptRunner } from './script-runner.ts';
@@ -151,7 +150,7 @@ async function runPublishAction(env: Bindings, job: CronJob): Promise<unknown> {
   if (job.action.kind !== 'publish') return undefined;
   const { publish } = await import('../event/event-bus.ts');
   const claims = await resolveCronClaims(env, job);
-  const authorizer = new Authorizer(new PolicyStore(env.DB_POLICIES));
+  const authorizer = newAuthorizer(env);
   const result = await publish(
     {
       source: { kind: 'cron', ref: job.id },

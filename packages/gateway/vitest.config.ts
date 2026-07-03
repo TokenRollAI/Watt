@@ -22,6 +22,7 @@ const migrations = await readD1Migrations(resolve(here, 'migrations'));
 const migrationsEvents = await readD1Migrations(resolve(here, 'migrations-events'));
 const migrationsContext = await readD1Migrations(resolve(here, 'migrations-context'));
 const migrationsProviders = await readD1Migrations(resolve(here, 'migrations-providers'));
+const migrationsAudit = await readD1Migrations(resolve(here, 'migrations-audit'));
 
 // Fake watt-toolbridge（service binding TOOLBRIDGE）——真实 watt-toolbridge Worker 是独立部署单元
 // （packages/toolbridge），本地 vitest 无从加载。此 fake **忠实复现** vendored 上游 packages/toolbridge/
@@ -176,6 +177,7 @@ export default defineConfig({
           TEST_MIGRATIONS_EVENTS: migrationsEvents,
           TEST_MIGRATIONS_CONTEXT: migrationsContext,
           TEST_MIGRATIONS_PROVIDERS: migrationsProviders,
+          TEST_MIGRATIONS_AUDIT: migrationsAudit,
           // webhook adapter 验签 secret（inbound 集成测试；channel settings.verifySecretRef 指向此名）。
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
           // @llm 门控透传：workerd 内读不到宿主 process.env，经 binding 注入（缺省空 → 测试 skip）。

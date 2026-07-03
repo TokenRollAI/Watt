@@ -10,6 +10,7 @@
 
 import type {
   Ai,
+  AnalyticsEngineDataset,
   D1Database,
   Fetcher,
   KVNamespace,
@@ -71,6 +72,11 @@ export interface Bindings {
   // Workflows（M7 Task 引擎，Phase 5）：WattTaskWorkflow（§8 TaskManager / §3.4 Workflows 适配）。
   //   TaskManager 服务经 env.WATT_TASK.create/get/... 编排任务实例；params 见 watt-task-workflow.ts。
   WATT_TASK: Workflow<TaskWorkflowParams>;
+
+  // Analytics Engine（M9 Metrics 时序采集面，Phase 6 R23）：每次模型调用 writeDataPoint 并行打点
+  //   （token/cost 高基数时序）。dataset watt_metrics；绑定无需 provision 创建（写入时自建 dataset）。
+  //   可选：本地 miniflare 该绑定为 no-op（单测 spy），真实查询走远端 AE SQL API（@metrics 部署冒烟）。
+  AE_METRICS?: AnalyticsEngineDataset;
 
   // secrets / vars
   WATT_JWT_PRIVATE_JWK?: string;

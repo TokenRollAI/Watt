@@ -109,6 +109,24 @@ steps.push({
   ],
 });
 
+// watt-audit：Observability 数据面（AuditLog records + Metrics usage 聚合表，Proto §10）。
+// 同上幂等；migrations_dir=migrations-audit（wrangler.jsonc DB_AUDIT 绑定，provision 回填）。R23 新增。
+steps.push({
+  name: 'apply D1 migrations (watt-audit)',
+  cmd: [
+    'pnpm',
+    '--filter',
+    '@watt/gateway',
+    'exec',
+    'wrangler',
+    'd1',
+    'migrations',
+    'apply',
+    'watt-audit',
+    '--remote',
+  ],
+});
+
 // watt-toolbridge：Tool Gateway 部署单元（Proto §5 / Architecture M4）。**必须先于 gateway 部署**——
 // gateway 的 service binding TOOLBRIDGE 指向此 Worker，目标 Worker 不存在时 gateway deploy 会失败。
 // 无 D1/migrations（树配置走共享 KV watt-tenants，运行时由 gateway 代理层写入）。

@@ -63,7 +63,7 @@
   "d1_databases": [
     { "binding": "DB_POLICIES", "database_name": "watt-policies", "database_id": "b2a4d4c0-bd19-4c0d-83fb-7aea87c8a99b", "migrations_dir": "migrations" },
     { "binding": "DB_PROVIDERS", "database_name": "watt-providers", "database_id": "8bbfdb59-9ac7-4704-86fe-87283768d9ff", "migrations_dir": "migrations-providers" },
-    { "binding": "DB_AUDIT", "database_name": "watt-audit", "database_id": "680912e5-0e16-4373-8fc2-b8716077dc28" },
+    { "binding": "DB_AUDIT", "database_name": "watt-audit", "database_id": "680912e5-0e16-4373-8fc2-b8716077dc28", "migrations_dir": "migrations-audit" },
     { "binding": "DB_EVENTS", "database_name": "watt-events", "database_id": "ea3bf9f1-c37e-489c-8bca-2cd98af60b2a", "migrations_dir": "migrations-events" },
     { "binding": "DB_CONTEXT", "database_name": "watt-context", "database_id": "3e741fe1-e857-4581-883e-801d0e1a1d82", "migrations_dir": "migrations-context" }
   ],
@@ -91,6 +91,13 @@
   // Workers AI 绑定（marker 段外——AI 是账户级能力，非 provision 管的 storage 资源，绑定即用；
   // provision 重跑只覆写 marker 段内内容，不触碰此处）。M3 vector provider embeddings（@cf/baai/bge-m3）。
   "ai": { "binding": "AI" },
+  // Analytics Engine（marker 段外——AE dataset 无需 provision 创建，首次 writeDataPoint 自动建
+  //   dataset，binding 即用）。M9 Metrics 时序采集面（Proto §10 / Architecture M9）：每次模型调用
+  //   writeDataPoint 并行打点 token/cost。dataset watt_metrics；binding AE_METRICS（src/env.ts）。
+  //   本地 miniflare 该绑定为 no-op（单测 spy 断言调用），真实查询走远端 AE SQL API（@metrics 冒烟）。
+  "analytics_engine_datasets": [
+    { "binding": "AE_METRICS", "dataset": "watt_metrics" }
+  ],
   // Service binding（marker 段外——service binding 不是 provision 管的 storage 资源，手写在此）。
   //   M4 Tool Gateway：/htbp/tools/* 代理到独立 Worker watt-toolbridge（部署次序：先 toolbridge 后
   //   gateway，见 scripts/deploy-all.mjs）。绑定名 TOOLBRIDGE（src/env.ts / src/http/tools-proxy.ts）。

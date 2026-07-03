@@ -20,9 +20,8 @@
 import type { Event, EventInput, PrincipalRef, TokenClaims } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
-import { Authorizer } from '../authz/authorizer.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
-import { PolicyStore } from '../authz/policy-store.ts';
 import type { Bindings } from '../env.ts';
 import { createWebhookAdapter } from '../event/adapters/webhook.ts';
 import { ChannelStore } from '../event/channel-store.ts';
@@ -124,7 +123,7 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
 
     // ④ 每个 Partial<Event> 补齐 + Publish（source 已由 adapter 填 webhook）。
     const store = new EventStore(c.env.DB_EVENTS);
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.req.header('X-Watt-Trace'));
     // IdentityMapper.Resolve 接线（§1 L115-116）：channelUser → principal（查无映射 → 'user:anonymous'）。
     const identity = new IdentityMapper(c.env.DB_POLICIES);
     const resolvePrincipal = async (channel: string, userId: string): Promise<PrincipalRef> => {

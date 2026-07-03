@@ -501,6 +501,8 @@ const D1_MIGRATIONS_DIRS = {
   'watt-providers': 'migrations-providers',
   'watt-events': 'migrations-events',
   'watt-context': 'migrations-context',
+  // R23 Observability：AuditLog 数据面 + Metrics usage 聚合表（Proto §10）。
+  'watt-audit': 'migrations-audit',
 };
 const KV_AUTHZ_CACHE = 'watt-authz-cache';
 const KV_TENANTS = 'watt-tenants';

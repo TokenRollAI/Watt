@@ -27,8 +27,7 @@ import {
 } from '@watt/core';
 import { type WattError, wattError } from '@watt/shared';
 import { Hono } from 'hono';
-import { Authorizer } from '../authz/authorizer.ts';
-import { PolicyStore } from '../authz/policy-store.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
 import type { ContextProvider, ListOptions } from '../context/provider.ts';
 import { ObjectContextProvider } from '../context/providers/object.ts';
 import { StructuredContextProvider } from '../context/providers/structured.ts';
@@ -185,7 +184,7 @@ export function contextRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars 
   // ── POST /htbp/context/<namespace> → 消费面四动词（+ Search）────────────
   app.post('/htbp/context/*', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     const path = new URL(c.req.url).pathname;
     const nsPart = path.slice('/htbp/context/'.length);

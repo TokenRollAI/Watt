@@ -27,7 +27,9 @@
 
 import { RpcTarget } from 'cloudflare:workers';
 import {
+  type AccessDecision,
   authorize,
+  type CallContext,
   type SchedulerCronJob as CronJob,
   type Grant,
   type TokenClaims,
@@ -128,6 +130,9 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
       cronJobs: { [job.id]: job },
       instances: {},
     });
+    // R23 审计：此 Check 判定点绕过 Authorizer wrapper（需 cronJobs 索引 wrapper 不提供），
+    //   故单独补一条 AuditRecord（每个 Check 判定一条不漏，§10）。best-effort（审计不阻塞脚本）。
+    await recordScriptAudit(env, claims, 'platform://event', 'manage', decision);
     if (!decision.allow) {
       throw wattError(
         'permission_denied',
@@ -135,8 +140,8 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
         false,
       );
     }
-    const { Authorizer } = await import('../authz/authorizer.ts');
-    const authorizer = new Authorizer(store);
+    const { newAuthorizer } = await import('../audit/audit-sink.ts');
+    const authorizer = newAuthorizer(env, claims.trace);
     const result = await publish(
       {
         source: { kind: 'cron', ref: job.id },
@@ -157,6 +162,43 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
     );
     if ('code' in result) throw new Error(`script publish failed: ${result.message}`);
     return { eventId: result.eventId };
+  }
+}
+
+/**
+ * script publish 能力 Check 的审计留痕（§10）——此判定点绕过 Authorizer wrapper（需 cronJobs 索引），
+ * 单独补一条 AuditRecord，保持"每个 Check 判定一条不漏"。best-effort（审计写失败不阻塞脚本）。
+ */
+async function recordScriptAudit(
+  env: Bindings,
+  claims: TokenClaims,
+  resource: string,
+  action: string,
+  decision: AccessDecision,
+): Promise<void> {
+  try {
+    const { AuditStore } = await import('../audit/audit-store.ts');
+    const context: CallContext = {
+      principal: claims.sub,
+      roles: claims.roles,
+      traceId: claims.trace ?? crypto.randomUUID(),
+      ...(claims.agent_def !== undefined && claims.agent_inst !== undefined
+        ? { agent: { instanceId: claims.agent_inst, chain: claims.chain ?? [] } }
+        : {}),
+    };
+    const detail =
+      decision.reason !== undefined || decision.obligations !== undefined
+        ? { reason: decision.reason, obligations: decision.obligations }
+        : undefined;
+    await new AuditStore(env.DB_AUDIT).write({
+      context,
+      resource,
+      action,
+      decision: decision.allow ? 'allow' : 'deny',
+      ...(detail === undefined ? {} : { detail }),
+    });
+  } catch (err) {
+    console.error('script-runner: audit write failed', { resource, action, err: String(err) });
   }
 }
 

@@ -26,7 +26,7 @@ import {
 } from '@watt/core';
 import { wattError } from '@watt/shared';
 import { Hono } from 'hono';
-import { Authorizer } from '../authz/authorizer.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
 import { DeviceGrantStore } from '../authz/device-store.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
 import { loadPlatformKeys } from '../authz/keys.ts';
@@ -79,8 +79,7 @@ export function oauthRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars }>
   });
   app.post('/oauth/device/approve', async (c) => {
     const claims = c.get('claims');
-    const policies = new PolicyStore(c.env.DB_POLICIES);
-    const authorizer = new Authorizer(policies);
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
     // approve = 授予某 principal 一个 token，视为平台管理动作 → Check(platform://policy,'manage')。
     const decision = await authorizer.check(claims, RES_POLICY, 'manage');
     if (!decision.allow) {

@@ -172,13 +172,12 @@ export function defaultTaskSignaler(env: Bindings): TaskSignaler {
         });
         return;
       }
-      const { Authorizer } = await import('../authz/authorizer.ts');
-      const { PolicyStore } = await import('../authz/policy-store.ts');
+      const { newAuthorizer } = await import('../audit/audit-sink.ts');
       const { IdentityMapper } = await import('../authz/identity-mapper.ts');
       const { TaskManager, defaultManagerDeps } = await import('../task/task-manager.ts');
       const resolved = await new IdentityMapper(env.DB_POLICIES).resolvePrincipal(principal);
       const claims = { sub: principal, roles: resolved.roles };
-      const authorizer = new Authorizer(new PolicyStore(env.DB_POLICIES));
+      const authorizer = newAuthorizer(env);
       const decision = await authorizer.check(claims, `task://${taskId}`, 'signal');
       if (!decision.allow) {
         console.error('event consumer: im.action signal denied by authorizer', {

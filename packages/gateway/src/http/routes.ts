@@ -45,7 +45,8 @@ import {
   ModelProviderRegistry,
   type ListOptions as ProviderListOptions,
 } from '../agent/model-provider.ts';
-import { Authorizer } from '../authz/authorizer.ts';
+import { newAuthorizer } from '../audit/audit-sink.ts';
+import { AuditStore } from '../audit/audit-store.ts';
 import { IdentityMapper } from '../authz/identity-mapper.ts';
 import { jwksResponse, loadPlatformKeys } from '../authz/keys.ts';
 import { type ListOptions, PolicyStore } from '../authz/policy-store.ts';
@@ -54,6 +55,7 @@ import type { Bindings } from '../env.ts';
 import { type ListOptions as ChannelListOptions, ChannelStore } from '../event/channel-store.ts';
 import { publish } from '../event/event-bus.ts';
 import { type ListOptions as EventListOptions, EventStore } from '../event/event-store.ts';
+import { METRIC_NAMES, type MetricQuery, Metrics } from '../metrics/metrics.ts';
 import { SchedulerManager } from '../scheduler/scheduler-manager.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
@@ -71,6 +73,7 @@ const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
 const RES_SCHEDULER = 'platform://scheduler';
+const RES_METRICS = 'platform://metrics';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -133,7 +136,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   app.post('/htbp/platform/policy', async (c) => {
     const claims = c.get('claims');
     const store = new PolicyStore(c.env.DB_POLICIES);
-    const authorizer = new Authorizer(store);
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -223,11 +226,11 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     }
   });
 
-  // ── POST /htbp/platform/audit → AuditLog（Phase 1 先通接口，数据面 Phase 6）─
+  // ── POST /htbp/platform/audit → AuditLog（§10 List/Get，R23 数据面接真实查询）─
+  // List/Get 均为读动作（§6.4d）；资源 platform://audit。数据面挂 DB_AUDIT（AuditStore）。
   app.post('/htbp/platform/audit', async (c) => {
     const claims = c.get('claims');
-    const store = new PolicyStore(c.env.DB_POLICIES);
-    const authorizer = new Authorizer(store);
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -238,18 +241,77 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         wattError('invalid_argument', 'request body must be JSON', false),
       );
     }
+    const tool = call.tool;
+    if (tool !== 'List' && tool !== 'Get') {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
     const decision = await authorizer.check(claims, RES_AUDIT, 'read');
     if (!decision.allow) {
       return forbiddenResponse(c, decision.reason ?? 'access denied on platform://audit');
     }
-    if (call.tool !== 'List') {
+
+    const args = call.arguments ?? {};
+    const auditStore = new AuditStore(c.env.DB_AUDIT);
+    if (tool === 'Get') {
+      const recordId = args.recordId;
+      if (typeof recordId !== 'string') {
+        return wattErrorResponse(c, wattError('invalid_argument', 'recordId is required', false));
+      }
+      const record = await auditStore.get(recordId);
+      if (isWattError(record)) return wattErrorResponse(c, record);
+      return c.json({ record });
+    }
+    // List：filter principal/agent/resource/decision + limit（§10 / §0.2 Page{items}）。
+    const opts = (args.opts ?? {}) as { filter?: Record<string, string>; limit?: number };
+    const page = await auditStore.list(opts);
+    return c.json(page);
+  });
+
+  // ── POST /htbp/platform/metrics → Metrics.Query（§10，R23 最小面）─────────
+  // tool=Query（read）；资源 platform://metrics。tokens/cost 走 usage 表（DB_AUDIT）；events/tasks 走
+  //   DB_EVENTS；authz_denials 走 audit_records；cache_hit_rate/tool_calls 本轮空 series（实现声明）。
+  app.post('/htbp/platform/metrics', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    if (call.tool !== 'Query') {
       return wattErrorResponse(
         c,
         wattError('invalid_argument', `unknown tool: ${String(call.tool)}`, false),
       );
     }
-    // Phase 1：数据面 Phase 6 才完整；返回空 Page 形状 { items }（§0.2，无 cursor 分页）。
-    return c.json({ items: [] });
+    const decision = await authorizer.check(claims, RES_METRICS, 'read');
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://metrics');
+    }
+    const q = (call.arguments?.query ?? {}) as Partial<MetricQuery>;
+    if (
+      typeof q.metric !== 'string' ||
+      !(METRIC_NAMES as readonly string[]).includes(q.metric) ||
+      q.range === undefined ||
+      typeof q.range.from !== 'string' ||
+      typeof q.range.to !== 'string'
+    ) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'query.metric and query.range{from,to} are required', false),
+      );
+    }
+    const metrics = new Metrics(c.env.DB_AUDIT, c.env.DB_EVENTS);
+    const series = await metrics.query(q as MetricQuery);
+    return c.json({ series });
   });
 
   // ── POST /htbp/platform/event → EventStore + EventBus + EventRouter（§2.3/§2.4）─
@@ -265,8 +327,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/event', async (c) => {
     const claims = c.get('claims');
-    const store = new PolicyStore(c.env.DB_POLICIES);
-    const authorizer = new Authorizer(store);
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -384,7 +445,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/channel', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
     const channels = new ChannelStore(c.env.DB_EVENTS);
 
     let call: HtbpCall;
@@ -469,7 +530,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/context', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -584,7 +645,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/tool', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
     const registry = new ToolRegistry(c.env.DB_PROVIDERS);
 
     let call: HtbpCall;
@@ -680,7 +741,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/agent', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
     const registry = new AgentRegistry(c.env.DB_PROVIDERS);
 
     let call: HtbpCall;
@@ -862,7 +923,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/task', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -976,7 +1037,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/scheduler', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
 
     let call: HtbpCall;
     try {
@@ -1095,7 +1156,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
   };
   app.post('/htbp/platform/provider', async (c) => {
     const claims = c.get('claims');
-    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
     const registry = new ModelProviderRegistry(c.env.DB_PROVIDERS);
 
     let call: HtbpCall;
