@@ -6,6 +6,7 @@ import pkg from '../package.json' with { type: 'json' };
 import type { Bindings } from './env.ts';
 import { defaultConsumerDeps, handleQueue } from './event/consumer.ts';
 import type { AuthVars } from './http/auth.ts';
+import { contextRoutes } from './http/context-routes.ts';
 import { inboundRoutes } from './http/inbound.ts';
 import { oauthRoutes } from './http/oauth.ts';
 import { platformRoutes } from './http/routes.ts';
@@ -47,13 +48,13 @@ app.route('/', inboundRoutes());
  * 否则 `/htbp/platform/*` 会先被 platformRoutes 的认证中间件拦成 401。
  * 命中 → 501 unavailable、retryable:false（"重试无意义，需等实现落地"，Proto §0.2 补充）。
  * 注意：`/htbp/platform/event` 已在 Phase 2 落地（platformRoutes），从此表移除。
+ * 注意：`/htbp/context` 已在 Phase 3 落地（contextRoutes 消费面 + platformRoutes 管理面），从此表移除。
  */
 const SPEC_TREE_PREFIXES = [
   '/htbp/platform/agent',
   '/htbp/platform/task',
   '/htbp/platform/scheduler',
   '/htbp/tools',
-  '/htbp/context',
 ];
 
 for (const prefix of SPEC_TREE_PREFIXES) {
@@ -71,6 +72,10 @@ for (const prefix of SPEC_TREE_PREFIXES) {
 
 // Phase 1：JWKS + Platform API（认证 + Authorizer + PolicyStore）。
 app.route('/', platformRoutes());
+
+// Phase 3：Context Layer 消费面（§4.1 四动词 + Search + ~help）。
+// contextRoutes 内部自管认证顺序：GET .../~help 免认证注册在认证中间件之前（§11.3a 渐进发现）。
+app.route('/', contextRoutes());
 
 // Phase 1：CLI 设备授权 device flow（§6.5d，RFC 8628）。
 app.route('/', oauthRoutes());

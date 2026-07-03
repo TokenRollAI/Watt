@@ -13,10 +13,11 @@
  * action：List/Get → 'read'；Write/Update/Delete → 'manage'（§6.1 action 集合）。
  */
 
-import type { EventInput, Policy, Subscription } from '@watt/core';
+import type { EventInput, NamespaceMount, Policy, Subscription } from '@watt/core';
 import {
   channelConfigSchema,
   eventInputSchema,
+  namespaceMountSchema,
   policySchema,
   subscriptionSchema,
 } from '@watt/core';
@@ -38,6 +39,7 @@ const RES_POLICY = 'platform://policy';
 const RES_AUDIT = 'platform://audit';
 const RES_EVENT = 'platform://event';
 const RES_CHANNEL = 'platform://channel';
+const RES_CONTEXT = 'platform://context';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -419,6 +421,118 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         const result = await channels.update(channelId, (args.patch ?? {}) as never);
         if (isWattError(result)) return wattErrorResponse(c, result);
         return c.json({ channel: result });
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/context → ContextRegistry 管理面（§4.2 挂载注册表）───
+  // 五动词 List/Get/Write/Update/Delete → CONTEXT_REGISTRY DO RPC（单例 idFromName('registry')）。
+  // tool → action：List/Get=read；Write/Update/Delete=manage（对齐 §6.4d，与 policy 管理面同）。
+  // 消费面（context://<ns>/<path> 四动词）在 http/context-routes.ts；此处仅挂载管理（platform://context）。
+  const CONTEXT_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Update: 'manage',
+    Delete: 'manage',
+  };
+  app.post('/htbp/platform/context', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = new Authorizer(new PolicyStore(c.env.DB_POLICIES));
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? CONTEXT_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_CONTEXT, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://context');
+    }
+
+    const registry = c.env.CONTEXT_REGISTRY.get(c.env.CONTEXT_REGISTRY.idFromName('registry'));
+
+    switch (tool) {
+      case 'List': {
+        const opts = (args.opts ?? {}) as { limit?: number };
+        const page = await registry.list(opts);
+        return c.json(page);
+      }
+      case 'Get': {
+        const namespace = args.namespace;
+        if (typeof namespace !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'namespace is required', false),
+          );
+        }
+        const mount = await registry.get(namespace);
+        if (isWattError(mount)) return wattErrorResponse(c, mount);
+        return c.json({ mount });
+      }
+      case 'Write': {
+        const parsed = namespaceMountSchema.safeParse(args.mount);
+        if (!parsed.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid mount: ${parsed.error.message}`, false),
+          );
+        }
+        const written = await registry.write(parsed.data as NamespaceMount);
+        if (isWattError(written)) return wattErrorResponse(c, written);
+        return c.json({ mount: written });
+      }
+      case 'Update': {
+        const namespace = args.namespace;
+        if (typeof namespace !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'namespace is required', false),
+          );
+        }
+        // patch 经 schema 校验（namespace 不可改、其余可选、严格键集）——防写入畸形字段。
+        const parsedPatch = namespaceMountSchema
+          .omit({ namespace: true })
+          .partial()
+          .strict()
+          .safeParse(args.patch ?? {});
+        if (!parsedPatch.success) {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', `invalid patch: ${parsedPatch.error.message}`, false),
+          );
+        }
+        const result = await registry.update(
+          namespace,
+          parsedPatch.data as Partial<NamespaceMount>,
+        );
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json({ mount: result });
+      }
+      case 'Delete': {
+        const namespace = args.namespace;
+        if (typeof namespace !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'namespace is required', false),
+          );
+        }
+        await registry.delete(namespace);
+        return c.json({ deleted: true });
       }
     }
   });
