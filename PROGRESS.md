@@ -7,15 +7,26 @@
 - **当前 Phase**：**Phase 3（Context Layer）已关门**（Round 13：16 MAJOR 全修 + DoD 线上复验）
 - **已勾选**：Phase 0/1/2/3 全部（关门证据 Round 3/7/10/13）；Phase 4 项 1（Round 14）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 4 项 2（R12：tool-bridge 上游补 builtin/effect 字段 + Watt ToolRegistry + /htbp/tools 代理 + Check PEP）
+- **下一目标**：Phase 4 项 2 后半（部署 watt-toolbridge + service binding 代理 /htbp/tools + Check PEP + watt tool describe|call 闭环）
 
 ## 上游改动记录（tool-bridge 等）
 
-（无）
+- 2026-07-03（Round 15）`TokenRollAI/tool-bridge` 分支 `feat/watt-builtin-and-tool-semantics`（56ab13b,已 push 未开 PR/未合 main）：① ToolSpec/help 增可选 effect/scope/confirm 语义字段（§5.1/§6.4d 数据源,向后兼容）;② NodeKind 增 builtin + `src/worker/tb/adapters/builtin.ts`（handler 宿主注入模式,内置 echo）。该仓库全部测试绿。Watt 侧消费方式与部署拓扑见 Round 15/16 记录。
 
 ---
 
 # 轮次记录
+
+## Round 15 — 2026-07-03（Phase 4 R12 前半：tool-bridge 上游 + ToolRegistry）
+- 目标：Phase 4 / DoD 项 2 前半（上游能力补齐 + Watt 侧 ToolRegistry/platform 路由/CLI mount|ls）
+- 动作：两 worker 并行：
+  - **上游 tool-bridge**（LOOP §2.1 通道）：分支 `feat/watt-builtin-and-tool-semantics`（commit 56ab13b,已 push 未开 PR）——① ToolSpec/help 语义字段 effect/scope/confirm（向后兼容缺省）;② builtin 节点类型 + `adapters/builtin.ts`（handler 注册表由宿主注入,tool-bridge 保持通用;内置 echo 参考实现）;全部测试绿（基线+新增）。
+  - **Watt 侧**：core `tools/types.ts`（toolMountSchema §5.2:mcp/http/builtin + virtualize 四项）;gateway `tools/tool-registry.ts`（watt-providers 库,migrations-providers/0001）+ `/htbp/platform/tool` 管理面路由（List/Get=read,Write/Update=manage）;CLI `watt tool mount|ls`（describe/call 留代理轮）;第四 migrations 库接线（provision/deploy-all/vitest 三件套）。
+  - **宪法先行**：Architecture M4 树宿主边界修订（commit 22960b2）——逻辑单一入口、物理分治:gateway 自持 platform/context,tool-bridge 承载 tools,gateway 代理层做 Check PEP（消除调研发现的边界矛盾）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**645 tests**：shared 6 + core 314 + cli 73 + gateway 252;core 覆盖率 100%）;`pnpm provision`（DB_PROVIDERS migrations_dir 回填）;`pnpm deploy:all` exit 0（watt-providers migrations 应用）;线上冒烟:`watt tool mount test/echo --provider http` → 200 mount 形状;`watt tool ls` 可见。
+- 勾选：无（项 2 需 /htbp/tools 代理 + Check PEP + `watt tool call` 闭环后整体验收）。
+- 沉淀：上游改动记录入本文件"上游改动记录"节。
+- 遗留：R12 后半——gateway 引用上游分支部署 watt-toolbridge Worker + service binding + /htbp/tools 代理(错误形状转换 {error:{}}→裸 WattError) + Check PEP/可见性裁剪 + `watt tool describe|call` + 无权限 403/ls 不可见测试 → 勾项 2;然后 R13 Agents SDK。
 
 ## Round 14 — 2026-07-03（Phase 4 R11：core Agent 纯逻辑）
 - 目标：Phase 4 / DoD 项 1（§3.4 六条规则逐条、schema 校验失败→重试→invalid_output、correlationId 字符集校验、Spawn 幂等键）
