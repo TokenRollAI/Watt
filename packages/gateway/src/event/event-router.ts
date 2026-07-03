@@ -106,7 +106,8 @@ export class EventRouter extends DurableObject {
   /** listSubscriptions（§2.3 / §0.2）——返回 Page，limit 默认 50 钳 200。 */
   listSubscriptions(opts: ListSubscriptionsOptions = {}): Page<Subscription> {
     const rawLimit = opts.limit ?? DEFAULT_LIST_LIMIT;
-    const limit = Math.min(rawLimit, MAX_LIST_LIMIT);
+    // 下界钳到 1：负数/0 直通 SQLite LIMIT 会拉全表（LIMIT -1）或空集，均非预期。
+    const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
     const rows = this.sql
       .exec<SubscriptionRow>('SELECT id, match_json, sink_json FROM subscriptions LIMIT ?', limit)
       .toArray();

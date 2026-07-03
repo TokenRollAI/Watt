@@ -69,7 +69,20 @@ describe('EventRouter subscribe / unsubscribe / listSubscriptions (§2.3 / §0.2
     expect(page.items).toHaveLength(0);
   });
 
-  it('listSubscriptions clamps limit to the 200 max (§0.2)', async () => {
+  it('listSubscriptions clamps a negative limit up to 1 (no full-table LIMIT -1)', async () => {
+    const stub = freshRouter();
+    await runInDurableObject(stub, (instance: EventRouter) => {
+      instance.subscribe(webhookSub({ type: 'a' }));
+      instance.subscribe(webhookSub({ type: 'b' }));
+    });
+    // 负 limit 直通 SQLite → LIMIT -1 拉全表 2 条；下界钳到 1 → 只 1 条（判别力强）。
+    const page = await runInDurableObject(stub, (instance: EventRouter) =>
+      instance.listSubscriptions({ limit: -5 }),
+    );
+    expect(page.items).toHaveLength(1);
+  });
+
+  it('listSubscriptions clamps an over-large limit down to the 200 max (§0.2)', async () => {
     const stub = freshRouter();
     await runInDurableObject(stub, (instance: EventRouter) => {
       instance.subscribe(webhookSub({ type: 'a' }));

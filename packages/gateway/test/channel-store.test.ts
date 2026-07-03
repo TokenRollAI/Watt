@@ -60,7 +60,17 @@ describe('ChannelStore.write / get (§2.2 / §0.4)', () => {
 });
 
 describe('ChannelStore.list (§2.2 / §0.2)', () => {
-  it('returns Page<ChannelConfig> and clamps limit to 200', async () => {
+  it('returns Page<ChannelConfig> and clamps a negative limit up to 1 (no full-table LIMIT -1)', async () => {
+    const store = new ChannelStore(env.DB_EVENTS);
+    await store.write(C({ id: 'a' }));
+    await store.write(C({ id: 'b' }));
+    // 负 limit 若直通 SQLite → LIMIT -1 拉全表 2 条；下界钳到 1 → 只 1 条（判别力强）。
+    const page = await store.list({ limit: -5 });
+    if ('code' in page) throw new Error('expected Page');
+    expect(page.items).toHaveLength(1);
+  });
+
+  it('clamps an over-large limit down to the 200 max', async () => {
     const store = new ChannelStore(env.DB_EVENTS);
     await store.write(C({ id: 'a' }));
     await store.write(C({ id: 'b' }));

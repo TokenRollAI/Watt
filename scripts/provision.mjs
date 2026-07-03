@@ -369,10 +369,11 @@ function bindingsBlock(d1Ids, kvIds, vectorizeReady) {
   lines.push('    ],');
   // consumer 段（M1 EventBus 分发，Phase 2）：同 Worker 既产又消 watt-events。
   // 与 producers 同属 queues 对象（JSON 键唯一，故 consumer 配置必须在此生成而非 marker 段外）。
-  // DLQ 暂不配（调研已定，留 Phase 6 可观测轮补）；重试耗尽后消息丢弃。
+  // DLQ：max_retries 耗尽的消息投递到 watt-events-dlq（只需队列存在，不配 consumer）——
+  // 静默丢弃改为可观测/可重放（Phase 2 关门修复）。
   lines.push('    "consumers": [');
   lines.push(
-    '      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3 }',
+    '      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "watt-events-dlq" }',
   );
   lines.push('    ]');
   lines.push(vectorizeReady ? '  },' : '  }');
@@ -440,7 +441,7 @@ const D1_MIGRATIONS_DIRS = {
 const KV_AUTHZ_CACHE = 'watt-authz-cache';
 const KV_TENANTS = 'watt-tenants';
 const R2_NAMES = ['watt-context-objects', 'watt-artifacts'];
-const QUEUE_NAMES = ['watt-events'];
+const QUEUE_NAMES = ['watt-events', 'watt-events-dlq'];
 const VECTORIZE_NAME = 'watt-context-index';
 const VECTORIZE_DIMS = 1024; // @cf/baai/bge-m3
 const VECTORIZE_METRIC = 'cosine';

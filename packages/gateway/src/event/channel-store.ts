@@ -73,7 +73,8 @@ export class ChannelStore {
       }
     }
     const rawLimit = opts.limit ?? DEFAULT_LIST_LIMIT;
-    const limit = Math.min(rawLimit, MAX_LIST_LIMIT);
+    // 下界钳到 1：负数直通 SQLite LIMIT -1 会拉全表，0 会拉空集，均非预期。
+    const limit = Math.max(1, Math.min(rawLimit, MAX_LIST_LIMIT));
     const { results } = await this.db
       .prepare('SELECT * FROM channels ORDER BY created_at LIMIT ?')
       .bind(limit)

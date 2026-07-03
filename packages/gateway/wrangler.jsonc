@@ -79,7 +79,7 @@
       { "binding": "QUEUE_EVENTS", "queue": "watt-events" }
     ],
     "consumers": [
-      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3 }
+      { "queue": "watt-events", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "watt-events-dlq" }
     ]
   },
   "vectorize": [
