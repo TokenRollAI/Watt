@@ -84,7 +84,13 @@ export async function executeCronAction(args: ExecuteArgs): Promise<ExecuteResul
       jobId: job.id,
       actionKind: job.action.kind,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      // WattError 是纯对象（跨 RPC 边界非 Error 实例），String() 会得 [object Object]——取 message/code。
+      error:
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' && err !== null && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : String(err),
     };
   }
 
