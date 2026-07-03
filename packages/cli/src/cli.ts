@@ -23,6 +23,15 @@ import {
   formatEntryListHuman,
   parseMetadata,
 } from './context.ts';
+import {
+  type CronJobInput,
+  cronCreate,
+  cronGet,
+  cronList,
+  cronRm,
+  cronTrigger,
+  formatCronListHuman,
+} from './cron.ts';
 import { CliError, readEnv } from './env.ts';
 import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
@@ -99,6 +108,57 @@ function defaultReadStdin(): Promise<string> {
     process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     process.stdin.on('error', reject);
   });
+}
+
+/**
+ * 从 create 选项构造 CronAction（三型）——publish|agent|script。
+ * 缺必填 → CliError(2)。JSON 选项非法 → CliError(2)（parseJsonOpt）。
+ */
+function buildCronAction(cmdOpts: {
+  actionKind: string;
+  eventType?: string;
+  payload?: string;
+  session?: string;
+  definition?: string;
+  input?: string;
+  instanceBy?: string;
+  scriptRef?: string;
+  grants?: string;
+}): Record<string, unknown> {
+  switch (cmdOpts.actionKind) {
+    case 'publish': {
+      if (cmdOpts.eventType === undefined) {
+        throw new CliError('--event-type is required for --action-kind publish', 2);
+      }
+      const event: Record<string, unknown> = { type: cmdOpts.eventType };
+      if (cmdOpts.payload !== undefined) event.payload = parseJsonOpt(cmdOpts.payload, '--payload');
+      if (cmdOpts.session !== undefined) event.session = cmdOpts.session;
+      return { kind: 'publish', event };
+    }
+    case 'agent': {
+      if (cmdOpts.definition === undefined) {
+        throw new CliError('--definition is required for --action-kind agent', 2);
+      }
+      const action: Record<string, unknown> = { kind: 'agent', definition: cmdOpts.definition };
+      if (cmdOpts.input !== undefined) action.input = parseJsonOpt(cmdOpts.input, '--input');
+      if (cmdOpts.instanceBy !== undefined) {
+        if (cmdOpts.instanceBy !== 'singleton' && cmdOpts.instanceBy !== 'event') {
+          throw new CliError('--instance-by must be "singleton" or "event"', 2);
+        }
+        action.instanceBy = cmdOpts.instanceBy;
+      }
+      return action;
+    }
+    case 'script': {
+      if (cmdOpts.scriptRef === undefined) {
+        throw new CliError('--script-ref is required for --action-kind script', 2);
+      }
+      const grants = cmdOpts.grants !== undefined ? parseJsonOpt(cmdOpts.grants, '--grants') : [];
+      return { kind: 'script', scriptRef: cmdOpts.scriptRef, grants };
+    }
+    default:
+      throw new CliError('--action-kind must be "publish", "agent", or "script"', 2);
+  }
 }
 
 export interface RunOptions {
@@ -936,6 +996,111 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const defs = await taskDefs(base, token, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(defs));
       else out(formatTaskDefsHuman(defs));
+    });
+
+  // ── watt cron（§7 Scheduler；DoD §7 CLI 四动词 list|create|trigger|rm + get）─────
+  const cron = program
+    .command('cron')
+    .description('Manage scheduled cron jobs (Scheduler: cron/one-shot triggers)');
+  cron
+    .command('list')
+    .description('List cron jobs (Scheduler.List)')
+    .option('--limit <n>', 'max results')
+    .action(async (cmdOpts: { limit?: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const listOpts: { limit?: number } = {};
+      if (cmdOpts.limit !== undefined) listOpts.limit = parsePositiveInt(cmdOpts.limit, '--limit');
+      const jobs = await cronList(base, token, listOpts, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(jobs));
+      else out(formatCronListHuman(jobs));
+    });
+  cron
+    .command('get')
+    .description('Get a cron job by id (Scheduler.Get)')
+    .argument('<jobId>', 'cron job id')
+    .action(async (jobId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const job = await cronGet(base, token, jobId, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(job));
+      else out(JSON.stringify(job, null, 2));
+    });
+  cron
+    .command('create')
+    .description(
+      'Create or replace a cron job (Scheduler.Write; create is the CLI verb per DoD §7)',
+    )
+    .argument('<id>', 'cron job id')
+    .requiredOption('--schedule <expr>', 'cron expression (minute-level UTC) or ISO one-shot')
+    .requiredOption('--action-kind <kind>', 'publish | agent | script')
+    .option('--description <text>', 'human description', '')
+    .option('--no-enabled', 'create the job disabled')
+    // publish action
+    .option('--event-type <type>', 'publish: event type')
+    .option('--payload <json>', 'publish: event payload as a JSON value')
+    .option('--session <session>', 'publish: event session')
+    // agent action
+    .option('--definition <name>', 'agent: agent definition name')
+    .option('--input <json>', 'agent: input as a JSON value')
+    .option('--instance-by <mode>', 'agent: singleton | event')
+    // script action
+    .option('--script-ref <uri>', 'script: context:// URI of the script content')
+    .option('--grants <json>', 'script: grants as a JSON array of {resources,actions}')
+    .action(
+      async (
+        id: string,
+        cmdOpts: {
+          schedule: string;
+          actionKind: string;
+          description: string;
+          enabled: boolean;
+          eventType?: string;
+          payload?: string;
+          session?: string;
+          definition?: string;
+          input?: string;
+          instanceBy?: string;
+          scriptRef?: string;
+          grants?: string;
+        },
+      ) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const action = buildCronAction(cmdOpts);
+        const job: CronJobInput = {
+          id,
+          description: cmdOpts.description,
+          schedule: cmdOpts.schedule,
+          enabled: cmdOpts.enabled,
+          action,
+        };
+        const created = await cronCreate(base, token, job, { fetch: opts.fetch });
+        if (asJson()) out(JSON.stringify(created));
+        else out(`Created cron ${created.id} (${created.schedule}, ${cmdOpts.actionKind})`);
+      },
+    );
+  cron
+    .command('trigger')
+    .description('Manually trigger a cron job once (Scheduler.Trigger)')
+    .argument('<jobId>', 'cron job id')
+    .action(async (jobId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const res = await cronTrigger(base, token, jobId, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(res));
+      else out(`Triggered ${jobId} (cron.fired eventId ${res.eventId})`);
+    });
+  cron
+    .command('rm')
+    .description('Delete a cron job (Scheduler.Delete)')
+    .argument('<jobId>', 'cron job id')
+    .action(async (jobId: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      await cronRm(base, token, jobId, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify({ deleted: true }));
+      else out(`Removed cron ${jobId}`);
     });
 
   // ── watt provider（§9 ModelProviderRegistry 最小版）──────────────────────────
