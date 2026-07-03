@@ -97,7 +97,8 @@ export function feishuSenderFromEnv(
     appId: env.FEISHU_APP_ID,
     appSecret: env.FEISHU_APP_SECRET,
     baseUrl: env.FEISHU_BASE_URL ?? DEFAULT_FEISHU_BASE,
-    fetchImpl: overrides.fetchImpl ?? fetch,
+    // fetch 须绑定 globalThis——裸引用作为对象方法调用时丢 this，workerd 抛 Illegal invocation。
+    fetchImpl: overrides.fetchImpl ?? ((...args: Parameters<typeof fetch>) => fetch(...args)),
     cacheGet: overrides.cacheGet ?? ((key) => env.KV_TENANTS.get(key)),
     cachePut:
       overrides.cachePut ??
