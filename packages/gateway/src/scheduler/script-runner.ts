@@ -204,8 +204,8 @@ async function resolveScriptSource(env: Bindings, scriptRef: string): Promise<st
 /**
  * 生产 ScriptRunner —— Dynamic Worker Loader（env.LOADER.load）一次性 isolate（§7 步骤 2，Reference §1.4）。
  * 本地 vitest-pool-workers 的 LOADER 绑定不可用（线上 open beta）——本类仅在部署侧走真 isolate，
- * 本地测试注入 FakeScriptRunner 替代。env 注入 = watt binding（Cap'n Web RPC，凭证不进运行时）+
- * globalOutbound:null 禁网。**未部署 loader 时 load 会抛**（部署冒烟核实 LOADER 可用性）。
+ * 本地测试注入 FakeScriptRunner 替代。watt binding 经 run(watt) RPC 参数注入（Cap'n Web，凭证不进
+ * 运行时）+ globalOutbound:null 禁网。**未部署 loader 时 load 会抛**（部署冒烟核实 LOADER 可用性）。
  */
 export class LoaderScriptRunner implements ScriptRunner {
   constructor(private readonly env: Bindings) {}
@@ -218,20 +218,20 @@ export class LoaderScriptRunner implements ScriptRunner {
         'Dynamic Worker Loader (env.LOADER) unavailable — script isolate requires deployed worker-loader binding (open beta)',
       );
     }
-    // 部署侧：把脚本包成 module worker，env 注入 watt binding、断网。脚本 default export 一个
-    //   async fn(watt)（约定入口）；load 一次性执行后回收（详见 Reference §1.4）。
+    // 部署侧：把脚本包成 module worker、断网。watt binding 经 **RPC 调用参数**传入（Cap'n Web 在
+    //   RPC 边界把 RpcTarget 转 stub）——loader 的 env 字段走 structured clone，RpcTarget 也不可
+    //   传（部署冒烟实测 "could not be cloned"），故约定脚本入口为 run(watt) 参数注入。
     const worker = loader.get(`cron-script-${crypto.randomUUID()}`, async () => ({
       compatibilityDate: '2026-06-01',
       mainModule: 'script.js',
       modules: {
         'script.js': ctx.scriptSource,
       },
-      env: { WATT: ctx.watt },
       globalOutbound: null, // 禁网（凭证不进运行时，只留 watt binding 的能力）。
     }));
     const stub = worker.getEntrypoint();
-    // 约定：脚本导出 default { async run(watt) }——经 RPC 调用（Cap'n Web）。
-    return (stub as unknown as { run(): Promise<unknown> }).run();
+    // 约定：脚本 default export WorkerEntrypoint 子类，async run(watt)——watt 经 RPC 参数成 stub。
+    return (stub as unknown as { run(watt: WattScriptBinding): Promise<unknown> }).run(ctx.watt);
   }
 }
 
@@ -248,3 +248,10 @@ interface WorkerLoader {
     }>,
   ): { getEntrypoint(): unknown };
 }
+
+/** 脚本入口约定示例（存 context://automations/<id> 的内容）：
+ *   import { WorkerEntrypoint } from 'cloudflare:workers';
+ *   export default class extends WorkerEntrypoint {
+ *     async run(watt) { return watt.publish({ type: '...', payload: {...} }); }
+ *   }
+ */
