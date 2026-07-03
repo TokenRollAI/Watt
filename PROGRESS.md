@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
 - **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
 - **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R23（飞书 Channel + Observability + Management：先 investigator 前置调研）
+- **下一目标**：Phase 6 R23（Observability 地基：AuditLog 数据面 + Metrics 打点/查询——调研报告 phase6-feishu-observability.md 已产出，五轮拆分 R23~R27）
 
 ## 上游改动记录（tool-bridge 等）
 
