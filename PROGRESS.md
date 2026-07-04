@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
 - **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
 - **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门（关门其余步骤 R27 已全部完成）；Phase 7 已开跑——R28 完成 E2E-5/6，下一轮 R29（auto-delivery-lite 真实化 + E2E-1，调研见 `.llmdoc-tmp/investigations/phase7-e2e.md` §4）
+- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅，下一轮 R30（deep-research 真实化 B3 + E2E-2，调研 §4）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,19 @@
 ---
 
 # 轮次记录
+
+## Round 29 — 2026-07-04（Phase 7 R29：auto-delivery-lite 真实化 + E2E-1 线上全绿）
+- 目标：调研 §4 R29——B2（模板真实化）+ B4（checkpoint 通知参数化）+ E2E-1 四判据线上采证
+- 动作（主 assistant 直接实现，commit 7a717b2）：
+  - **B2 模板真实化**：register-bug 真实写 `context://feedback/bugs/<taskId>`（structured provider，namespace 惰性挂载免手工前置；status:open，approve 后重写 fixed，版本递增可断言）；locate 从"即发即忘桩"改 **expect fan-in**（correlationId + taskWaiter）——接力链这一跳产真实 agent.result 留痕（waitForEvent 归并回送），超时记 failed step 不卡任务。
+  - **B4 notify 参数化**：checkpoint 卡片目标由 input.notify {channel,target} 决定（E2E-1/2 可发飞书群），缺省回落 cli/createdBy（零回归）。
+  - **测试适配**：本地 vitest 无 consumer 回送——introspect mockEvent（喂 locate 结果）/forceEventTimeout（超时推进）四处适配；HITL 全链补 bug open→fixed（版本 1→2）+ locate output 断言。
+  - e2e-1.ts 接入 `pnpm e2e`（判据③ @feishu 未开时协议降级：卡片事件 actions 断言 + CLI signal 恢复——DOD 认可 CLI=人类确认路径）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1132 tests**：shared 6 + dashboard 4 + core 444 + cli 140 + gateway 537+1skip）；`pnpm deploy:all` exit 0；**E2E-1 线上全绿**（`pnpm e2e 1`）：run → waiting_human@confirm-release（locate 的 agent.result 经线上 consumer **真实回送**推进）→ ① bug open（v1）→ ③ 卡片事件带 approve/reject signal actions → CLI signal approve → done → ① bug fixed（v2）② locate step done + echo output ④ audit 见 task signal allow。
+- 勾选：无（Phase 7 六条全绿后一并勾）。
+- 沉淀：无新坑（introspect mockEvent 模式沿用 R20 既有）。
+- 遗留：R30 = B3（deep-research 真实化：N=3 + 子 agent websearch 工具 + expect.schema + 汇总出站飞书群）+ E2E-2；R31（B5 潜伏 agent + E2E-3）；R32（E2E-4 + Phase 7 关门）。人工清单持续：@feishu 入站群消息（DoD Phase 6 ②）、飞书卡片真实点击（E2E-1/2 判据③的"真实飞书"面）。
+
 
 ## Round 28 — 2026-07-04（Phase 7 R28：E2E 地基 + E2E-5/6 线上采证）
 - 目标：Phase 7 首轮（按 investigator 调研 `.llmdoc-tmp/investigations/phase7-e2e.md` 五轮拆分）——补阻塞项 B1/B6/B7 + `pnpm e2e` 脚手架 + E2E-5/E2E-6 线上闭环
