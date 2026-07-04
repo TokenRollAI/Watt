@@ -269,3 +269,11 @@
 ## 49. 飞书 WSClient（node-sdk 1.68.0）构造参数有未导出的 `onReady`/`onError` 回调
 
 `start()` 是 async 且内部自持重连，正常路径永不返回也永不抛——把它包进只在同步 throw 时 reject 的 Promise 是死代码（连接后永不 settle，外层监督循环不可达）。SDK 全部终态放弃路径（鉴权失败/重连耗尽/autoReconnect 关）都必然 `safeInvoke('onError')`（lib/index.js L89250/89264 等）——正确写法：构造参数传 `onError: reject`（类型未导出，经 Record 注入），并 `Promise.resolve(start()).catch(reject)` 接住异步 rejection 防 unhandledRejection。SDK 自愈型断线走 onReconnecting，不 settle。
+
+## 50. node --experimental-strip-types 不支持 constructor parameter properties
+
+`constructor(readonly x: number)` 在 strip-only 模式抛 ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX（参数属性是需要代码生成的 TS 语法，不是纯类型注解）。scripts/ 下直接 node 跑的 .ts 文件要用显式字段声明 + 构造函数赋值。enum、namespace 同理。
+
+## 51. script 的 watt.publish 发 outbound.message 会触发出站 Check——注入的 Authorizer 必须播种 cronJobs
+
+event-bus publish ① 对 type=outbound.message 做 Check(event://<channel>/<target>,'write')，claims 带 cron:<jobId> 链段；平台 newAuthorizer 的 cronJobs 索引恒空 → core authorize 步骤 3 查无此 job → 误判 "cron job disabled/deleted"（R28 E2E-6 实测：job 明明 enabled）。修复模式 = script 侧传本 job 播种的判定包装（cronJobs: {[job.id]: job}）。通用教训：**凡 claims 带链段（cron:/instance）的调用路径，判定点必须能解析链段对应的数据面**——用平台默认 Authorizer 前先查它的索引是不是空的。另注意 grants 前缀通配要显式星号（`event://*`；`event://` 是精确匹配，match.ts §6.2）。
