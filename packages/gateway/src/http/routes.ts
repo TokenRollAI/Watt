@@ -64,6 +64,7 @@ import {
   type ListOptions as PluginListOptions,
   PluginRegistry,
   pluginHealth,
+  probeRegistrationHealth,
   toManifest,
 } from '../plugin/plugin-registry.ts';
 import { ensureBuiltinPluginsSeeded } from '../plugin/plugin-seed.ts';
@@ -1372,6 +1373,20 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
             wattError(
               'invalid_argument',
               `invalid plugin manifest: ${parsed.error.message}`,
+              false,
+            ),
+          );
+        }
+        // §11.1 注册契约校验（探活面）：外部 endpoint GET healthPath 不通 → 拒绝注册（不落库、
+        //   不签 pluginToken）；binding: 前缀（平台内能力）跳过。~help/~describe 校验延后
+        //   （doc-gaps #30）。
+        const probe = await probeRegistrationHealth(parsed.data as PluginManifest);
+        if (!probe.healthy) {
+          return wattErrorResponse(
+            c,
+            wattError(
+              'invalid_argument',
+              `plugin endpoint failed registration health probe: ${probe.detail ?? 'unreachable'}`,
               false,
             ),
           );

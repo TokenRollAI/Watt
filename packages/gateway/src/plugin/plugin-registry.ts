@@ -203,3 +203,24 @@ export async function pluginHealth(
     return { healthy: false, detail: `health probe failed: ${detail}` };
   }
 }
+
+/**
+ * 注册时契约校验（Proto §11.1「平台验证契约（探活 + ~help）后挂载」的探活面）——Write 落库前调用。
+ * 复用 pluginHealth 语义：外部 HTTPS endpoint GET healthPath 探活；`binding:` 前缀（平台内能力）
+ *   无从 HTTP 探活，跳过（恒 healthy）。~help/~describe 契约校验延后（依赖 Help DSL 校验生态，
+ *   声明见 doc-gaps #30）——探活失败即拒绝注册（不落库、不签 pluginToken）。
+ * fetch 经模块级测试钩子覆盖（vitest-pool-workers 0.18 无 fetchMock 导出，对齐 *ForTests 习惯）。
+ */
+export async function probeRegistrationHealth(
+  manifest: PluginManifest,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<PluginHealth> {
+  return pluginHealth({ ...manifest, builtIn: false }, probeFetchOverride ?? fetchImpl);
+}
+
+let probeFetchOverride: typeof globalThis.fetch | undefined;
+
+/** 测试专用：覆盖注册探活的 fetch（传 undefined 复原）。 */
+export function setRegistrationProbeFetchForTests(f?: typeof globalThis.fetch): void {
+  probeFetchOverride = f;
+}

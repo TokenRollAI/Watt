@@ -1,11 +1,12 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 import { env, SELF } from 'cloudflare:test';
 import { importPrivateJwk, signUserToken, type TokenMeta } from '@watt/core';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetManageSeedGuardForTests } from '../src/agent/manage/manage-defs.ts';
 import { resetSeedGuardForTests } from '../src/authz/seed.ts';
 import { PLATFORM_KID } from '../src/env.ts';
 import { resetPluginSeedGuardForTests } from '../src/plugin/plugin-seed.ts';
+import { setRegistrationProbeFetchForTests } from '../src/plugin/plugin-registry.ts';
 import {
   TEST_ADMIN_PRINCIPAL,
   TEST_JWT_AUDIENCE,
@@ -34,6 +35,18 @@ beforeAll(async () => {
   signAdmin = () =>
     signUserToken({ principal: TEST_ADMIN_PRINCIPAL, roles: ['admin'], trace: 'tr-t' }, priv, META);
   signNonAdmin = () => signUserToken({ principal: 'user:bob', roles: ['staff'] }, priv, META);
+  // Write 注册探活（§11.1）：按 host 分派的 fake fetch（pool-workers 0.18 无 fetchMock 导出，
+  // 走 plugin-registry 的 *ForTests 钩子；SELF.fetch 与测试共享 isolate 模块态，钩子对路由生效）。
+  setRegistrationProbeFetchForTests((async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith('https://plugin.example.com')) return new Response('ok', { status: 200 });
+    if (url.startsWith('https://dead.example.com')) return new Response('boom', { status: 500 });
+    throw new Error(`unreachable host: ${url}`);
+  }) as typeof globalThis.fetch);
+});
+
+afterAll(() => {
+  setRegistrationProbeFetchForTests(undefined);
 });
 
 async function clearDb() {
@@ -115,6 +128,30 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
     expect(body.registration.jwksUrl).toContain('/.well-known/jwks.json');
     expect(typeof body.registration.pluginToken).toBe('string');
     expect(body.registration.pluginToken.length).toBeGreaterThan(10);
+  });
+
+  it('Write rejects an endpoint that fails the registration health probe → 400, not stored (§11.1)', async () => {
+    const token = await signAdmin();
+    // fake fetch 对 dead.example.com 探活回 500 → 拒绝注册。
+    const id = uniq('dead');
+    const res = await call(token, 'Write', {
+      manifest: MANIFEST(id, { endpoint: 'https://dead.example.com' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { code: string }).code).toBe('invalid_argument');
+    // 未落库、未签 token。
+    const g = await call(token, 'Get', { pluginId: id });
+    expect(g.status).toBe(404);
+  });
+
+  it('Write rejects an unreachable endpoint (fetch throws) → 400 (§11.1)', async () => {
+    const token = await signAdmin();
+    // fake fetch 对未知 host 抛错 → 探活失败。
+    const id = uniq('unreach');
+    const res = await call(token, 'Write', {
+      manifest: MANIFEST(id, { endpoint: 'https://no-such-host.example.net' }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it('Get returns { plugin } (PluginManifest, no built_in leak)', async () => {
