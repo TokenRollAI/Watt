@@ -1,4 +1,4 @@
-import { Moon, Sun, Zap } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, Outlet, redirect, useLocation, useNavigate } from 'react-router';
 import { Badge } from '~/components/ui/badge';
@@ -96,8 +96,10 @@ export default function AppLayout() {
       <Sidebar variant="inset">
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1.5">
-            <span className="bg-primary text-primary-foreground flex size-7 items-center justify-center rounded-md">
-              <Zap className="size-4" />
+            {/* 透明底线条 logo，随应用主题切黑/白线（.dark class）。 */}
+            <span className="flex size-7 items-center justify-center">
+              <img src="/logo-dark-on-light.png" alt="Watt" className="size-6 dark:hidden" />
+              <img src="/logo-light-on-dark.png" alt="Watt" className="hidden size-6 dark:block" />
             </span>
             <div className="leading-none">
               <p className="font-mono text-sm font-semibold tracking-tight">WATT</p>

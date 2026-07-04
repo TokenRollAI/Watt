@@ -16,10 +16,22 @@ import {
 } from 'react-router';
 import { Toaster } from '~/components/ui/sonner';
 
-// 图标素材源 Icons/Watt.png，经 ffmpeg 派生（Icons/gen/），产物入 public/ 随构建分发。
+// 图标素材源 Icons/Watt.png，经 ffmpeg 派生（Icons/gen/，命名 watt-*），产物入 public/ 随构建分发。
+// 网页 favicon = 透明底线条字形，按系统亮暗切黑/白线；圆角白底 watt-app-* 只用于 PWA/触摸图标。
 export const links: LinksFunction = () => [
   { rel: 'icon', href: '/favicon.ico', sizes: '32x32' },
-  { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' },
+  {
+    rel: 'icon',
+    href: '/watt-favicon-light-32.png',
+    type: 'image/png',
+    media: '(prefers-color-scheme: light)',
+  },
+  {
+    rel: 'icon',
+    href: '/watt-favicon-dark-32.png',
+    type: 'image/png',
+    media: '(prefers-color-scheme: dark)',
+  },
   { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
   { rel: 'manifest', href: '/site.webmanifest' },
 ];

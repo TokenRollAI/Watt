@@ -1,4 +1,3 @@
-import { Zap } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '~/components/ui/button';
@@ -61,8 +60,9 @@ export default function Login() {
     <main className="bg-grid flex min-h-svh items-center justify-center p-6">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3">
-          <span className="bg-primary text-primary-foreground flex size-12 items-center justify-center rounded-lg shadow-[0_0_24px_-4px_var(--primary)]">
-            <Zap className="size-6" />
+          <span className="flex size-14 items-center justify-center">
+            <img src="/logo-dark-on-light.png" alt="Watt" className="size-12 dark:hidden" />
+            <img src="/logo-light-on-dark.png" alt="Watt" className="hidden size-12 dark:block" />
           </span>
           <div className="text-center leading-tight">
             <h1 className="font-mono text-2xl font-semibold tracking-tight">WATT</h1>
