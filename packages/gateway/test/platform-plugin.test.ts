@@ -165,6 +165,19 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
     expect(body.plugin.enabled).toBe(false);
   });
 
+  it('seed does not resurrect an admin Update on isolate cold start (enabled=false persists)', async () => {
+    const token = await signAdmin();
+    // 内置 channel-feishu 先由种子建出，管理员将其停用。
+    const upd = await call(token, 'Update', { pluginId: 'channel-feishu', patch: { enabled: false } });
+    expect(upd.status).toBe(200);
+    // 模拟新 isolate 冷启动：清种子 once-guard 后再打任意 platform 请求（触发种子中间件重跑）。
+    resetPluginSeedGuardForTests();
+    const got = await call(token, 'Get', { pluginId: 'channel-feishu' });
+    expect(got.status).toBe(200);
+    const body = (await got.json()) as { plugin: { enabled: boolean } };
+    expect(body.plugin.enabled).toBe(false);
+  });
+
   it('Update on missing → 404', async () => {
     const res = await call(await signAdmin(), 'Update', {
       pluginId: 'nope',

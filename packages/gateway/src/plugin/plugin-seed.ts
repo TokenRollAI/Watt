@@ -7,8 +7,9 @@
  * 二者能力在平台内（endpoint="binding:<name>" 引用，非外部 HTTPS 服务）——注册为 built_in Plugin，使
  *   `watt plugin list` 能枚举内置 channel adapter、`watt plugin health` 对其返回 ok（M10 完备性 + PluginLifecycle）。
  *
- * 幂等种子（仿 authz/seed.ts 与 agent/manage/manage-defs.ts 的 once-guard 语义）：挂 platform/* 种子中间件，
- *   isolate 级短路，首次成功后不再打 D1。upsert 语义下重跑安全（相同 id 覆盖 + built_in:true 保留）。
+ * 幂等种子（仿 authz/seed.ts 的「get 不存在才 write」语义 + once-guard）：挂 platform/* 种子中间件，
+ *   isolate 级短路，首次成功后不再打 D1。**只在条目不存在时写入**——已存在（含管理员经 Update 修改过
+ *   enabled 等字段）的条目绝不覆写，否则任意新 isolate 冷启动都会把人工修改静默回滚回种子原值。
  */
 
 import type { PluginManifest } from '@watt/core';
@@ -44,11 +45,16 @@ export const BUILTIN_FEISHU_PLUGIN: PluginManifest = {
 export const BUILTIN_PLUGINS: PluginManifest[] = [BUILTIN_WEBHOOK_PLUGIN, BUILTIN_FEISHU_PLUGIN];
 
 /**
- * 幂等种子内置 Plugin（引导时调）。每个经 PluginRegistry.write(manifest, builtIn=true) upsert。
+ * 幂等种子内置 Plugin（引导时调）。**get 不存在才 write**（对齐 authz/seed.ts doSeed 语义）：
+ *   已存在的条目（含管理员 Update 过的 enabled 状态）不覆写——无条件 upsert 会在每个新 isolate
+ *   冷启动时把人工修改静默回滚（Round 7 策略种子同类缺陷的回归教训）。
  */
 export async function seedBuiltinPlugins(registry: PluginRegistry): Promise<void> {
   for (const manifest of BUILTIN_PLUGINS) {
-    await registry.write(manifest, true);
+    const existing = await registry.get(manifest.id);
+    if ('code' in existing) {
+      await registry.write(manifest, true);
+    }
   }
 }
 
@@ -57,7 +63,7 @@ let pluginsSeeded: Promise<void> | null = null;
 
 /**
  * 幂等引导入口（挂 platform/* 种子中间件，仿 ensureManageDefsSeeded）：isolate 级短路，首次成功后不再打 D1。
- * upsert 语义下即使短路失效重跑也安全（相同 id 覆盖）。失败清缓存以便下次请求重试。
+ * 「get 不存在才 write」语义下短路失效重跑也安全（存在即跳过）。失败清缓存以便下次请求重试。
  */
 export function ensureBuiltinPluginsSeeded(registry: PluginRegistry): Promise<void> {
   if (!pluginsSeeded) {

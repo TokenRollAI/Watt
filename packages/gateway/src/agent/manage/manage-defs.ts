@@ -110,13 +110,18 @@ export function resolveManageBinding(definition: string): ManageBinding | undefi
 }
 
 /**
- * 幂等种子 manage 定义（引导时调，仿 authz/seed.ts once-guard 语义）。
- * 每个 def 经 AgentRegistry.write upsert（相同 name 覆盖）——重复调用安全。不建订阅（manage/* 无声明式
- *   订阅，靠 CLI/对话主动 spawn）。
+ * 幂等种子 manage 定义（引导时调，对齐 authz/seed.ts「get 不存在才 write」语义）。
+ * **只在 def 不存在时写入**——已存在（含管理员经 Update 调整过 model/grants 的）定义不覆写，否则
+ *   新 isolate 冷启动会把人工修改静默回滚回硬编码种子值。AgentRegistry.get 不存在时返回 not_found
+ *   WattError（非 null），用 'code' in 判别（对齐 plugin-seed）。不建订阅（manage/* 无声明式订阅，
+ *   靠 CLI/对话主动 spawn）。
  */
 export async function seedManageDefs(registry: AgentRegistry): Promise<void> {
   for (const def of SEED_MANAGE_DEFS) {
-    await registry.write(def);
+    const existing = await registry.get(def.name);
+    if ('code' in existing) {
+      await registry.write(def);
+    }
   }
 }
 
@@ -125,7 +130,7 @@ let manageSeeded: Promise<void> | null = null;
 
 /**
  * 幂等引导入口（挂 platform/* 种子中间件，仿 ensureSeedPolicy）：isolate 级短路，首次成功后不再打 D1。
- * upsert 语义下即使短路失效重跑也安全（相同 name 覆盖，不累积）。失败清缓存以便下次请求重试。
+ * 「get 不存在才 write」语义下短路失效重跑也安全（存在即跳过，不覆写人工修改）。失败清缓存以便下次请求重试。
  */
 export function ensureManageDefsSeeded(registry: AgentRegistry): Promise<void> {
   if (!manageSeeded) {

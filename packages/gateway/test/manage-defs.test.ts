@@ -69,15 +69,28 @@ describe('ensureManageDefsSeeded (幂等 / once-guard)', () => {
     }
   });
 
-  it('is idempotent (re-seed does not error; upsert)', async () => {
+  it('is idempotent (re-seed does not error; skip-if-exists)', async () => {
     const registry = new AgentRegistry(bindings.DB_PROVIDERS);
     await ensureManageDefsSeeded(registry);
     resetManageSeedGuardForTests();
     await ensureManageDefsSeeded(registry);
     const list = await registry.list({ limit: 200 });
+    // fail-loud：list 返回 WattError 时用例必须红，不许静默通过。
+    expect('items' in list).toBe(true);
     if ('items' in list) {
       const cronCount = list.items.filter((d) => d.name === 'manage/cron').length;
       expect(cronCount).toBe(1);
     }
+  });
+
+  it('does not overwrite an admin-modified def on isolate cold start (re-seed)', async () => {
+    const registry = new AgentRegistry(bindings.DB_PROVIDERS);
+    await ensureManageDefsSeeded(registry);
+    // 管理员修改 manage/cron（换模型）——种子重跑（模拟新 isolate 冷启动）不得回滚。
+    await registry.write({ ...MANAGE_CRON_DEF, model: { preferred: 'minimax-m3' } });
+    resetManageSeedGuardForTests();
+    await ensureManageDefsSeeded(registry);
+    const got = await registry.get('manage/cron');
+    expect(got).toMatchObject({ model: { preferred: 'minimax-m3' } });
   });
 });
