@@ -195,11 +195,11 @@ function Agents(): ReactNode {
       <Panel title="Agent instances" onReload={insts.reload}>
         <Msg error={insts.error} loading={insts.loading} />
         <Table
-          head={['instanceId', 'definition', 'status', 'parent']}
+          head={['instanceId', 'definition', 'state', 'parent']}
           rows={(insts.data?.items ?? []).map((i: AgentInstance) => [
             i.instanceId,
             i.definition,
-            i.status,
+            i.state,
             i.parent ?? '',
           ])}
         />

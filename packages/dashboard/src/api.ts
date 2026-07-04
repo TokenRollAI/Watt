@@ -95,7 +95,8 @@ export interface AgentDefinition {
 export interface AgentInstance {
   instanceId: string;
   definition: string;
-  status: string;
+  /** §3.2 四态（gateway ListInstances 返回字段名为 state，非 status——形状真源 gateway 路由测试）。 */
+  state: string;
   parent?: string;
 }
 export interface TaskInfo {
@@ -128,8 +129,9 @@ export interface MetricSeries {
 export const api = {
   // Agents（AgentRegistry.List + AgentRuntime.ListInstances）
   listAgentDefs: () => htbp<Page<AgentDefinition>>('agent', 'List', { opts: {} }),
-  listAgentInstances: () =>
-    htbp<Page<AgentInstance>>('agent', 'ListInstances', { opts: { tree: 'all' } }),
+  // ListInstances 全列语义 = opts 不带 tree（tree=<instanceId> 是「该实例的派生子树」，
+  //   传 tree:'all' 会对不存在的 rootId 恒返回 []——Proto §3.2 / gateway agent-runtime.ts）。
+  listAgentInstances: () => htbp<Page<AgentInstance>>('agent', 'ListInstances', { opts: {} }),
   // Tasks（TaskManager.List）
   listTasks: () => htbp<Page<TaskInfo>>('task', 'List', { opts: {} }),
   // Cron（Scheduler.List/Write/Delete）
