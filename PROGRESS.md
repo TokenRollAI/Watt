@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
 - **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
 - **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅，下一轮 R30（deep-research 真实化 B3 + E2E-2，调研 §4）
+- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅、R30 E2E-2 ✅，下一轮 R31（B5 潜伏群聊 agent + E2E-3，调研 §4）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,15 @@
 ---
 
 # 轮次记录
+
+## Round 30 — 2026-07-04（Phase 7 R30：deep-research 真实化 + E2E-2 线上全绿）
+- 目标：调研 §4 R30——B3（deep-research 真实化）+ E2E-2 四判据线上采证
+- 动作（主 assistant 直接实现，commit 407f3d0）：RESEARCH_FANOUT 2→3（判据②）；子 agent spawn 带 **expect.schema**（判据③——result 过 JSON Schema 校验才回送，invalid_output 走 failed）；summarize 增 **publishTaskOutbound**（判据④——汇总经 system outbound 管道送通知渠道，input.notify 参数化可发飞书群，确定性 dedupeKey 防重）；deep-research checkpoint notify 同参数化。websearch 工具留 llm def 换入时接（echo 满足全部协议判据——DOD 断言协议事实非文本内容）。测试三处适配 N=3。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1132 tests**）；`pnpm deploy:all` exit 0；**E2E-2 线上全绿**（`pnpm e2e 2`）：① waiting_human@confirm-plan → signal approve → running → **done**（3 agent fan-in 经线上 consumer 真实回送）；② agent tree 见 3 个 research 子实例、terminate 后全 terminated（回收）；③ 3 个 research step 全 done（expect.schema 校验通过的 result 回送）；④ 汇总 outbound.message "收到 3/3 份子报告" 留痕。中途 token 过期 401 一次（1h TTL，重签后过）。
+- 勾选：无（六条全绿后一并勾）。
+- 沉淀：无新坑。
+- 遗留：R31 = B5（潜伏群聊 agent：静默订阅 im.message + TTL scratch namespace 写入 + @ 触发回答 + session 粘性）+ E2E-3；R32 = E2E-4 + Phase 7 关门。人工清单不变。
+
 
 ## Round 29 — 2026-07-04（Phase 7 R29：auto-delivery-lite 真实化 + E2E-1 线上全绿）
 - 目标：调研 §4 R29——B2（模板真实化）+ B4（checkpoint 通知参数化）+ E2E-1 四判据线上采证
