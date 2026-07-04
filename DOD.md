@@ -124,6 +124,15 @@
 
 **E2E 通过 = 项目 Done。** 之后进入维护态：新能力（如 §8.1 动态编排）走同样的 Phase→DoD→E2E 流程增量推进。
 
+**采证（2026-07-04 Round 28~32，`pnpm e2e` 六条线上全绿——证据 PROGRESS Round 28~32，脚本 `scripts/e2e/`）**：
+- ✅ E2E-1（R29）：bug open→fixed（版本 1→2）/ locate 接力真实 agent.result / 卡片事件带 signal actions + CLI signal 恢复 / audit task signal allow。
+- ✅ E2E-2（R30）：waiting_human→running→done / tree 3 子实例+回收 / 3 result 过 expect.schema / 汇总 outbound "3/3" 留痕。
+- ✅ E2E-3（R31）：静默期零出站 / scratch ≥5 条+mount ttl=120s / @watt 后 9s 回答含"5 条上下文" / 全程单实例（session 粘性）。
+- ✅ E2E-4（R32）：admin tool call 200 / staff 403+ls 裁剪 / audit allow(user:djj)+deny(user:staff) 对照。
+- ✅ E2E-5（R28）：tokens 7d 非空 / provider Write 可见 / set-default 翻转旧默认 / @llm 一次 usage 落新渠道模型 minimax-m3。
+- ✅ E2E-6（R28）：job action=script+automations 可读 / 日报含真实数字（watt.queryMetric）/ fired+completed 成对 / 越权 grant exceeded deny。
+- **人工残留**（协议判据已全过，"真实飞书"体感面）：E2E-1/2 飞书卡片真实点击、E2E-2/6 群内可见核对、E2E-3 真实群消息（API 模拟已覆盖协议）——依赖 DoD Phase 6 ② 的入站人工采证同批完成。
+
 **已知外部前置（2026-07-02 状态，全部实测）**：
 - **Cloudflare 凭据验证判据**：`CLOUDFLARE_API_TOKEN` 是 Account-scoped token，验证一律用 `wrangler whoami`（或 `GET /accounts`）；**勿用 `/user/tokens/verify`**——该端点是 user-scoped，对 Account API Token 必然误报 `Invalid API Token`，不能作为凭据失效的判据。
 - **模型渠道 ✅**：两条路径均已验证——a) 中转直连 `https://llm.fantacy.live`（Anthropic Messages 格式）；b) **AI Gateway custom provider**：`https://gateway.ai.cloudflare.com/v1/<ACCOUNT_ID>/watt-gateway/custom-tipsy/messages`，`glm-5.2` 与 `minimax-m3` 都通。三个易错点：模型 ID 必须小写；custom provider 调用要加 `custom-` 前缀；该 provider 的 base_url 已含 `/v1`，路径写 `/messages`（写 `/v1/messages` 会 404）。请求头需 `cf-aig-authorization`（gateway 开了 authentication）+ `x-api-key`。M8 规范路径直接用 gateway，Case 5 的 analytics/缓存指标有原生数据源。
