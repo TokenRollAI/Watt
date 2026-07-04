@@ -15,8 +15,13 @@
   "observability": {
     "enabled": true
   },
-  // 飞书回调 URL / 平台调 Send 均走公网 HTTPS——workers.dev 子域保留。
+  // 飞书回调 URL 走自定义域名——workers.dev 在境内被干扰，飞书回调服务器 3s 握手超时（实测）；
+  //   单级子域 watt-feishu.pdjjq.org（Universal SSL 只覆盖 *.pdjjq.org 一级，勿用二级子域）。
+  //   workers.dev 子域保留（本机验证用；平台调 Send 走 gateway service binding，不依赖任一域名）。
   "workers_dev": true,
+  "routes": [
+    { "pattern": "watt-feishu.pdjjq.org", "custom_domain": true }
+  ],
   "vars": {
     // 飞书开放平台基址（国际版覆盖为 https://open.larksuite.com）。
     "FEISHU_BASE_URL": "https://open.feishu.cn"
