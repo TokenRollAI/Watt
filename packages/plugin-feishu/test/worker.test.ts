@@ -7,7 +7,10 @@ function req(path: string, init: RequestInit = {}): Request {
   return new Request(`${BASE}${path}`, init);
 }
 function jsonRes(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 describe('feishu worker — 元端点', () => {
@@ -22,7 +25,9 @@ describe('feishu worker — 元端点', () => {
     });
   });
   it('GET /~help lists Send/Encode', async () => {
-    const body = (await (await worker.fetch(req('/~help'))).json()) as { commands: { cmd: string }[] };
+    const body = (await (await worker.fetch(req('/~help'))).json()) as {
+      commands: { cmd: string }[];
+    };
     expect(body.commands.map((c) => c.cmd).sort()).toEqual(['Encode', 'Send']);
   });
   it('GET /healthz → healthy', async () => {
@@ -59,7 +64,11 @@ describe('feishu worker — POST /webhook/event（自持回调）', () => {
   });
 
   it('decodes an im.message and Publishes to the platform with plugin token', async () => {
-    const captured: { url: string; body: unknown; auth: string | null } = { url: '', body: null, auth: null };
+    const captured: { url: string; body: unknown; auth: string | null } = {
+      url: '',
+      body: null,
+      auth: null,
+    };
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       captured.url = String(url);
       captured.auth = new Headers(init?.headers).get('authorization');
@@ -68,14 +77,27 @@ describe('feishu worker — POST /webhook/event（自持回调）', () => {
     }) as unknown as typeof fetch;
     const worker = createFeishuWorker({ env, fetchImpl, now: () => '2026-07-04T00:00:00.000Z' });
     const inbound = {
-      header: { token: 'vt-1', event_id: 'ev-1', event_type: 'im.message.receive_v1', create_time: '1751587200000' },
-      event: { sender: { sender_id: { open_id: 'ou_s' } }, message: { chat_id: 'oc_r', chat_type: 'group', content: '{"text":"hello"}' } },
+      header: {
+        token: 'vt-1',
+        event_id: 'ev-1',
+        event_type: 'im.message.receive_v1',
+        create_time: '1751587200000',
+      },
+      event: {
+        sender: { sender_id: { open_id: 'ou_s' } },
+        message: { chat_id: 'oc_r', chat_type: 'group', content: '{"text":"hello"}' },
+      },
     };
-    const res = await worker.fetch(req('/webhook/event', { method: 'POST', body: JSON.stringify(inbound) }));
+    const res = await worker.fetch(
+      req('/webhook/event', { method: 'POST', body: JSON.stringify(inbound) }),
+    );
     expect(res.status).toBe(200);
     expect(captured.url).toBe('https://watt.example.dev/htbp/platform/event');
     expect(captured.auth).toBe('Bearer plugin-token-xyz');
-    const call = captured.body as { tool: string; arguments: { event: { type: string; dedupeKey: string } } };
+    const call = captured.body as {
+      tool: string;
+      arguments: { event: { type: string; dedupeKey: string } };
+    };
     expect(call.tool).toBe('Publish');
     expect(call.arguments.event.type).toBe('im.message');
     expect(call.arguments.event.dedupeKey).toBe('ev-1');
@@ -85,7 +107,9 @@ describe('feishu worker — POST /webhook/event（自持回调）', () => {
     const fetchImpl = vi.fn(async () => jsonRes({})) as unknown as typeof fetch;
     const worker = createFeishuWorker({ env, fetchImpl });
     const inbound = { header: { token: 'vt-1', event_type: 'contact.user.created_v3' }, event: {} };
-    const res = await worker.fetch(req('/webhook/event', { method: 'POST', body: JSON.stringify(inbound) }));
+    const res = await worker.fetch(
+      req('/webhook/event', { method: 'POST', body: JSON.stringify(inbound) }),
+    );
     expect(res.status).toBe(200);
     expect((await res.json()) as { skipped?: string }).toHaveProperty('skipped');
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -97,28 +121,43 @@ describe('feishu worker — POST /（§11.4 HTBP 面）', () => {
 
   function feishuFetch(): typeof fetch {
     return (async (url: string | URL | Request) => {
-      if (String(url).includes('tenant_access_token')) return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
+      if (String(url).includes('tenant_access_token'))
+        return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
       return jsonRes({ code: 0, data: { message_id: 'om_9' } });
     }) as unknown as typeof fetch;
   }
 
   it('Send with valid platform-token delivers and returns a SendReceipt', async () => {
-    const worker = createFeishuWorker({ env, fetchImpl: feishuFetch(), verifyPlatformToken: async () => true });
+    const worker = createFeishuWorker({
+      env,
+      fetchImpl: feishuFetch(),
+      verifyPlatformToken: async () => true,
+    });
     const res = await worker.fetch(
       req('/', {
         method: 'POST',
         headers: { authorization: 'Bearer good', 'x-watt-request-id': 'evt-77' },
-        body: JSON.stringify({ tool: 'Send', arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'hi' } } } }),
+        body: JSON.stringify({
+          tool: 'Send',
+          arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'hi' } } },
+        }),
       }),
     );
     expect(res.status).toBe(200);
-    expect((await res.json()) as { ok: boolean; channelMessageId: string }).toMatchObject({ ok: true, channelMessageId: 'om_9' });
+    expect((await res.json()) as { ok: boolean; channelMessageId: string }).toMatchObject({
+      ok: true,
+      channelMessageId: 'om_9',
+    });
   });
 
   it('rejects Send without a valid platform-token', async () => {
     const worker = createFeishuWorker({ env, verifyPlatformToken: async () => false });
     const res = await worker.fetch(
-      req('/', { method: 'POST', headers: { authorization: 'Bearer bad' }, body: JSON.stringify({ tool: 'Send', arguments: { message: {} } }) }),
+      req('/', {
+        method: 'POST',
+        headers: { authorization: 'Bearer bad' },
+        body: JSON.stringify({ tool: 'Send', arguments: { message: {} } }),
+      }),
     );
     expect(res.status).toBe(401);
   });
@@ -129,7 +168,10 @@ describe('feishu worker — POST /（§11.4 HTBP 面）', () => {
       req('/', {
         method: 'POST',
         headers: { authorization: 'Bearer good' },
-        body: JSON.stringify({ tool: 'Encode', arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'hi' } } } }),
+        body: JSON.stringify({
+          tool: 'Encode',
+          arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'hi' } } },
+        }),
       }),
     );
     const body = (await res.json()) as { receive_id: string; msg_type: string };
@@ -140,7 +182,11 @@ describe('feishu worker — POST /（§11.4 HTBP 面）', () => {
   it('unknown tool → 400', async () => {
     const worker = createFeishuWorker({ env, verifyPlatformToken: async () => true });
     const res = await worker.fetch(
-      req('/', { method: 'POST', headers: { authorization: 'Bearer good' }, body: JSON.stringify({ tool: 'Nope' }) }),
+      req('/', {
+        method: 'POST',
+        headers: { authorization: 'Bearer good' },
+        body: JSON.stringify({ tool: 'Nope' }),
+      }),
     );
     expect(res.status).toBe(400);
   });
@@ -154,7 +200,10 @@ describe('feishu worker — POST /（§11.4 HTBP 面）', () => {
       req('/', {
         method: 'POST',
         headers: { authorization: 'Bearer good' },
-        body: JSON.stringify({ tool: 'Send', arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'x' } } } }),
+        body: JSON.stringify({
+          tool: 'Send',
+          arguments: { message: { channel: 'feishu', target: 'oc_r', content: { text: 'x' } } },
+        }),
       }),
     );
     expect(res.status).toBe(503);

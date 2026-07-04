@@ -76,7 +76,12 @@ describe('decodeFeishuEvent — card.action.trigger → im.action', () => {
       header: { event_id: 'ev-2', event_type: 'card.action.trigger', create_time: '1751587200000' },
       event: {
         operator: { open_id: 'ou_op' },
-        action: { value: { id: 'confirm-release:approve', signal: { taskId: 't1', checkpoint: 'confirm-release', decision: 'approve' } } },
+        action: {
+          value: {
+            id: 'confirm-release:approve',
+            signal: { taskId: 't1', checkpoint: 'confirm-release', decision: 'approve' },
+          },
+        },
         context: { open_chat_id: 'oc_room' },
       },
     };
@@ -84,7 +89,11 @@ describe('decodeFeishuEvent — card.action.trigger → im.action', () => {
     if (res.skip) throw new Error('unexpected skip');
     expect(res.event.type).toBe('im.action');
     const payload = res.event.payload as Record<string, unknown>;
-    expect(payload.signal).toEqual({ taskId: 't1', checkpoint: 'confirm-release', decision: 'approve' });
+    expect(payload.signal).toEqual({
+      taskId: 't1',
+      checkpoint: 'confirm-release',
+      decision: 'approve',
+    });
     expect(res.event.session).toBe('feishu:chat:oc_room');
     expect(res.event.channelUser).toEqual({ channel: 'feishu', userId: 'ou_op' });
   });
@@ -92,7 +101,10 @@ describe('decodeFeishuEvent — card.action.trigger → im.action', () => {
 
 describe('decodeFeishuEvent — skip 面', () => {
   it('unknown event_type → skip', () => {
-    const res = decodeFeishuEvent({ header: { event_type: 'contact.user.created_v3' }, event: {} }, { now: NOW });
+    const res = decodeFeishuEvent(
+      { header: { event_type: 'contact.user.created_v3' }, event: {} },
+      { now: NOW },
+    );
     expect(res.skip).toBe(true);
   });
   it('missing header → skip', () => {

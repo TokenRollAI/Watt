@@ -6,6 +6,7 @@
  *   （P4 打包时 inline），不再依赖 @watt/core 的飞书导出（已从 core 迁出）。
  */
 
+export { type BotInfoResponse, fetchBotOpenId } from './botinfo.ts';
 export {
   computeFeishuSignature,
   constantTimeEqual,
@@ -24,17 +25,16 @@ export {
 } from './decode.ts';
 export { encodeFeishuOutbound, type FeishuOutboundPayload } from './encode.ts';
 export {
-  extractChallenge,
-  type FeishuVerifyConfig,
-  type RawInbound,
-  verifyAndExtract,
-  type VerifyResult,
-} from './verify.ts';
-export {
   type FeishuSendConfig,
   type FeishuSendResult,
   memoryTokenCache,
   sendFeishuMessage,
   type TokenCache,
 } from './send.ts';
-export { type BotInfoResponse, fetchBotOpenId } from './botinfo.ts';
+export {
+  extractChallenge,
+  type FeishuVerifyConfig,
+  type RawInbound,
+  type VerifyResult,
+  verifyAndExtract,
+} from './verify.ts';

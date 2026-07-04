@@ -68,7 +68,12 @@ function json(data: unknown, status = 200): Response {
 }
 
 /** 裸 WattError body（§0.2，与平台一致——无信封）。 */
-function errResponse(code: Parameters<typeof wattError>[0], message: string, status: number, retryable = false): Response {
+function errResponse(
+  code: Parameters<typeof wattError>[0],
+  message: string,
+  status: number,
+  retryable = false,
+): Response {
   return json(wattError(code, message, retryable), status);
 }
 
@@ -88,7 +93,8 @@ const HELP_DSL = {
   commands: [
     {
       cmd: 'Send',
-      summary: 'Deliver an OutboundMessage to feishu (tenant_access_token + REST; idempotent by X-Watt-Request-Id).',
+      summary:
+        'Deliver an OutboundMessage to feishu (tenant_access_token + REST; idempotent by X-Watt-Request-Id).',
       arguments: { message: 'OutboundMessage {channel,target,content{text?,actions?}}' },
       returns: 'SendReceipt {ok, channelMessageId?, error?, retryable?}',
     },
@@ -125,7 +131,9 @@ new \`WATT_PLUGIN_TOKEN\` secret on this worker.
 /**
  * 构造飞书 plugin Worker（依赖注入）。返回 { fetch }。
  */
-export function createFeishuWorker(deps: FeishuWorkerDeps): { fetch: (request: Request) => Promise<Response> } {
+export function createFeishuWorker(deps: FeishuWorkerDeps): {
+  fetch: (request: Request) => Promise<Response>;
+} {
   const env = deps.env;
   const fetchImpl = deps.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const now = deps.now ?? (() => new Date().toISOString());
@@ -160,10 +168,17 @@ export function createFeishuWorker(deps: FeishuWorkerDeps): { fetch: (request: R
               {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ app_id: env.FEISHU_APP_ID, app_secret: env.FEISHU_APP_SECRET }),
+                body: JSON.stringify({
+                  app_id: env.FEISHU_APP_ID,
+                  app_secret: env.FEISHU_APP_SECRET,
+                }),
               },
             );
-            const body = (await res.json()) as { code?: number; tenant_access_token?: string; expire?: number };
+            const body = (await res.json()) as {
+              code?: number;
+              tenant_access_token?: string;
+              expire?: number;
+            };
             if (body.code === 0 && body.tenant_access_token) {
               token = body.tenant_access_token;
               await cache.put('feishu:tenant_access_token', token, (body.expire ?? 7200) - 60);
@@ -209,7 +224,12 @@ export function createFeishuWorker(deps: FeishuWorkerDeps): { fetch: (request: R
     const pluginToken = env.WATT_PLUGIN_TOKEN;
     const platformBase = (env.WATT_BASE_URL ?? '').replace(/\/+$/, '');
     if (!pluginToken || platformBase.length === 0) {
-      return errResponse('unavailable', 'WATT_PLUGIN_TOKEN / WATT_BASE_URL not configured', 503, true);
+      return errResponse(
+        'unavailable',
+        'WATT_PLUGIN_TOKEN / WATT_BASE_URL not configured',
+        503,
+        true,
+      );
     }
     const pubRes = await fetchImpl(`${platformBase}/htbp/platform/event`, {
       method: 'POST',
@@ -222,7 +242,12 @@ export function createFeishuWorker(deps: FeishuWorkerDeps): { fetch: (request: R
     if (!pubRes.ok) {
       const detail = await pubRes.text().catch(() => '');
       // Publish 失败 → 返回 500 retryable（飞书会重推同 event_id，平台侧 dedupe 兜底）。
-      return errResponse('internal', `platform Publish failed: HTTP ${pubRes.status} ${detail}`, 502, true);
+      return errResponse(
+        'internal',
+        `platform Publish failed: HTTP ${pubRes.status} ${detail}`,
+        502,
+        true,
+      );
     }
     return json({ ok: true });
   }
@@ -248,7 +273,8 @@ export function createFeishuWorker(deps: FeishuWorkerDeps): { fetch: (request: R
         }
         // 幂等键：优先 X-Watt-Request-Id（平台每次逻辑调用唯一，重试不变），回落 args.dedupeId。
         const requestId =
-          request.headers.get('x-watt-request-id') ?? (typeof args.dedupeId === 'string' ? args.dedupeId : undefined);
+          request.headers.get('x-watt-request-id') ??
+          (typeof args.dedupeId === 'string' ? args.dedupeId : undefined);
         const receipt = await sendFeishuMessage(
           sendCfg,
           message,

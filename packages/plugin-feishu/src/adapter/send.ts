@@ -11,8 +11,8 @@
  *   message 的 uuid 字段（服务端去重，队列重投不重复发）。
  */
 
-import { encodeFeishuOutbound } from './encode.ts';
 import type { OutboundMessage } from './decode.ts';
+import { encodeFeishuOutbound } from './encode.ts';
 
 const TOKEN_CACHE_KEY = 'feishu:tenant_access_token';
 /** 飞书 tenant_access_token 有效期 ~7200s；缓存 TTL 留 60s 安全边际。 */

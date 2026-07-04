@@ -88,7 +88,8 @@ export async function verifyAndExtract(
   if (config.verificationToken !== undefined && config.verificationToken.length > 0) {
     // token 位置：url_verification 握手在顶层 token；事件推送在 header.token（v2）。
     const topToken = typeof outer.token === 'string' ? outer.token : undefined;
-    const header = typeof outer.header === 'object' && outer.header !== null ? outer.header : undefined;
+    const header =
+      typeof outer.header === 'object' && outer.header !== null ? outer.header : undefined;
     const headerToken =
       header && typeof (header as { token?: unknown }).token === 'string'
         ? (header as { token: string }).token

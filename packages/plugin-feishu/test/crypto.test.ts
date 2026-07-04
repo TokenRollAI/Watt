@@ -73,7 +73,11 @@ describe('decryptFeishuPayload — AES-256-CBC, key=sha256(encryptKey), iv=前16
   it('roundtrips a multi-block (>16 byte) event payload', async () => {
     const key = 'k2';
     const plain = JSON.stringify({
-      header: { event_id: 'ev-1', event_type: 'im.message.receive_v1', create_time: '1700000000000' },
+      header: {
+        event_id: 'ev-1',
+        event_type: 'im.message.receive_v1',
+        create_time: '1700000000000',
+      },
       event: { message: { chat_id: 'oc_x', content: '{"text":"hello world 你好"}' } },
     });
     const encrypt = oracleEncrypt(plain, key);

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { OutboundMessage } from '../src/adapter/decode.ts';
 import {
   type FeishuSendConfig,
   memoryTokenCache,
   sendFeishuMessage,
   type TokenCache,
 } from '../src/adapter/send.ts';
-import type { OutboundMessage } from '../src/adapter/decode.ts';
 
 const MSG: OutboundMessage = { channel: 'feishu', target: 'oc_room', content: { text: 'hi' } };
 
@@ -30,7 +30,8 @@ describe('sendFeishuMessage — token 换取 + 投递', () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       const u = String(url);
       calls.push(u);
-      if (u.includes('tenant_access_token')) return jsonRes({ code: 0, tenant_access_token: 'tk-1', expire: 7200 });
+      if (u.includes('tenant_access_token'))
+        return jsonRes({ code: 0, tenant_access_token: 'tk-1', expire: 7200 });
       return jsonRes({ code: 0, data: { message_id: 'om_1' } });
     }) as unknown as typeof fetch;
     const res = await sendFeishuMessage(cfg({ fetchImpl }), MSG);
@@ -58,7 +59,8 @@ describe('sendFeishuMessage — token 换取 + 投递', () => {
   it('passes dedupeId as feishu uuid (idempotency)', async () => {
     let sentBody: Record<string, unknown> = {};
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
-      if (String(url).includes('tenant_access_token')) return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
+      if (String(url).includes('tenant_access_token'))
+        return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
       sentBody = JSON.parse(String(init?.body));
       return jsonRes({ code: 0, data: { message_id: 'om' } });
     }) as unknown as typeof fetch;
@@ -79,7 +81,8 @@ describe('sendFeishuMessage — retryable 分类', () => {
 
   it('business reject (bad receive_id) → non-retryable', async () => {
     const fetchImpl = (async (url: string | URL | Request) => {
-      if (String(url).includes('tenant_access_token')) return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
+      if (String(url).includes('tenant_access_token'))
+        return jsonRes({ code: 0, tenant_access_token: 'tk', expire: 7200 });
       return jsonRes({ code: 230001, msg: 'invalid receive_id' });
     }) as unknown as typeof fetch;
     const res = await sendFeishuMessage(cfg({ fetchImpl }), MSG);
@@ -98,7 +101,8 @@ describe('sendFeishuMessage — retryable 分类', () => {
         deletes.push(key);
       },
     };
-    const fetchImpl = (async () => jsonRes({ code: 99991663, msg: 'token expired' })) as unknown as typeof fetch;
+    const fetchImpl = (async () =>
+      jsonRes({ code: 99991663, msg: 'token expired' })) as unknown as typeof fetch;
     const res = await sendFeishuMessage(cfg({ fetchImpl, cache }), MSG);
     expect(res.ok).toBe(false);
     expect(res.retryable).toBe(true);
