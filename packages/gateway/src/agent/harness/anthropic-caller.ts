@@ -85,7 +85,13 @@ export function createAnthropicCaller(opts: {
       // 有 tools → agentic loop（stopWhen stepCountIs）：模型可多轮调工具后产最终文本；
       //   无 tools → 单次调用（stopWhen 缺省 stepCountIs(1)，行为不变，无回归）。
       const hasTools = req.tools !== undefined && req.tools.length > 0;
-      const { text, usage } = await generateText({
+      // ai@6 usage 语义差异（对抗核查 ai@6.0.219 类型定义实证，pitfalls）：
+      //   result.usage = "token usage of the last step"（仅最后一步）；
+      //   result.totalUsage = "total token usage of all steps"（全步累计）。
+      // 带 tools 的 agentic loop（stopWhen stepCountIs(8)）会跑多步，取 usage 会系统性丢失前面
+      //   所有 step 的 token（manage/* 对话恰是 token 大头）——必须取 totalUsage。无 tools 单步时
+      //   totalUsage===usage（sum of one step），故对无工具路径零回归。
+      const { text, totalUsage } = await generateText({
         model: provider(req.model),
         maxOutputTokens: 1024,
         abortSignal: AbortSignal.timeout(timeoutMs),
@@ -103,10 +109,10 @@ export function createAnthropicCaller(opts: {
       if (typeof text !== 'string' || (text.length === 0 && !hasTools)) {
         throw new Error('anthropic messages response missing content text');
       }
-      // AI SDK usage：inputTokens/outputTokens（ai@6）；缺省时省略（打点侧按 0 处理）。
+      // AI SDK totalUsage：inputTokens/outputTokens（ai@6，全步累计）；缺省时省略（打点侧按 0 处理）。
       const modelUsage =
-        usage !== undefined
-          ? { inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 }
+        totalUsage !== undefined
+          ? { inputTokens: totalUsage.inputTokens ?? 0, outputTokens: totalUsage.outputTokens ?? 0 }
           : undefined;
       return { text, ...(modelUsage !== undefined ? { usage: modelUsage } : {}) };
     },
