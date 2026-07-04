@@ -143,4 +143,8 @@ await runE2e('e2e-1', async () => {
     `signal audit decision should be allow, got ${signalAudit.decision}`,
   );
   log.pass('④ audit trail replayable', `task signal → ${signalAudit.decision}`);
+
+  // 清理（C15：E2E 残留实例无界累积 + listInstances 200 上限会截掉新实例）——terminate 本任务派生实例。
+  cli(env, ['agent', 'terminate', `task:${taskId}#locate`]);
+  log.pass('cleanup', 'locate sub-instance terminated');
 });

@@ -32,7 +32,17 @@ function imMessage(id: string, text: string): Event {
 async function clearDb() {
   await env.DB_EVENTS.prepare('DELETE FROM events').run();
   await env.DB_CONTEXT.prepare('DELETE FROM entries').run();
+  await env.DB_POLICIES.prepare('DELETE FROM policies').run();
   await new AgentRegistry(env.DB_PROVIDERS).write(LURKER_SCRIBE_DEF);
+  // R32 出站 Check：lurker 回答需 allow 策略（subject=agent 定义级）+ def grants（已在 DEF 声明）。
+  const { PolicyStore } = await import('../src/authz/policy-store.ts');
+  await new PolicyStore(env.DB_POLICIES).write({
+    id: 'test-lurker-outbound',
+    subject: 'agent:lurker/scribe',
+    resource: 'event://*',
+    actions: ['write'],
+    effect: 'allow',
+  });
 }
 
 beforeEach(clearDb);
@@ -98,6 +108,21 @@ describe('lurker/scribe (Case 3 / E2E-3)', () => {
     expect(text).toContain('刚才大家聊了什么');
     // target = session 末段（渠道内会话 id）。
     expect((out.items[0]?.payload as { target?: string }).target).toBe('oc_lurk_1');
+  });
+
+  it('outbound Check denies the answer when no allow policy exists (R32 出站鉴权)', async () => {
+    // 删掉 allow 策略——@watt 回答应 failed(rejected) 且零出站（deny 留审计）。
+    await env.DB_POLICIES.prepare('DELETE FROM policies').run();
+    await deliver(imMessage('d1', '@watt 在吗'));
+    const store = new EventStore(env.DB_EVENTS);
+    const out = await store.list({ filter: { type: 'outbound.message' } });
+    if ('code' in out) throw new Error(out.message);
+    expect(out.items).toHaveLength(0);
+    // deny 审计留痕。
+    const audit = await env.DB_AUDIT.prepare(
+      "SELECT decision FROM audit_records WHERE resource LIKE 'event://%' ORDER BY at DESC LIMIT 1",
+    ).first<{ decision: string }>();
+    expect(audit?.decision).toBe('deny');
   });
 
   it('session stickiness: declarative subscription resolves the same instance key (判据④)', async () => {

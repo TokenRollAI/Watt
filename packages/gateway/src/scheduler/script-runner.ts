@@ -59,7 +59,8 @@ export interface WattScriptBinding {
   queryMetric(q: {
     metric: string;
     range: { from: string; to: string };
-    groupBy?: string;
+    /** 分组维度（Proto §10 枚举数组；便利形式单 string 亦接受，binding 内归一）。 */
+    groupBy?: string | string[];
   }): Promise<{ series: unknown[] }>;
 }
 
@@ -218,18 +219,34 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
     }
   }
 
-  /** 只读 Metrics 查询（R28 能力表扩容）——Check(platform://metrics,'read') 后查 Metrics。 */
-  async queryMetric(q: { metric: string; range: { from: string; to: string }; groupBy?: string }) {
+  /** 只读 Metrics 查询（R28 能力表扩容 / R32 groupBy 类型修正）——Check 后查 Metrics。 */
+  async queryMetric(q: {
+    metric: string;
+    range: { from: string; to: string };
+    groupBy?: string | string[];
+  }) {
     await this.checkCapability('platform://metrics', 'read');
     const { Metrics, METRIC_NAMES } = await import('../metrics/metrics.ts');
     if (!METRIC_NAMES.includes(q.metric as (typeof METRIC_NAMES)[number])) {
       throw wattError('invalid_argument', `unknown metric: ${q.metric}`, false);
     }
+    // MetricQuery.groupBy 是 GroupByDim[]——便利形式单 string 归一为数组（原 string 透传会在
+    //   metrics.query 的 .filter 上抛 TypeError，R32 关门修正）；非法维度显式拒绝（脚本感知）。
+    const GROUP_BY_DIMS = ['provider', 'model', 'agent', 'channel', 'day', 'hour'];
+    const groupBy =
+      q.groupBy === undefined ? undefined : Array.isArray(q.groupBy) ? q.groupBy : [q.groupBy];
+    if (groupBy !== undefined) {
+      for (const g of groupBy) {
+        if (!GROUP_BY_DIMS.includes(g)) {
+          throw wattError('invalid_argument', `unknown groupBy dim: ${g}`, false);
+        }
+      }
+    }
     const metrics = new Metrics(this.env.DB_AUDIT, this.env.DB_EVENTS);
     const series = await metrics.query({
       metric: q.metric as (typeof METRIC_NAMES)[number],
       range: q.range,
-      ...(q.groupBy !== undefined ? { groupBy: q.groupBy } : {}),
+      ...(groupBy !== undefined ? { groupBy } : {}),
     } as Parameters<InstanceType<typeof Metrics>['query']>[0]);
     return { series: series as unknown[] };
   }

@@ -47,20 +47,19 @@ export async function publishTaskCheckpoint(
 }
 
 /**
- * Publish Task 的出站通知（R30，E2E-2 判据④汇总送达）——outbound.message 走 system 路由
- *   （与 checkpoint 卡片同管道：consumer handleOutboundMessage → 渠道 adapter 投递）。
- *   带确定性 dedupeKey（重放/重投不重复下发，对齐 consumer.systemPublish 语义——Workflow step.do
- *   已保证单次执行，dedupeKey 是队列 at-least-once 面的第二道保险）。
+ * Publish Task 的出站通知（R30/R32）——outbound.message 走 system 路由（与 checkpoint 卡片同管道）。
+ *   调用方必须给**确定性 dedupeKey**（来源键：taskId+step / 源事件 id）；本函数 publish 前经
+ *   findByDedupeKey 窗内短路——step 重试、队列重投都不重复出站。
  */
 export async function publishTaskOutbound(
   env: TaskEventEnv,
-  msg: { channel: string; target: string; text: string },
+  msg: { channel: string; target: string; text: string; dedupeKey: string },
 ): Promise<void> {
   const input: EventInput = {
     source: { kind: 'system' },
     type: 'outbound.message',
     payload: { channel: msg.channel, target: msg.target, content: { text: msg.text } },
-    dedupeKey: `task:outbound:${msg.channel}:${msg.target}:${msg.text.slice(0, 40)}`,
+    dedupeKey: msg.dedupeKey,
   };
   const event = normalizeEvent(input, {
     genId: () => crypto.randomUUID(),
@@ -68,7 +67,13 @@ export async function publishTaskOutbound(
     genTraceId: () => crypto.randomUUID(),
   });
   const { EventStore } = await import('../event/event-store.ts');
-  await new EventStore(env.DB_EVENTS).put(event);
+  const store = new EventStore(env.DB_EVENTS);
+  // 幂等短路（R32 关门修正：原 dedupeKey 是死字段——只写不查，step 重试/队列重投必重复出站）：
+  //   对齐 event-bus.publish ⑤ / consumer.systemPublish 语义，窗内命中即跳过。
+  //   dedupeKey 由调用方给确定性来源键（taskId+step / 源事件 id），弃 text 前缀键（同前缀误吞）。
+  const existing = await store.findByDedupeKey(msg.dedupeKey, Date.now());
+  if (existing !== null) return;
+  await store.put(event);
   await env.QUEUE_EVENTS.send(event);
 }
 

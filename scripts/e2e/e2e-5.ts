@@ -112,11 +112,8 @@ await runE2e('e2e-5', async () => {
       }),
     );
     assert(status === 200, `agent def Write failed: HTTP ${status}`);
-    const key = `e2e5-${Date.now().toString(36)}`;
-    cli(env, ['agent', 'spawn', DEF, '--instance-key', key]);
-    cli(env, ['agent', 'send', key, '--payload', '{"text":"reply with the word ok"}']);
-    // 断言：新渠道的模型（minimax-m3）在 usage 里出现（group-by model）。
-    await waitFor('usage row on the new default model (minimax-m3)', () => {
+    // C5 修正：先取基线（1d 窗内 minimax-m3 已有量），断言**增量**——复跑不因上一轮残余假绿。
+    const readModelTotal = (): number => {
       const byModel = cli<{ series: MetricSeries[] }>(env, [
         'metrics',
         'query',
@@ -127,17 +124,34 @@ await runE2e('e2e-5', async () => {
         '--group-by',
         'model',
       ]);
-      const hit = byModel.series.find(
-        (s) => s.labels.model === 'minimax-m3' && s.points.some((p) => p.v > 0),
-      );
-      return hit !== undefined ? hit : undefined;
-    });
+      return byModel.series
+        .filter((s) => s.labels.model === 'minimax-m3')
+        .flatMap((s) => s.points)
+        .reduce((acc, p) => acc + p.v, 0);
+    };
+    const baseline = readModelTotal();
+    const key = `e2e5-${Date.now().toString(36)}`;
+    cli(env, ['agent', 'spawn', DEF, '--instance-key', key]);
+    cli(env, ['agent', 'send', key, '--payload', '{"text":"reply with the word ok"}']);
+    await waitFor('usage DELTA on the new default model (minimax-m3)', () =>
+      readModelTotal() > baseline ? true : undefined,
+    );
     cli(env, ['agent', 'terminate', key]);
-    log.pass('④ LLM call landed usage on the new default provider model (minimax-m3)');
+    log.pass(
+      '④ LLM call landed NEW usage on the default provider model (minimax-m3)',
+      `baseline=${baseline}`,
+    );
   }
 
-  // 清理：恢复 A 为默认再删两渠道？Provider 无 delete 动词——置回 B 非默认即可（enabled 保留）。
-  // 平台无 provider rm：留两条 e2e5-* 渠道（幂等：下轮重跑 add 是 upsert）。把默认清位以免影响
-  //   非 E2E 的 llm def（钉死模型的 def 不受 default 影响；resolveDefault 只对 'default' 哨兵生效）。
-  log.pass('cleanup', 'providers left in place (upsert-idempotent), default stays on e2e5-relay-b');
+  // C12 修正：清 default 位（Update default:false）——测试渠道不残留为平台默认（'default' 哨兵
+  //   def 与缺省 model 的 def 会跟随 default 渠道；钉死模型 def 经 R32 修复后不受影响但仍应复位）。
+  await import('./lib.ts').then((m) =>
+    m.htbp(env, 'provider', 'Update', { providerId: PROVIDER_B, patch: { default: false } }),
+  );
+  const finalList = cli<ProviderRow[]>(env, ['provider', 'list']);
+  assert(
+    finalList.every((prov) => !prov.default || !prov.id.startsWith('e2e5-')),
+    'e2e5 test providers must not remain the platform default after cleanup',
+  );
+  log.pass('cleanup', 'default flag cleared off e2e5-* providers (rows left, upsert-idempotent)');
 });

@@ -212,10 +212,11 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       return runLurkerHarness(this.env as Bindings, args.event);
     }
     if (this.state.harness === 'llm') {
-      // 模型/渠道解析（§9 / Case 5，R28 B7 接线）：def 显式声明 model.preferred 优先；缺省时
-      //   查 ModelProviderRegistry 的 default 渠道（set-default 切换后下一次调用即走新渠道——
-      //   E2E-5 判据④）；仍无 → env 直连缺省 glm-5.2。secretRef 是 env secret 引用名。
-      const routing = await this.resolveModelRouting();
+      // 模型/渠道解析（§9 / Case 5，R28 B7 / R32 修正）：def 显式声明 model.preferred（钉死）时
+      //   **不查 default 渠道**——model 与 secretRef 必须同源，否则 set-default 切渠道会把其它
+      //   渠道的 key 套到钉死模型上（key/模型错配）。只有缺省 model（含 'default' 哨兵，spawn 时
+      //   归一为 undefined）才跟随 default 渠道（model+secretRef 成对取用）。
+      const routing = this.state.model === undefined ? await this.resolveModelRouting() : null;
       const modelCaller = caller ?? this.buildDefaultCaller(routing?.secretRef);
       const model = this.state.model ?? routing?.model ?? 'glm-5.2';
       const usages: { inputTokens: number; outputTokens: number }[] = [];
@@ -248,8 +249,21 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       for (const usage of usages) await this.recordUsage(model, usage);
       return outcome;
     }
-    // echo（缺省）：回显 input（缺省事件 payload）。
-    return echoHarness(this.state.input ?? args.event.payload);
+    // echo（缺省）：回显 input（缺省事件 payload）。expect.schema 存在时同样校验（R32 修正：
+    //   原 echo 跳过校验使 expect.schema 对 echo 是死字段——E2E-2 判据③"过 schema 校验"会空转；
+    //   不符 → invalid_output failed（echo 无重试语义，一次判定）。
+    const echoOutcome = echoHarness(this.state.input ?? args.event.payload);
+    if (args.schema !== undefined && echoOutcome.kind === 'result') {
+      const { validateAgentOutput } = await import('@watt/core');
+      const check = validateAgentOutput(echoOutcome.output, args.schema);
+      if (!check.valid) {
+        const summary = check.violations
+          .map((v) => `${v.path || '<root>'}: ${v.message}`)
+          .join('; ');
+        return { kind: 'failed', reason: 'invalid_output', errorMessage: summary };
+      }
+    }
+    return echoOutcome;
   }
 
   /** 写一行 usage（D1 usage 表）+ AE 并行打点。best-effort：失败不阻塞 harness。 */

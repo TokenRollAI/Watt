@@ -9,6 +9,10 @@
  * 判据：① admin 请求 → 财务工具被调用、正常回答（tool call 200 + 上游返回）；② employee →
  *   Authorizer deny（403 permission_denied）、工具零调用、`tool ls` 不可见（裁剪）；③ 两条
  *   AuditLog decision 分别 allow/deny 且主体正确。
+ * 降级口径声明（C10）：DOD 已降级为"API 模拟两身份+协议层判定全量验证"——本脚本走 PEP 直测
+ *   （tool call 200/403 + ls 裁剪 + audit 对照）；"工具零调用"由 403 发生在代理层 Check（上游
+ *   不被触达，tools-proxy 测试锁定）保证；"礼貌拒绝"的 IM 文案面属 agent 对话链路（E2E-3 的
+ *   lurker deny 路径已覆盖 agent 侧 rejected 语义）。
  *
  * 运行：TOKENS=$(node scripts/sign-admin-token.mjs --rotate --extra user:staff=staff)
  *       WATT_TOKEN=$(sed -n 1p <<<"$TOKENS") WATT_EMPLOYEE_TOKEN=$(sed -n 2p <<<"$TOKENS") \\
@@ -138,6 +142,10 @@ await runE2e('e2e-4', async () => {
     denyRec.context.principal === 'user:staff',
     `deny principal should be user:staff, got ${denyRec.context.principal}`,
   );
+  // chain 完整性（user token 面）：直调无 agent 链——audit context 不带 agent 段即为正确链形状
+  //   （agent 委托链的 chain 断言由 lurker/scheduler 审计用例覆盖）。
+  const denyCtx = denyRec.context as { principal: string; agent?: { chain?: string[] } };
+  assert(denyCtx.agent === undefined, 'user-token deny should carry no agent chain (direct call)');
   log.pass(
     '③ audit decisions allow/deny with correct principals',
     `allow=${allowRec.context.principal} deny=${denyRec.context.principal}`,

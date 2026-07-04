@@ -19,16 +19,22 @@ interface EventRow {
   occurredAt: string;
 }
 
-const JOB = 'e2e6-daily-tokens';
-const DENY_JOB = 'e2e6-deny-probe';
-const SCRIPT_PATH = 'e2e6-daily-report';
-const DENY_SCRIPT_PATH = 'e2e6-deny-script';
+// jobId/脚本路径带运行序号（C19 修正：固定 id + 前推窗口会命中上一轮陈旧事件而假绿）。
+const RUN = Date.now().toString(36);
+const JOB = `e2e6-daily-tokens-${RUN}`;
+const DENY_JOB = `e2e6-deny-probe-${RUN}`;
+const SCRIPT_PATH = `e2e6-daily-report-${RUN}`;
+const DENY_SCRIPT_PATH = `e2e6-deny-script-${RUN}`;
 
 await runE2e('e2e-6', async () => {
   const env = loadEnv();
   const log = stepLog('e2e-6');
-  const chat = env.testChatId ?? 'cli:e2e-6';
-  const startedAt = new Date(Date.now() - 60_000).toISOString();
+  // C14 修正：@feishu 门控未开时 channel 用不存在渠道（consumer 查无 channel 即跳过投递，
+  //   不打真实飞书）；协议断言只看 outbound.message 事件留痕，与渠道无关。
+  const feishuOn = env.feishuEnabled && env.testChatId !== undefined;
+  const outChannel = feishuOn ? 'feishu-main' : 'e2e6-null-channel';
+  const chat = feishuOn ? (env.testChatId as string) : 'cli:e2e-6';
+  const startedAt = new Date().toISOString(); // 事件窗从当下起（C19：不前推，防陈旧命中）
 
   // 前置：日报脚本存 context://automations（queryMetric 取真实 tokens 数字 → publish outbound）。
   const script = [
@@ -42,7 +48,7 @@ await runE2e('e2e-6', async () => {
     '    for (const s of series) for (const p of s.points) total += p.v;',
     '    const out = await watt.publish({',
     "      type: 'outbound.message',",
-    `      payload: { channel: 'feishu-main', target: ${JSON.stringify(chat)}, content: { text: \`Watt 日报：过去 24h token 用量 \${total}\` } },`,
+    `      payload: { channel: ${JSON.stringify(outChannel)}, target: ${JSON.stringify(chat)}, content: { text: \`Watt 日报：token 用量总计 \${total}\` } },`,
     '    });',
     '    return { eventId: out.eventId, total };',
     '  }',
@@ -94,6 +100,7 @@ await runE2e('e2e-6', async () => {
     const report = list.find(
       (e) =>
         e.type === 'outbound.message' &&
+        (e.payload.channel as string) === outChannel &&
         String((e.payload.content as { text?: string } | undefined)?.text ?? '').includes(
           'Watt 日报',
         ),
@@ -108,7 +115,10 @@ await runE2e('e2e-6', async () => {
   const reportText = String(
     (events.report.payload.content as { text?: string } | undefined)?.text ?? '',
   );
-  assert(/\d/.test(reportText), `report text lacks a real number: ${reportText}`);
+  // C4 修正：/\d/ 对模板自带文字恒真——断言"总计 <n>"的 n 是非零数字（真实 usage 累计）。
+  const m = reportText.match(/总计 (\d+)/);
+  assert(m !== null, `report text lacks the total-number shape: ${reportText}`);
+  assert(Number(m[1]) > 0, `report total should be a real non-zero usage number: ${reportText}`);
   log.pass('③ cron.fired/cron.completed paired', `ok=true`);
   if (env.feishuEnabled && env.testChatId !== undefined) {
     // 真实群可见性由人工核对（脚本无法读群消息——机器人缺读权限，PROGRESS R24）。
@@ -151,14 +161,36 @@ await runE2e('e2e-6', async () => {
         (e.payload.ok as boolean) === false,
     );
   });
+  // C9/C18 修正：断言错误语义确为权限拒绝（任何脚本故障都有 error 非空——那是假绿）。
+  const denyErr = String(denied.payload.error ?? '');
   assert(
-    String(denied.payload.error ?? '').length > 0,
-    'deny completed should carry an error summary',
+    /permission_denied|denied|grant exceeded/i.test(denyErr),
+    `deny error should be a permission denial, got: ${denyErr}`,
   );
   log.pass('④ out-of-grant script publish denied', String(denied.payload.error));
 
-  // 清理。
-  cli(env, ['cron', 'rm', JOB]);
-  cli(env, ['cron', 'rm', DENY_JOB]);
+  // 清理（失败路径由 process exit 钩子兜底，C13）。
+  cleanup(env);
+  cleaned = true;
   log.pass('cleanup', 'cron jobs removed (scripts left in automations for audit)');
+});
+
+/** 幂等清理（C13：断言失败也不遗留每天 09:00 真实触发的 CronJob）。 */
+let cleaned = false;
+function cleanup(env: ReturnType<typeof loadEnv>): void {
+  for (const id of [JOB, DENY_JOB]) {
+    try {
+      cli(env, ['cron', 'rm', id]);
+    } catch {
+      /* 不存在/已删 */
+    }
+  }
+}
+process.on('exit', () => {
+  if (cleaned) return;
+  try {
+    cleanup(loadEnv());
+  } catch {
+    /* token 失效等——人工清单兜底 */
+  }
 });

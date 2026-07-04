@@ -43,13 +43,29 @@ await runE2e('e2e-3', async () => {
       description: '潜伏群聊 agent（E2E-3）：静默记 scratch、@watt 才回答。',
       runtime: 'light',
       entry: { kind: 'do-class', className: 'AgentInstance' },
-      grants: [],
+      // 出站两关（R32）：def grants 上限 + 部署侧 allow 策略（subject agent:lurker/scribe）。
+      grants: [{ resources: ['event://*'], actions: ['write'] }],
       contextNamespaces: ['scratch/'],
       toolScopes: [],
       subscriptions: [{ match: { type: 'im.message' }, instanceBy: 'session' }],
     },
   });
   assert(defRes.status === 200, `lurker def Write failed: HTTP ${defRes.status}`);
+  // 出站 allow 策略（步骤 1，subject=agent 定义级）——R32 出站 Check 两关之一。
+  cli(env, [
+    'policy',
+    'add',
+    '--id',
+    'e2e3-lurker-outbound',
+    '--subject',
+    'agent:lurker/scribe',
+    '--resource',
+    'event://*',
+    '--actions',
+    'write',
+    '--effect',
+    'allow',
+  ]);
 
   // 注入 5 条静默群消息（API 模拟）。
   for (let i = 0; i < 5; i++) {
@@ -140,8 +156,29 @@ await runE2e('e2e-3', async () => {
     );
   }
 
-  // 清理：terminate lurker 实例。
+  // 清理：terminate 实例 + **拆除全量 im.message 订阅**（C11：订阅是部署级决策，E2E 不残留——
+  //   def Write（upsert）清空 subscriptions，agent-registry 联动移除 EventRouter 规则）。
   const lurker = lurkers[0];
   if (lurker !== undefined) cli(env, ['agent', 'terminate', lurker.instanceId]);
-  log.pass('cleanup', 'lurker instance terminated');
+  // def rewrite 不拆旧订阅（registry 联动只增不删）——经 event Unsubscribe 显式移除。
+  const subs = cli<{ items: { id?: string; sink: { kind: string; definition?: string } }[] }>(env, [
+    'event',
+    'subs',
+  ]);
+  for (const sub of subs.items) {
+    if (sub.sink.kind === 'agent' && sub.sink.definition === 'lurker/scribe' && sub.id) {
+      await htbp(env, 'event', 'Unsubscribe', { subscriptionId: sub.id });
+    }
+  }
+  const after2 = cli<{ items: { sink: { definition?: string } }[] }>(env, ['event', 'subs']);
+  assert(
+    after2.items.every((sub) => sub.sink.definition !== 'lurker/scribe'),
+    'lurker im.message subscription must be removed after the run',
+  );
+  try {
+    cli(env, ['policy', 'rm', 'e2e3-lurker-outbound']);
+  } catch {
+    /* 已删 */
+  }
+  log.pass('cleanup', 'lurker instance terminated + subscription/policy removed');
 });

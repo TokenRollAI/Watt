@@ -29,7 +29,9 @@ export const LURKER_SCRIBE_DEF: AgentDefinition = {
     '潜伏群聊 agent：静默记录群消息进 TTL scratch namespace，@watt 提及时基于上下文回答。',
   runtime: 'light',
   entry: { kind: 'do-class', className: 'AgentInstance' },
-  grants: [],
+  // 出站能力上限（§6.4c 步骤 2）：def 声明可写 event://（回答出站）；步骤 1 仍需部署侧
+  //   allow 策略（subject agent:lurker/scribe）——两关都过才放行。
+  grants: [{ resources: ['event://*'], actions: ['write'] }],
   contextNamespaces: ['scratch/'],
   toolScopes: [],
   subscriptions: [{ match: { type: 'im.message' }, instanceBy: 'session' }],
@@ -83,11 +85,62 @@ export async function runLurkerHarness(env: Bindings, event: Event): Promise<Har
   const channel = event.source.channel ?? 'feishu-main';
   // target：session 'feishu:chat:<id>' 取末段（渠道内会话 id）；其余形状整段兜底。
   const target = event.session.split(':').pop() ?? event.session;
+
+  // 出站鉴权（R32 关门修正）：lurker 回答是 **agent 主动出站**，非系统内置路由——必须过
+  //   Check(event://<channel>/<target>,'write')（Proto §2.3，doc-gaps #25② 豁免面只含系统卡片）。
+  //   claims 带 agent_def → 平台 Authorizer 的空 agentDefs 索引会误拒（同 pitfalls §51 cronJobs
+  //   教训）——直接 core authorize 播种本 def；审计单独补一条（每个 Check 判定不漏，§10）。
+  const { authorize } = await import('@watt/core');
+  const { PolicyStore } = await import('../authz/policy-store.ts');
+  const claims = {
+    sub: `agent:${LURKER_SCRIBE_DEF.name}`,
+    roles: [],
+    agent_def: LURKER_SCRIBE_DEF.name,
+    agent_inst: `agent:${LURKER_SCRIBE_DEF.name}#session:${event.session}`,
+  };
+  const resource = `event://${channel}/${target}`;
+  const candidates = await new PolicyStore(env.DB_POLICIES).resolveCandidatePolicies(claims);
+  const decision = authorize({
+    claims,
+    resource,
+    action: 'write',
+    policies: candidates,
+    agentDefs: { [LURKER_SCRIBE_DEF.name]: LURKER_SCRIBE_DEF },
+    cronJobs: {},
+    instances: {},
+  });
+  try {
+    const { AuditStore } = await import('../audit/audit-store.ts');
+    await new AuditStore(env.DB_AUDIT).write({
+      context: {
+        principal: claims.sub,
+        roles: [],
+        traceId: event.traceId,
+        agent: { instanceId: claims.agent_inst, chain: [] },
+      },
+      resource,
+      action: 'write',
+      decision: decision.allow ? 'allow' : 'deny',
+      ...(decision.reason !== undefined ? { detail: { reason: decision.reason } } : {}),
+    });
+  } catch (err) {
+    console.error('lurker: outbound audit write failed', { err: String(err) });
+  }
+  if (!decision.allow) {
+    return {
+      kind: 'failed',
+      reason: 'rejected',
+      errorMessage: `lurker outbound denied: ${decision.reason ?? 'no policy'}`,
+    };
+  }
+
   const { publishTaskOutbound } = await import('../task/task-events.ts');
   await publishTaskOutbound(env, {
     channel,
     target,
     text: `（基于本群 ${count} 条上下文）你问：「${question}」——上下文已记录在 context://${ns}。`,
+    // 幂等键=源事件 id：队列重投重放本 harness 时不重复答复（R32 关门修正）。
+    dedupeKey: `lurker:answer:${event.id}`,
   });
   return { kind: 'result', output: { answered: true, contextCount: count } };
 }

@@ -292,6 +292,7 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
         channel: notify.channel,
         target: notify.target,
         text: `调研完成（task ${params.taskId}）：收到 ${outputs.length}/${RESEARCH_FANOUT} 份子报告。`,
+        dedupeKey: `task:outbound:${params.taskId}:summarize`,
       });
       await store.setState(params.taskId, 'done', now, 'summarize');
       return { summary: outputs, count: outputs.length };
