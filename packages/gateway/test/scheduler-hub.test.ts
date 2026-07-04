@@ -347,6 +347,119 @@ describe('SchedulerHub — Trigger full chain (fired → action → completed) (
     expect(scriptOut.items.length).toBe(0);
   });
 
+  it('script action: watt.queryMetric reads real usage when grants cover metrics read (R28 能力扩容)', async () => {
+    const stub = await hub(hubName());
+    // 播种一行 usage（真实数字来源）。
+    const { UsageStore } = await import('../src/metrics/usage-store.ts');
+    await new UsageStore(env.DB_AUDIT).write({
+      provider: 'anthropic',
+      model: 'glm-5.2',
+      inputTokens: 70,
+      outputTokens: 30,
+    });
+    const captured: { total?: number; denyErr?: string } = {};
+    const fakeRunner: ScriptRunner = {
+      async run(ctx: ScriptRunContext) {
+        const to = new Date(Date.now() + 60_000).toISOString();
+        const from = new Date(Date.now() - 86_400_000).toISOString();
+        const { series } = await ctx.watt.queryMetric({ metric: 'tokens', range: { from, to } });
+        let total = 0;
+        for (const s of series as { points: { v: number }[] }[])
+          for (const pt of s.points) total += pt.v;
+        captured.total = total;
+        return { total };
+      },
+    };
+    const job = PUBLISH_JOB('t-script-metric', {
+      createdBy: env.WATT_ADMIN_PRINCIPAL,
+      action: {
+        kind: 'script',
+        scriptRef: 'context://automations/s3',
+        grants: [{ resources: ['platform://metrics'], actions: ['read'] }],
+      },
+    });
+    await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.writeJob(job);
+    });
+    const registry = env.CONTEXT_REGISTRY.get(env.CONTEXT_REGISTRY.idFromName('registry'));
+    await registry.write({ namespace: 'automations', provider: 'structured' });
+    const { StructuredContextProvider } = await import('../src/context/providers/structured.ts');
+    await new StructuredContextProvider(env.DB_CONTEXT, 'automations').write('s3', {
+      content: 'export default { async run() { return { ok: true }; } };',
+      contentType: 'text/javascript',
+    });
+    const { PolicyStore } = await import('../src/authz/policy-store.ts');
+    const { IdentityMapper } = await import('../src/authz/identity-mapper.ts');
+    const { ensureSeedPolicy } = await import('../src/authz/seed.ts');
+    await ensureSeedPolicy(
+      new PolicyStore(env.DB_POLICIES),
+      new IdentityMapper(env.DB_POLICIES),
+      env.WATT_ADMIN_PRINCIPAL,
+    );
+    const res = await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.triggerJob('t-script-metric');
+    });
+    expect('code' in res).toBe(false);
+    expect(captured.total).toBeGreaterThanOrEqual(100); // 70+30 播种行计入。
+  });
+
+  it('script action: watt.queryMetric denied when grants lack metrics read', async () => {
+    const stub = await hub(hubName());
+    const captured: { err?: string } = {};
+    const fakeRunner: ScriptRunner = {
+      async run(ctx: ScriptRunContext) {
+        try {
+          await ctx.watt.queryMetric({
+            metric: 'tokens',
+            range: { from: '2026-01-01T00:00:00Z', to: '2026-12-31T00:00:00Z' },
+          });
+        } catch (e) {
+          captured.err =
+            e instanceof Error
+              ? e.message
+              : ((e as { message?: string })?.message ?? JSON.stringify(e));
+          throw e;
+        }
+        return { done: true };
+      },
+    };
+    const job = PUBLISH_JOB('t-script-metric-deny', {
+      createdBy: env.WATT_ADMIN_PRINCIPAL,
+      action: {
+        kind: 'script',
+        scriptRef: 'context://automations/s4',
+        grants: [{ resources: ['platform://event'], actions: ['manage'] }], // 无 metrics read
+      },
+    });
+    await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.writeJob(job);
+    });
+    const registry = env.CONTEXT_REGISTRY.get(env.CONTEXT_REGISTRY.idFromName('registry'));
+    await registry.write({ namespace: 'automations', provider: 'structured' });
+    const { StructuredContextProvider } = await import('../src/context/providers/structured.ts');
+    await new StructuredContextProvider(env.DB_CONTEXT, 'automations').write('s4', {
+      content: 'export default { async run() { return { ok: true }; } };',
+      contentType: 'text/javascript',
+    });
+    const { PolicyStore } = await import('../src/authz/policy-store.ts');
+    const { IdentityMapper } = await import('../src/authz/identity-mapper.ts');
+    const { ensureSeedPolicy } = await import('../src/authz/seed.ts');
+    await ensureSeedPolicy(
+      new PolicyStore(env.DB_POLICIES),
+      new IdentityMapper(env.DB_POLICIES),
+      env.WATT_ADMIN_PRINCIPAL,
+    );
+    const res = await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.triggerJob('t-script-metric-deny');
+    });
+    expect('code' in res).toBe(false);
+    expect(captured.err).toMatch(/permission_denied|denied|grant exceeded/i);
+  });
+
   it('Trigger works on a disabled job (manual backfill, enabled unrelated)', async () => {
     const stub = await hub(hubName());
     await runInDurableObject(stub, (h: SchedulerHub) =>

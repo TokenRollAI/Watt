@@ -319,7 +319,12 @@ export class AgentRuntime {
     model?: string;
   } {
     // entry.className 恒 "AgentInstance"，harness 语义走 model 声明——实现声明（doc-gap 候选）。
-    if (model !== undefined) return { name: 'llm', model: model.preferred };
+    // preferred='default' 是哨兵值（R28 B7 / Case 5）：llm harness 但不钉死模型——实例侧每次调用
+    //   查 ModelProviderRegistry 的 default 渠道（set-default 切换后下一次调用即走新渠道）。
+    if (model !== undefined) {
+      if (model.preferred === 'default') return { name: 'llm' };
+      return { name: 'llm', model: model.preferred };
+    }
     return { name: 'echo' };
   }
 

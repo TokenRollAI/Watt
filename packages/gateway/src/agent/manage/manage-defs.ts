@@ -71,8 +71,23 @@ export const MANAGE_PLATFORM_DEF: AgentDefinition = {
   toolScopes: [],
 };
 
-/** 全部内置 manage 定义（种子源）——R25 只 cron + platform，其余层留后续轮次。 */
-export const SEED_MANAGE_DEFS: AgentDefinition[] = [MANAGE_CRON_DEF, MANAGE_PLATFORM_DEF];
+/**
+ * 内置 echo AgentDefinition（R28 B1 种子化）：无 model 声明 → echo harness（回显 input）。
+ * Task 模板（auto-delivery-lite/deep-research 的子 agent 桩）依赖它——未注册会使模板 spawn
+ *   not_found、任务卡 running（Round 20 冒烟实测，PROGRESS backlog 收口）。
+ */
+export const ECHO_DEF: AgentDefinition = {
+  name: 'echo',
+  description: '内置回显 Agent（echo harness）：Task 模板桩与冒烟测试的确定性 agent。',
+  runtime: 'light',
+  entry: { kind: 'do-class', className: 'AgentInstance' },
+  grants: [],
+  contextNamespaces: [],
+  toolScopes: [],
+};
+
+/** 全部内置 manage 定义（种子源）——R25 cron + platform；R28 增 echo（Task 模板依赖）。 */
+export const SEED_MANAGE_DEFS: AgentDefinition[] = [MANAGE_CRON_DEF, MANAGE_PLATFORM_DEF, ECHO_DEF];
 
 /** 一个 manage 层的运行时绑定：system prompt（~skill）+ 按 claims 构造该层工具。 */
 export interface ManageBinding {

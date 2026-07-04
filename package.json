@@ -18,7 +18,8 @@
     "provision": "node scripts/provision.mjs",
     "migrate": "pnpm --filter @watt/gateway exec wrangler d1 migrations apply watt-policies --remote",
     "deploy:all": "node scripts/deploy-all.mjs",
-    "smoke": "node scripts/smoke.ts"
+    "smoke": "node scripts/smoke.ts",
+    "e2e": "node scripts/e2e/index.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",

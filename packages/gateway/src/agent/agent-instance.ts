@@ -207,8 +207,12 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
   /** 按 state.harness 分发 harness（echo 无模型；llm 经 caller）。 */
   private async runHarness(args: DeliverArgs, caller?: ModelCaller): Promise<HarnessOutcome> {
     if (this.state.harness === 'llm') {
-      const modelCaller = caller ?? this.buildDefaultCaller();
-      const model = this.state.model ?? 'glm-5.2';
+      // 模型/渠道解析（§9 / Case 5，R28 B7 接线）：def 显式声明 model.preferred 优先；缺省时
+      //   查 ModelProviderRegistry 的 default 渠道（set-default 切换后下一次调用即走新渠道——
+      //   E2E-5 判据④）；仍无 → env 直连缺省 glm-5.2。secretRef 是 env secret 引用名。
+      const routing = await this.resolveModelRouting();
+      const modelCaller = caller ?? this.buildDefaultCaller(routing?.secretRef);
+      const model = this.state.model ?? routing?.model ?? 'glm-5.2';
       const usages: { inputTokens: number; outputTokens: number }[] = [];
 
       // manage/* Agent：解出该层 ~skill system prompt + 工具（execute 过 Check + 调 Manager，
@@ -267,10 +271,35 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
     }
   }
 
-  /** 从 env 构造真实 Anthropic caller（ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL）。 */
-  private buildDefaultCaller(): ModelCaller {
+  /**
+   * 查 ModelProviderRegistry 的默认渠道路由（R28 B7）。best-effort：查失败回退 null（env 直连），
+   *   不阻塞 harness。返回 model（渠道首模型）+ secretRef（env secret 引用名）。
+   */
+  private async resolveModelRouting(): Promise<{ model: string; secretRef: string } | null> {
+    try {
+      const env = this.env as Bindings;
+      const { ModelProviderRegistry } = await import('./model-provider.ts');
+      const def = await new ModelProviderRegistry(env.DB_PROVIDERS).resolveDefault();
+      if (def === null || def.model.length === 0) return null;
+      return { model: def.model, secretRef: def.secretRef };
+    } catch (err) {
+      console.error('agent instance: model routing lookup failed (fallback to env)', {
+        err: String(err),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * 从 env 构造真实 Anthropic caller。key 解析：secretRef（default 渠道声明的 env secret 引用名，
+   *   §9 永不存明文）→ 缺省 ANTHROPIC_API_KEY。base 恒 ANTHROPIC_BASE_URL（中转直连最小版；
+   *   per-provider base 留 M8 AI Gateway 规范路径）。
+   */
+  private buildDefaultCaller(secretRef?: string): ModelCaller {
     const env = this.env as Bindings;
-    const apiKey = env.ANTHROPIC_API_KEY;
+    const envRecord = env as unknown as Record<string, string | undefined>;
+    const apiKey =
+      (secretRef !== undefined ? envRecord[secretRef] : undefined) ?? env.ANTHROPIC_API_KEY;
     if (apiKey === undefined || apiKey.length === 0) {
       // 无 key：产 error outcome（buildDefaultCaller 只在无注入 caller 时走，@llm tag 才有 key）。
       return {

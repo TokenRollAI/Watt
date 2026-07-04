@@ -13,6 +13,12 @@
  *   export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...   # 或从 .env
  *   ADMIN_TOKEN=$(node scripts/sign-admin-token.mjs --rotate)
  *
+ * 额外 token（R28 B6，E2E-4 权限对照）：`--extra <sub>=<roles>`（可重复；roles 逗号分隔可空）
+ *   用同一把新私钥签发非 admin token——一次轮换多 token（两次 --rotate 会互相吊销）。
+ *   stdout 每行一个 token，顺序 = admin 在前、--extra 按声明序：
+ *     TOKENS=$(node scripts/sign-admin-token.mjs --rotate --extra user:staff=staff)
+ *     ADMIN=$(echo "$TOKENS" | sed -n 1p); STAFF=$(echo "$TOKENS" | sed -n 2p)
+ *
  * 破坏性确认（--rotate）：本脚本会覆盖生产 secret WATT_JWT_PRIVATE_JWK，使全部存量
  *   token 立即失效。故必须显式加 --rotate 才执行；缺失则 stderr 警告后 exit 1。
  *
@@ -41,6 +47,28 @@ if (!process.argv.includes('--rotate')) {
       'IMMEDIATELY INVALIDATE ALL EXISTING TOKENS. Re-run with --rotate to confirm.\n',
   );
   process.exit(1);
+}
+
+// (b) --extra <sub>=<roles>（可重复）：同一把新私钥额外签发非 admin token（E2E-4 身份对照）。
+//     sub 含冒号（user:staff），分隔符用 '='；roles 逗号分隔，可空（--extra user:anon=）。
+const extraSpecs = [];
+for (let i = 0; i < process.argv.length; i++) {
+  if (process.argv[i] === '--extra') {
+    const spec = process.argv[i + 1];
+    const eq = spec?.indexOf('=') ?? -1;
+    if (spec === undefined || eq <= 0) {
+      process.stderr.write(`sign-admin-token: bad --extra value (want <sub>=<roles>): ${spec}\n`);
+      process.exit(1);
+    }
+    const sub = spec.slice(0, eq);
+    const roles = spec
+      .slice(eq + 1)
+      .split(',')
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+    extraSpecs.push({ sub, roles });
+    i++;
+  }
 }
 
 const dotenv = parseEnv();
@@ -125,5 +153,19 @@ const token = await new SignJWT({ roles: ['admin'], trace: `acceptance-${nowSec}
 process.stderr.write(
   `sign-admin-token: signed admin token for ${adminPrincipal} (expires in ${ttlSec}s).\n`,
 );
-// 4. 仅 token 到 stdout。
+// 4. token 到 stdout：admin 首行；--extra 每个一行（同一私钥、同 TTL）。
 process.stdout.write(`${token}\n`);
+for (const spec of extraSpecs) {
+  const extraToken = await new SignJWT({ roles: spec.roles, trace: `acceptance-${nowSec}` })
+    .setProtectedHeader({ alg: 'EdDSA', kid })
+    .setSubject(spec.sub)
+    .setIssuedAt(nowSec)
+    .setExpirationTime(nowSec + ttlSec)
+    .setIssuer(issuer)
+    .setAudience(audience)
+    .sign(privateKey);
+  process.stderr.write(
+    `sign-admin-token: signed extra token for ${spec.sub} roles=[${spec.roles.join(',')}].\n`,
+  );
+  process.stdout.write(`${extraToken}\n`);
+}

@@ -4,5 +4,5 @@
     "types": ["node"],
     "checkJs": false
   },
-  "include": ["smoke.ts"]
+  "include": ["smoke.ts", "e2e/**/*.ts"]
 }

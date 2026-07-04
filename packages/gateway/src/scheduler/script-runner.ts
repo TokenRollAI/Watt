@@ -40,7 +40,7 @@ import type { Bindings } from '../env.ts';
 import { publish } from '../event/event-bus.ts';
 import { EventStore } from '../event/event-store.ts';
 
-/** script 运行时注入给脚本的平台能力 binding（§7 步骤 2 grants 声明的接口）——最小面：publish。 */
+/** script 运行时注入给脚本的平台能力 binding（§7 步骤 2 grants 声明的接口）——publish + 只读 metrics。 */
 export interface WattScriptBinding {
   /**
    * 发布一个平台事件（脚本出站）。每次调用过 Authorizer.Check（cron 链段，上限=job.grants）。
@@ -51,6 +51,16 @@ export interface WattScriptBinding {
     payload?: unknown;
     session?: string;
   }): Promise<{ eventId: string }>;
+  /**
+   * 只读 Metrics 查询（R28 能力表扩容，Case 6「含真实数字的日报」）。每次调用过 Check
+   *   （platform://metrics 'read'，cron 链段判定同 publish——脚本要用需 job.grants 覆盖该面）。
+   *   deny → 抛错。
+   */
+  queryMetric(q: {
+    metric: string;
+    range: { from: string; to: string };
+    groupBy?: string;
+  }): Promise<{ series: unknown[] }>;
 }
 
 /** 脚本执行的入参（runner 拿 binding + scriptRef 跑脚本）。 */
@@ -162,6 +172,46 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
     );
     if ('code' in result) throw new Error(`script publish failed: ${result.message}`);
     return { eventId: result.eventId };
+  }
+
+  /** 脚本能力的通用 Check（cron 链段判定 + 旁路审计留痕）——publish/queryMetric 共用。 */
+  private async checkCapability(resource: string, action: string): Promise<void> {
+    const { env, job, claims } = this;
+    const store = new PolicyStore(env.DB_POLICIES);
+    const candidates = await store.resolveCandidatePolicies(claims);
+    const decision = authorize({
+      claims,
+      resource,
+      action,
+      policies: candidates,
+      agentDefs: {},
+      cronJobs: { [job.id]: job },
+      instances: {},
+    });
+    await recordScriptAudit(env, claims, resource, action, decision);
+    if (!decision.allow) {
+      throw wattError(
+        'permission_denied',
+        decision.reason ?? `script ${action} on ${resource} denied for cron:${job.id}`,
+        false,
+      );
+    }
+  }
+
+  /** 只读 Metrics 查询（R28 能力表扩容）——Check(platform://metrics,'read') 后查 Metrics。 */
+  async queryMetric(q: { metric: string; range: { from: string; to: string }; groupBy?: string }) {
+    await this.checkCapability('platform://metrics', 'read');
+    const { Metrics, METRIC_NAMES } = await import('../metrics/metrics.ts');
+    if (!METRIC_NAMES.includes(q.metric as (typeof METRIC_NAMES)[number])) {
+      throw wattError('invalid_argument', `unknown metric: ${q.metric}`, false);
+    }
+    const metrics = new Metrics(this.env.DB_AUDIT, this.env.DB_EVENTS);
+    const series = await metrics.query({
+      metric: q.metric as (typeof METRIC_NAMES)[number],
+      range: q.range,
+      ...(q.groupBy !== undefined ? { groupBy: q.groupBy } : {}),
+    } as Parameters<InstanceType<typeof Metrics>['query']>[0]);
+    return { series: series as unknown[] };
   }
 }
 
