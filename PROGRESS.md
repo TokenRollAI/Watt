@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
 - **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
 - **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅、R30 E2E-2 ✅、R31 E2E-3 ✅，下一轮 R32（E2E-4 权限对照 + `pnpm e2e` 六条复跑 + Phase 7 关门）
+- **下一目标**：**唯一剩余 = @feishu 入站人工采证**（勾 DoD Phase 6 ② → Phase 6 正式关门 → 项目全部 Done）。Phase 7 六条 E2E 已全绿并关门（R32）；`watt channel connect`（plugin 主体）本机长驻等待群里任意成员回一条消息
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,18 @@
 ---
 
 # 轮次记录
+
+## Round 32 — 2026-07-04（Phase 7 关门轮：E2E-4 + 质量关口 22 MAJOR 全修 + 六条全绿）
+- 目标：E2E-4 权限对照 + `pnpm e2e` 六条复跑 + Phase 7 关门（质量关口 + 确认项全修 + 沉淀）
+- 动作（主 assistant 直接实现）：
+  - **E2E-4**（`4f674d2`）：桩财务工具（http postman-echo）+ role:admin allow 策略；admin call 200 / staff（`sign-admin-token --extra user:staff=staff` 同轮换双签）403 permission_denied + tool ls 裁剪 / audit allow(user:djj)+deny(user:staff) 对照 + user 面无 agent 链断言。
+  - **质量关口 Workflow**（4 维 + 对抗核查，26 agents，**不含渗透性安全维度**）：**22 MAJOR 确认（0 BLOCKER、0 误报）+ 16 MINOR** backlog。
+  - **22 项归并 8 簇全修**（`45bbeb2` + `e05b305`）：① publishTaskOutbound dedupe 死字段→findByDedupeKey 短路+确定性来源键；② secretRef 劫持钉死模型 def→state.model 钉死时不查 default（model+key 同源）；③ queryMetric groupBy string/数组错配→归一+枚举校验；④ **lurker 出站绕过 Check**→core authorize 两关判定（def grants event://* write + 部署策略）+ 审计 + deny 用例；⑤ echo 跳过 expect.schema→同过 validateAgentOutput（E2E-2 判据③从空转变真实）；⑥ E2E 假绿系（/\d/ 恒真→'总计 <n>'非零；1d 窗命中上轮→基线增量；越权 error 非空→语义正则；固定 id+前推窗→run 序号+当下窗）；⑦ E2E 残留/门控系（e2e-3 拆全量订阅+策略清理；e2e-5 清 default 位；e2e-6 exit 钩子兜底清 cron + 门控未开走 null channel；e2e-1 terminate 派生实例）；⑧ e2e-4 判据收紧与降级口径显式声明。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1136 tests**：shared 6 + dashboard 4 + core 444 + cli 140 + gateway 541+1skip）；`pnpm deploy:all` exit 0；`pnpm provision` 幂等；`node scripts/smoke.ts` OK；**`pnpm e2e` 六条线上全绿**（修复后全量复跑：1/2/3/5/6 一轮 + 4 重签 token 后过——两次 FAIL 均为 token 1h 过期非代码问题）。
+- 勾选：**Phase 7 六条 E2E 全部采证**（DOD §9 已入账 R28~R32 证据）→ **Phase 7 正式关门**。**DOD §0 五条**：① 六 E2E ✅（人工体感面残留见下）② 各 Phase DoD 勾选=可重跑命令 ✅（唯 Phase 6 ② 等人工）③ pnpm verify 一键绿 ✅ ④ 从零部署（provision 幂等 + deploy:all + smoke）✅ ⑤ CLI 覆盖全管理面 + E2E 全 CLI 驱动 ✅。
+- 沉淀：pitfalls 候选（e2e token 1h 过期是最常见 FAIL 源——脚本前重签；process.on('exit') 兜底清理模式）；16 MINOR backlog（listInstances 200 上限截断、terminated 行 7d sweep 依赖、e2e lib waitFor 吞错噪声等）。
+- 遗留：**项目唯一未闭环 = DoD Phase 6 ②（@feishu 入站真实群消息，人工）**；人工体感清单（协议判据已全过）：飞书卡片真实点击、群内可见核对。16 MINOR backlog 维护态顺手修。
+
 
 ## Round 31 — 2026-07-04（Phase 7 R31：潜伏群聊 agent + E2E-3 线上全绿）
 - 目标：调研 §4 R31——B5（潜伏群聊 agent 整体缺失）+ E2E-3 四判据线上采证
