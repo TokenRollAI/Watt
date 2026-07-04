@@ -21,7 +21,7 @@ const SUITE: Record<string, string | null> = {
   '1': resolve(here, 'e2e-1.ts'),
   '2': resolve(here, 'e2e-2.ts'),
   '3': resolve(here, 'e2e-3.ts'),
-  '4': null, // R32: 权限对照
+  '4': resolve(here, 'e2e-4.ts'),
   '5': resolve(here, 'e2e-5.ts'),
   '6': resolve(here, 'e2e-6.ts'),
 };
