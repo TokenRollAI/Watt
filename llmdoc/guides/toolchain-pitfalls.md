@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）、§46~53 为 Round 23~32（Phase 6/7 + E2E）、§54~61 为 Round 33（可用性冲刺：plugin 化 + worktree 并行）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）、§46~53 为 Round 23~32（Phase 6/7 + E2E）、§54~61 为 Round 33（可用性冲刺：plugin 化 + worktree 并行）、§62~64 为 Round 34（维护轮：飞书 agent 工具授权修复）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -318,3 +318,21 @@ zsh 对 `${!var}` 报 bad substitution，但**管道右侧的 `wrangler secret p
 
 - 签名 = `sha256(timestamp + nonce + encrypt_key + body)`，直接拼接**无分隔符、非 HMAC**——按 HMAC 实现永远验不过。
 - bot 能否收到**非 @ 的群消息**取决于应用是否有「接收群聊中所有消息」权限——缺该权限则只有 @ 消息可达，lurker 的 scratch 上下文永远 0 条。
+
+## 62. agent 主体工具访问是两关授权：policy（步骤 1）+ def grants（步骤 2），缺一即拒
+
+- §6.4c 对 agent 主体是两关判定，且**步骤 1 先拦时步骤 2 的缺口完全不可见**——只补 policy 就宣布修好，下一次调用会撞第二层拒绝（R34 实测：飞书群 lurker 调 tool://test 先后被两关各拒一次）。
+- deny 文案可区分卡在哪关：步骤 1 = **"principal not permitted"**（主体无 allow policy）、步骤 2 = **"agent definition grant exceeded"**（def grants 不含该资源）。
+- 排查顺序：先 `watt policy`（查主体对资源的 allow）→ 再 `watt agent get <def>`（查 def 的 grants 与 toolScopes 现值——**源码种子只证初始值，线上现值必须 CLI 实查**）。
+- 修复纪律：**一次盘双侧**——补 policy 的同轮核对 def grants（及 toolScopes 前缀约束），三闸门齐了再走真实主体路径验证（admin 旁路对授权修复零证明力，admin 种子策略 allow-all）。
+
+## 63. AgentRegistry 的 def Write 是整体覆盖——编排脚本重跑会冲掉部署侧 toolScopes/grants
+
+- `watt setup feishu` 第③步与 `e2e-3` 都内联 `toolScopes:[]` 的 def 字面（`lurker.ts`/`setup.ts` 默认值），重跑即把部署侧手工注入的 toolScopes/grants **整体冲回默认**（R34 线上 def 的 toolScopes 漂移即此源头）。
+- 运行中实例靠 spawn 时的旧快照**暂不受影响**（实例行为≠def 现值），但 re-Spawn 按当前 def 重新快照——冲掉即丢。
+- 运维纪律：修复只跑需要的子步骤（如 pluginToken 重签只单跑 `watt plugin register channel-feishu`，勿重跑完整 setup）；改 def 前先 `watt agent get` 备份现值。
+
+## 64. CLI `--json` 是全局选项，必须放在子命令之前
+
+- `watt event tail ... --json` 尾部的 `--json` 被**静默忽略**（正确：`watt --json event tail ...`）——轮询解析不到 JSON，R34 曾空转 60s 误判「无出站」。
+- 轮询类验证首轮就零输出时，先怀疑命令形状再怀疑系统。（与 §7 的 banner 污染是不同坑：那是 wrangler，这是 watt CLI 的选项位置语义。）

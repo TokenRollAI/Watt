@@ -1,6 +1,6 @@
 # 当前项目状态快照
 
-> 本文档随轮次更新。最后更新：2026-07-04（Round 33 可用性冲刺，**Phase 0~7 全关门 + Phase 6 ② 已采证——项目全部 Done**）。
+> 本文档随轮次更新。最后更新：2026-07-04（Round 34 维护轮：飞书群 agent 工具链路线上配置修复，**Phase 0~7 全关门 + Phase 6 ② 已采证——项目全部 Done**）。
 
 ## 阶段
 
@@ -14,7 +14,7 @@
   - CLI 改名 **`@tokenroll/watt`**（tsup bundle dist/bin.js + `release:cli`；**npm 未真发布**）+ 新命令族 `watt init`（TUI 九步向导）/ `watt setup feishu`（幂等五步）/ `watt secret`（三命令，值走 stdin）。
   - dashboard 三配置视图（SecretsView / ChannelsView（feishu plugin 状态卡）/ ProvidersView（secretRef 下拉））。
   - lurker 接真实 LLM（default provider caller + state.toolScopes 工具 + scratch 上下文进 system）；**re-Spawn 复活 terminated 实例**（Proto §3.2 已补，Send 不复活）；**Authorizer 接 AgentDefLoader**（agent 主体 PEP 误拒系统性收口）。决策见 [../memory/decisions/agent-spawn-revive-and-defloader.md](../memory/decisions/agent-spawn-revive-and-defloader.md)。
-- **R33 遗留清单**：npm publish 未真执行（`pnpm release:cli`，@tokenroll org 权限待人工）；`watt init` 真实账户全程未跑（交互式 TUI，建议前缀 watt-init-test）；飞书 app 缺「接收群聊中所有消息」权限（群上下文只累积 @ 消息）；未配 ENCRYPT_KEY（明文+token 校验模式，建议后台生成后 secret put 到 plugin）；admin token 1h 短命且轮换连坐 pluginToken（运维摩擦，可考虑 init 的 7d token 或独立 plugin 签名面）；httpbin.org 桩工具不稳（E2E/演示建议换 postman-echo）。
+- **R33 遗留清单**：npm publish 未真执行（`pnpm release:cli`，@tokenroll org 权限待人工）；`watt init` 真实账户全程未跑（交互式 TUI，建议前缀 watt-init-test）；飞书 app 缺「接收群聊中所有消息」权限（群上下文只累积 @ 消息）；未配 ENCRYPT_KEY（明文+token 校验模式，建议后台生成后 secret put 到 plugin）；admin token 1h 短命且轮换连坐 pluginToken（运维摩擦，可考虑 init 的 7d token 或独立 plugin 签名面）；~~httpbin.org 桩工具不稳~~（**R34 已收口**：test/echo get-uuid 已 remount 到 httpbingo.org/uuid）。
 - 历史 backlog：Phase 5（script 能力表已扩 watt.queryMetric，模板 def 已种子化——基本收口，见 doc-gaps #29）；Phase 4 的 13 MINOR + Phase 3 的 14 MINOR + Phase 2 的 17 MINOR + R27 的 19 MINOR + R32 的 16 MINOR，维护态顺手修；实现声明簇见 doc-gaps #25~#28/#31。
 - Phase 路线：0 骨架/部署管道 → 1 Auth+Event 信封 → 2 Event Gateway → 3 Context Layer → 4 Tool+Agent Runtime → 5 Task+Scheduler → 6 飞书+Observability+Management → 7 六条 E2E 验收（详见 [../overview/project-overview.md](../overview/project-overview.md)）。
 - 上游 tool-bridge：分支 `feat/watt-builtin-and-tool-semantics`（56ab13b，已 push 未开 PR/未合 main）——ToolSpec effect/scope/confirm 语义字段 + builtin 节点类型。Watt 侧以 vendored 方式消费（见下）。
@@ -70,7 +70,12 @@ Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/aud
   - gateway：`WATT_JWT_PRIVATE_JWK` + `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` + **`WATT_SECRET_ENCRYPTION_KEY`（R33，SecretStore 专用）**。**FEISHU_* 已移出 gateway**。
   - plugin worker（watt-plugin-feishu）：`FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_VERIFICATION_TOKEN` / `WATT_PLUGIN_TOKEN` / `WATT_BASE_URL`。**未配 FEISHU_ENCRYPT_KEY**（`.env` 该值位是注释即空——明文+token 校验模式，pitfalls §59）。
   - put 后 ~15s 传播窗口。
-- **运维事实（R33 实测）**：admin token TTL **1h**；`--rotate` 轮换会**连坐 pluginToken**（同一信任根签发——轮换后需重跑 `watt setup feishu` 重签 + 重 put plugin secret）；`sign-admin-token.mjs` 需 `WATT_JWKS_BASE_URL`（jwksBase 已参数化）；**default model provider = kv-relay**（secretRef `LLM_RELAY_KEY` 存 SecretStore KV，回退链线上实证）。
+- **运维事实（R33 实测）**：admin token TTL **1h**；`--rotate` 轮换会**连坐 pluginToken**（同一信任根签发——轮换后只需单跑 `watt plugin register channel-feishu` 重签 + 重 put plugin secret，**勿重跑完整 setup feishu**——其③步 def Write 会冲掉部署侧 toolScopes/grants，pitfalls §63）；`sign-admin-token.mjs` 需 `WATT_JWKS_BASE_URL`（jwksBase 已参数化）；**default model provider = kv-relay**（secretRef `LLM_RELAY_KEY` 存 SecretStore KV，回退链线上实证）。
+- **运维事实（R34 线上配置修复，零代码改动）**：
+  - test/echo 树 `get-uuid` 已换 **`https://httpbingo.org/uuid`**（httpbin.org 不稳，R33 遗留收口）；test/watt 与 finance/e2e4 仍是 postman-echo 不动。
+  - 线上 lurker/scribe def 现为 `toolScopes:["test"]` + grants 含 `tool://test`/`tool://test/*`（read,invoke）——**与代码字面（lurker.ts/setup.ts 默认值）不同步**，重跑 setup feishu/e2e-3 会整体冲掉（pitfalls §63）。
+  - 两条策略已入库：`lurker-tool-test-root`（agent:lurker/scribe → tool://test）+ `lurker-tool-test-sub`（→ tool://test/*），均 read,invoke allow（两关授权修复，pitfalls §62）。
+  - pluginToken 已于 R34 随 admin token `--rotate` 轮换重签并重 put 到 watt-plugin-feishu；**入站 webhook 的新 pluginToken 尚未经真人群消息验证**（R34 遗留，本轮注入走 admin Publish 旁路）。
 - **`pnpm deploy:all` 内置五库 migrations**：`d1 migrations apply {watt-policies,watt-events,watt-context,watt-providers,watt-audit} --remote`（幂等）。
 - Queue `watt-events` consumer 已绑；DLQ `watt-events-dlq` 已建。
 - `scripts/smoke.ts` 内置 5 次重试（toolchain-pitfalls §9）。
