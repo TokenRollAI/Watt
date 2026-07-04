@@ -399,7 +399,7 @@ describe('AgentCorrelation task-waiter failed delivery (§3.4 规则 1/3 MAJOR �
     const cids = (await instance.waitForStepResult({
       name: 'dispatch-research-agents',
     })) as string[];
-    expect(cids).toHaveLength(2);
+    expect(cids).toHaveLength(3); // R30：N=3
 
     // 3) 用同一单例 correlation DO 强制过期代发 timeout failed（nowMs 取远未来越过 5min timeout）：
     //    task waiter 分支经 deliverTaskResult → env.WATT_TASK.get(taskId).sendEvent(agentResultEventName)。
@@ -409,11 +409,11 @@ describe('AgentCorrelation task-waiter failed delivery (§3.4 规则 1/3 MAJOR �
     // 4) Workflow 收到归并 failed → fan-in 记 failed step → 以 status='failed' 完成（无 result 汇总）。
     await instance.waitForStatus('complete');
     const output = (await instance.getOutput()) as { count: number };
-    expect(output.count).toBe(0); // 两个 correlation 均 failed，无 result 进 outputs。
+    expect(output.count).toBe(0); // 全部 correlation 均 failed，无 result 进 outputs。
     const done = await store.getInfo(taskId);
     expect(done?.state).toBe('done');
 
-    // 5) EventStore 留痕：两条 agent.failed（reason='timeout'，correlationId 匹配）。
+    // 5) EventStore 留痕：每个 correlation 一条 agent.failed（reason=timeout）。
     const eventStore = new EventStore(env.DB_EVENTS);
     const page = await eventStore.list({ filter: { type: 'agent.failed' } });
     if ('code' in page) throw new Error(page.message);

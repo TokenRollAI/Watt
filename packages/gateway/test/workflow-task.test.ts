@@ -225,20 +225,20 @@ describe('checkpoint timeout: waitForEvent 超时 → catch 落 failed（§3.4 c
     const cids = (await instance.waitForStepResult({
       name: 'dispatch-research-agents',
     })) as string[];
-    expect(cids).toHaveLength(2);
-    // 只回送第二个 correlation 的结果（第一个走 forceEventTimeout）。
+    expect(cids).toHaveLength(3); // R30：N=3
+    // 只回送第 2、3 个 correlation 的结果（第一个走 forceEventTimeout）。
     await instance.modify(async (m) => {
-      const cid1 = cids[1];
-      if (cid1 === undefined) throw new Error('missing cid');
-      const type = agentResultEventName(cid1);
-      if (typeof type !== 'string') throw new Error('bad event name');
-      await m.mockEvent({ type, payload: { status: 'result', output: { ok: true } } });
+      for (const cid of cids.slice(1)) {
+        const type = agentResultEventName(cid);
+        if (typeof type !== 'string') throw new Error('bad event name');
+        await m.mockEvent({ type, payload: { status: 'result', output: { ok: true } } });
+      }
     });
 
     await instance.waitForStatus('complete');
-    // fan-in 未因单个超时中断：整体 done；只有一个成功结果计入 count。
+    // fan-in 未因单个超时中断：整体 done；两个成功结果计入 count。
     const output = (await instance.getOutput()) as { count: number };
-    expect(output.count).toBe(1);
+    expect(output.count).toBe(2);
     const detail = await store.getDetail(taskId);
     if ('code' in detail) throw new Error('detail not_found');
     expect(detail.state).toBe('done');
@@ -394,7 +394,7 @@ describe('deep-research fan-in: waiting → approve → agent results → summar
     const cids = (await instance.waitForStepResult({
       name: 'dispatch-research-agents',
     })) as string[];
-    expect(cids).toHaveLength(2);
+    expect(cids).toHaveLength(3); // R30：DOD E2E-2 判据② N=3
     await instance.modify(async (m) => {
       for (const cid of cids) {
         const type = agentResultEventName(cid);
@@ -405,7 +405,7 @@ describe('deep-research fan-in: waiting → approve → agent results → summar
 
     await instance.waitForStatus('complete');
     const output = (await instance.getOutput()) as { count: number };
-    expect(output.count).toBe(2);
+    expect(output.count).toBe(3);
     expect((await store.getInfo(taskId))?.state).toBe('done');
   }, 15000);
 });

@@ -47,6 +47,32 @@ export async function publishTaskCheckpoint(
 }
 
 /**
+ * Publish Task 的出站通知（R30，E2E-2 判据④汇总送达）——outbound.message 走 system 路由
+ *   （与 checkpoint 卡片同管道：consumer handleOutboundMessage → 渠道 adapter 投递）。
+ *   带确定性 dedupeKey（重放/重投不重复下发，对齐 consumer.systemPublish 语义——Workflow step.do
+ *   已保证单次执行，dedupeKey 是队列 at-least-once 面的第二道保险）。
+ */
+export async function publishTaskOutbound(
+  env: TaskEventEnv,
+  msg: { channel: string; target: string; text: string },
+): Promise<void> {
+  const input: EventInput = {
+    source: { kind: 'system' },
+    type: 'outbound.message',
+    payload: { channel: msg.channel, target: msg.target, content: { text: msg.text } },
+    dedupeKey: `task:outbound:${msg.channel}:${msg.target}:${msg.text.slice(0, 40)}`,
+  };
+  const event = normalizeEvent(input, {
+    genId: () => crypto.randomUUID(),
+    now: () => new Date().toISOString(),
+    genTraceId: () => crypto.randomUUID(),
+  });
+  const { EventStore } = await import('../event/event-store.ts');
+  await new EventStore(env.DB_EVENTS).put(event);
+  await env.QUEUE_EVENTS.send(event);
+}
+
+/**
  * 把 agent.result/agent.failed 归并投递到 Task 的 Workflow 实例 waitForEvent（§3.4 规则 1，task waiter）。
  * type = agentResultEventName(correlationId)（result/failed 归并）；payload 带 status 区分，
  * output（result）/ error（failed）由 Workflow 步骤代码分支。correlationId 非法（净化后超长）→ 抛错

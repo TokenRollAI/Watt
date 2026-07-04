@@ -30,7 +30,7 @@ import {
 } from '@watt/core';
 import { AgentRuntime, defaultRuntimeDeps } from '../agent/agent-runtime.ts';
 import type { Bindings } from '../env.ts';
-import { publishTaskCheckpoint } from './task-events.ts';
+import { publishTaskCheckpoint, publishTaskOutbound } from './task-events.ts';
 import { TaskStore } from './task-store.ts';
 
 // WorkflowEvent 用 cloudflare:workers 的运行时导出；params 类型见下。
@@ -68,8 +68,8 @@ export const DEPLOYED_TEMPLATES: DeployedTemplate[] = [
 const HUMAN_CHECKPOINT_TIMEOUT = '10 minutes';
 /** agent 结果 waitForEvent 超时（实现声明，§3.4；5 分钟）。 */
 const AGENT_RESULT_TIMEOUT = '5 minutes';
-/** deep-research 并发子 agent 数（N=2，最小 fan-in 面）。 */
-const RESEARCH_FANOUT = 2;
+/** deep-research 并发子 agent 数（DOD E2E-2 判据②：3 个子实例）。 */
+const RESEARCH_FANOUT = 3;
 
 /** taskSignal/agentResult 事件名求值：core 返回 string | WattError，非法即抛（净化后应恒合法）。 */
 function eventNameOrThrow(v: string | { message: string }): string {
@@ -174,7 +174,7 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
         checkpoint,
         prompt: '请确认调研方案后继续',
         options: ['approve', 'reject'],
-        notify: { channel: 'cli', target: params.createdBy },
+        notify: notifyFromInput(params.input, params.createdBy),
       });
     });
 
@@ -217,7 +217,17 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
           definition: 'echo',
           instanceKey: `task:${params.taskId}#research-${i}`,
           input: { taskId: params.taskId, index: i, input: params.input },
-          expect: { correlationId: cid, timeoutMs: 5 * 60_000 },
+          // 判据③：expect.schema——agent.result 过 JSON Schema 校验后才回送（echo 回显 input，
+          //   {echo:object} 恒满足；llm def 换入时同 schema 约束真实模型输出）。
+          expect: {
+            correlationId: cid,
+            timeoutMs: 5 * 60_000,
+            schema: {
+              type: 'object',
+              properties: { echo: { type: 'object' } },
+              required: ['echo'],
+            },
+          },
         };
         const res = await runtime.spawn(req, { taskWaiter: params.taskId });
         if ('code' in res) throw new Error(`spawn research agent ${i} failed: ${res.message}`);
@@ -269,7 +279,7 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
       if (result.payload.status === 'result') outputs.push(result.payload.output ?? null);
     }
 
-    // 5) 汇总 + 完成。
+    // 5) 汇总 + 出站（判据④：汇总消息送达通知渠道——input.notify 给飞书群时真实进群）+ 完成。
     return await step.do('summarize', async () => {
       const now = new Date().toISOString();
       await store.appendStep(
@@ -277,6 +287,12 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
         { name: 'summarize', state: 'done', startedAt: now },
         now,
       );
+      const notify = notifyFromInput(params.input, params.createdBy);
+      await publishTaskOutbound(this.env, {
+        channel: notify.channel,
+        target: notify.target,
+        text: `调研完成（task ${params.taskId}）：收到 ${outputs.length}/${RESEARCH_FANOUT} 份子报告。`,
+      });
       await store.setState(params.taskId, 'done', now, 'summarize');
       return { summary: outputs, count: outputs.length };
     });
