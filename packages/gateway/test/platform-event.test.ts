@@ -135,6 +135,63 @@ describe('POST /htbp/platform/event (§2.3)', () => {
     expect(found?.source.kind).toBe('webhook');
   });
 
+  it('Publish resolves channelUser to the mapped principal when principal is absent (§1 IdentityMapper.Resolve)', async () => {
+    const token = await signAdmin();
+    // 先绑定渠道身份（§6.3 写入口，挂 policy 端点的 MapIdentity）。
+    const bind = await post('/htbp/platform/policy', token, {
+      tool: 'MapIdentity',
+      arguments: { channel: 'feishu-main', channelUserId: 'ou_alice', principal: 'user:alice' },
+    });
+    expect(bind.status).toBe(200);
+
+    // channelUser 存在且 principal 缺省 → Publish 前应经 IdentityMapper.Resolve 补齐。
+    const res = await post('/htbp/platform/event', token, {
+      tool: 'Publish',
+      arguments: {
+        event: {
+          source: { kind: 'webhook', channel: 'feishu-main' },
+          type: 'im.message',
+          channelUser: { channel: 'feishu-main', userId: 'ou_alice' },
+          payload: { text: 'hello' },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const { eventId } = (await res.json()) as { eventId: string };
+
+    const got = await post('/htbp/platform/event', token, {
+      tool: 'Get',
+      arguments: { eventId },
+    });
+    expect(got.status).toBe(200);
+    const gotBody = (await got.json()) as { event: { principal?: string } };
+    expect(gotBody.event.principal).toBe('user:alice');
+  });
+
+  it('Publish resolves an unmapped channelUser to user:anonymous (§6.3)', async () => {
+    const token = await signAdmin();
+    const res = await post('/htbp/platform/event', token, {
+      tool: 'Publish',
+      arguments: {
+        event: {
+          source: { kind: 'webhook', channel: 'feishu-main' },
+          type: 'im.message',
+          channelUser: { channel: 'feishu-main', userId: 'ou_stranger' },
+          payload: { text: 'hi' },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const { eventId } = (await res.json()) as { eventId: string };
+
+    const got = await post('/htbp/platform/event', token, {
+      tool: 'Get',
+      arguments: { eventId },
+    });
+    const gotBody = (await got.json()) as { event: { principal?: string } };
+    expect(gotBody.event.principal).toBe('user:anonymous');
+  });
+
   it('Get with a missing eventId → invalid_argument (400)', async () => {
     const token = await signAdmin();
     const res = await post('/htbp/platform/event', token, { tool: 'Get', arguments: {} });

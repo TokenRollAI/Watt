@@ -427,6 +427,11 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
           ...(parsedEvent.data as EventInput),
           source: { ...parsedEvent.data.source, kind: 'webhook' },
         };
+        // IdentityMapper.Resolve 接线（§1 L115-116，与 inbound.ts webhook 路径同）：channelUser
+        //   存在且 principal 缺省时补齐 principal（channel_identities 命中 → 绑定 principal；未命中
+        //   → 'user:anonymous'）。飞书 WS 入站唯一路径 = CLI connect → 此 Publish；缺此注入则
+        //   channelUser(open_id) 永不解析，HITL signal Check 因 principal 缺省被拒（MapIdentity 失效）。
+        const identities = new IdentityMapper(c.env.DB_POLICIES);
         const result = await publish(eventInput, {
           store: new EventStore(c.env.DB_EVENTS),
           authorizer,
@@ -436,6 +441,8 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
             },
           },
           claims,
+          resolvePrincipal: async (channel, userId) =>
+            (await identities.resolve(channel, userId)).principal,
           genId: () => crypto.randomUUID(),
           now: () => new Date().toISOString(),
           genTraceId: () => crypto.randomUUID(),
