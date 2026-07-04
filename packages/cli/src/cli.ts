@@ -64,6 +64,7 @@ import {
   providerList,
   providerSetDefault,
 } from './provider.ts';
+import { formatSetupGuidance, setupFeishu } from './setup.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
 import {
   formatDefinitionListHuman as formatTaskDefsHuman,
@@ -1405,6 +1406,32 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const health = await pluginHealth(base, token, pluginId, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(health));
       else out(formatPluginHealthHuman(pluginId, health));
+    });
+
+  // ── watt setup（部署级引导；P1 飞书 plugin 化）───────────────────────────────
+  const setup = program
+    .command('setup')
+    .description('One-shot deployment-level setup wizards (idempotent)');
+  setup
+    .command('feishu')
+    .description('Register + wire the feishu channel-adapter plugin (idempotent 5 steps)')
+    .requiredOption(
+      '--endpoint <url>',
+      'watt-plugin-feishu worker HTTPS base URL (must be deployed & healthy)',
+    )
+    .option('--channel <id>', 'channel id to create (default: feishu)', 'feishu')
+    .option('--encrypt', 'you plan to use encrypted mode (affects printed guidance only)', false)
+    .action(async (cmdOpts: { endpoint: string; channel: string; encrypt: boolean }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const result = await setupFeishu(
+        base,
+        token,
+        { endpoint: cmdOpts.endpoint, channelId: cmdOpts.channel, encrypt: cmdOpts.encrypt },
+        { fetch: opts.fetch },
+      );
+      if (asJson()) out(JSON.stringify(result));
+      else out(formatSetupGuidance(result));
     });
 
   let exitCode = 0;

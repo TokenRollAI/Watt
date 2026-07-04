@@ -1,4 +1,4 @@
-import type { FeishuEvent } from '@watt/core';
+import type { FeishuEvent } from '@watt/plugin-feishu';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type ConnectLogger,
