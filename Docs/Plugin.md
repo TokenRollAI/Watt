@@ -126,6 +126,13 @@ POST /htbp/context/docs/feishu   {"tool":"Get","arguments":{"path":"doccnX8..."}
 | **外部 HTTP 服务** | 依赖内网资源、非 JS 技术栈 | 任何能被平台 HTTPS 访问的服务；建议自带重试幂等（平台按 `retryable` 重试） |
 | **Container** | agent-harness 需要完整 OS 时 | 镜像交给 M2 Heavy Runtime 管理，此时 Plugin 只是 `AgentDefinition.entry.container` 的引用 |
 
+> **首个实例：飞书 channel-adapter plugin（`@watt/plugin-feishu`）。** 飞书作为 Watt 第一个真正独立可发行的 channel-adapter plugin 落地——独立 Worker（`watt-plugin-feishu`）、自包含全部渠道逻辑（验签/解密/decode/encode/send/凭据），与 gateway 零硬编码耦合。它采用 §2.1 的**自持回调型**接入：
+> - **入站**：飞书开放平台事件订阅回调 URL 直接指向 plugin 的 `POST /webhook/event`。plugin 自行验签（`sha256(timestamp+nonce+encrypt_key+body)` 比对 `X-Lark-Signature`）+ 解密（AES-256-CBC，key=`sha256(encrypt_key)`，iv=密文前 16 字节）+ decode，再以 pluginToken 调平台 `POST /htbp/platform/event` Publish（`url_verification` challenge 握手在 plugin 侧短路）。支持两种模式：配 `ENCRYPT_KEY` → 验签+解密（推荐）；未配 → 明文 + `VERIFICATION_TOKEN` 比对。
+> - **出站**：plugin 实现 §11.4 的 `Encode`/`Send` HTBP 面；平台的通用出站分发器（gateway consumer）对 `outbound.message` 事件调 plugin 的 `Send`（`tenant_access_token` 换取+缓存 + 飞书 REST 投递 + `SendReceipt.retryable` 语义）。
+> - **凭据自持**：`FEISHU_APP_ID/SECRET/ENCRYPT_KEY/VERIFICATION_TOKEN` + `WATT_PLUGIN_TOKEN/WATT_BASE_URL` 是 plugin Worker 自己的 secrets——gateway 不再持有任何飞书凭据。
+> - **本地开发**：飞书 WSClient（`@larksuiteoapi/node-sdk`，Node-only）长连接经 `watt channel connect` 本地长驻承载，作为 dev-only 路径（生产走 Worker webhook 回调）；两条路径复用同一份 plugin 纯逻辑（decode）。
+> - **引导**：`watt setup feishu` 幂等编排注册（plugin register → channel Write → lurker/scribe def Write → policy ×2 → 打印部署/后台指引）。
+
 ## 6. 版本与兼容
 
 - `interfaceVersion` 形如 `<kind>/v<major>`；平台对同一 major 保证向后兼容（只增可选字段/可选方法）。

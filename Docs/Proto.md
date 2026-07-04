@@ -229,6 +229,7 @@ interface SendReceipt { ok: boolean, channelMessageId?: string, error?: WattErro
 
 - **webhook 型（默认，平台拉）**：IM/webhook 的回调 URL 指向平台入站端点 `POST /channels/<channelId>/inbound`；平台按 `ChannelConfig.adapter` 找到 Adapter，依次调用 `Verify → Decode → 补齐（id/traceId/principal/roles）→ Publish`。此模式下 Verify/Decode 必须实现。
 - **push 型（插件推）**：长连接渠道（如飞书 WebSocket）由 Adapter 自持连接，收到消息后自行规约并以 plugin token 直接调用 `EventBus.Publish`（字段义务同 Decode）；Verify/Decode 可豁免（capabilities 声明 `push`），Encode/Send 仍必须实现以承接出站。
+- **自持回调型（webhook 变体，插件推的等价形态）**：webhook/回调型渠道（如飞书事件订阅 HTTP 回调）也可由 Adapter **自持回调 URL**——渠道后台的回调地址直接指向 Adapter 自己的入站端点（而非平台的 `POST /channels/<channelId>/inbound`）。Adapter 在本地完成 `Verify`（验签/token 比对）与 `Decode`，再以 plugin token 调 `EventBus.Publish`（字段义务同 Decode）。义务面与 push 型完全一致（Verify/Decode 内化、Encode/Send 仍必须实现），差别仅在触发方式是 HTTP 回调而非长连接；capabilities 声明 `push`（平台据此不主动调其 Verify/Decode）。此变体让一个渠道 Adapter 可作为**自包含、可独立发行的部署单元**存在（收发全在插件侧闭环，平台零渠道耦合）——飞书 plugin 即此形态（Worker 宿主自持 `POST /webhook/event` 回调 + §11.4 的 `Encode`/`Send` HTBP 面）。
 
 ### 2.2 ChannelRegistry（渠道配置管理）
 
