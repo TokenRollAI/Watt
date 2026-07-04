@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 5（Task + Scheduler）已关门**（Round 22：2 BLOCKER + 6 MAJOR 全修 + 线上复验）
-- **已勾选**：Phase 0/1/2/3/4/5 全部（关门证据 Round 3/7/10/13/18/22）
-- **Blocker**：无（注意：watt.pdjjq.org 本机 ISP DNS 污染持续存在；Round 10 起本机直连 workers.dev 也偶发超时,需走本机代理 `https_proxy=http://127.0.0.1:7890`——CF 边缘本身正常）
-- **下一目标**：Phase 6 R27 关门（五项 DoD 复验含 @feishu 入站 + 4 维质量关口 + 对抗核查 + llmdoc 沉淀）
+- **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
+- **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
+- **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
+- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门（关门其余步骤本轮已全部完成）；随后 Phase 7（六条 E2E）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,27 @@
 ---
 
 # 轮次记录
+
+## Round 27 — 2026-07-04（Phase 6 关门轮：质量关口 + DoD 复验，① ③ ④ ⑤ 全勾，② 等人工）
+- 目标：Phase 6 关门——五项 DoD 复验 + 4 维质量关口 workflow + 逐条对抗核查 + 确认项全修 + Docs 漂移回查 + llmdoc 沉淀
+- 动作（按用户指示全部由主 assistant 直接实现，不派 worker）：
+  - **在途修复收口**（上一会话遗留未提交）：`d91086f` llm usage 打点取 **totalUsage**（ai@6 语义：usage=仅最后一步、totalUsage=全步累计——tool loop 多步时取 usage 系统性漏账；fake fetch 两步应答锁定）；`2c5a344` platform Publish 接线 **IdentityMapper.Resolve**（channelUser→principal，映射命中/未命中 anonymous 双测试）；`eb902ad` lockfile 追认。
+  - **质量关口 Workflow**（4 维 correctness/contract/ops/test-quality + 逐条对抗核查，17 agents；**按约不含渗透性安全维度**）：**12 MAJOR 确认（0 BLOCKER、0 误报驳回）+ 1 降级 MINOR + 18 MINOR** 入 backlog。
+  - **12 MAJOR 全修**（按根因聚 7 簇，逐簇 commit）：
+    - `9763423` audit List 未声明 filter 键 → invalid_argument（§0.2，对齐 PolicyStore 先例）。
+    - `184e018` 内置种子（plugin/manage defs）改「get 不存在才 write」——原无条件 upsert 会在每个新 isolate 冷启动把管理员 Update（enabled=false、换模型）静默回滚（Round 7 策略种子同类缺陷回归）；补"修改不被种子复活"回归测试。
+    - `2b8de74` **Send 到未 Spawn 实例 → not_found**（DoD 复验实测自发现：idFromName 隐式创建 INITIAL_STATE 幽灵 DO（harness=echo）静默回显——send 拼错 instanceId 极难排查）；send 先查 correlation 实例索引。
+    - `f60c8c5` Dashboard ListInstances 去掉 tree:'all'（tree=<id> 是子树语义，对不存在 rootId 恒 []——Agents 视图实例表在任何有实例环境都渲染为空）+ status→state 字段对齐 + **dashboard api 客户端 vitest 从零建立**（4 tests 锁请求形状/错误语义）。
+    - `d053508` connectFeishu 接 SDK **onError → Promise 可 settle**——原实现连接后永不 settle，runSupervisor 断线重连全是死代码（SDK 1.68.0 全部终态放弃路径必然 safeInvoke('onError')，实证 lib/index.js）；start() 异步 rejection 一并接住；lark 模块可注入 +3 settle 测试。
+    - `b9d51fc` PluginRegistry.Write **注册探活**（§11.1 最低整改：外部 endpoint GET healthPath 不通 → 拒绝注册不落库不签 pluginToken；binding: 跳过；~help/~describe 校验延后 doc-gaps #30）。
+    - `a059f7f` **飞书出站可靠投递**：retryable 语义（网络/token 失效→msg.retry 上限 3→DLQ；业务拒绝→留痕 ack）+ token 失效作废 KV 缓存 + **重投幂等**（systemPublish 确定性 dedupeKey `system:checkpoint:<源事件id>` 窗内短路 + 飞书 uuid=event.id 服务端去重）+ system handler 抛错不再失整批；+6 测试。
+    - `a401aec` **push 型入站 source.kind 保留**：channel-adapter plugin 主体（pluginToken）自报 kind='im' 予以保留（白名单防冒用），其余维持 §2.3 webhook 规约——修复前 sourceKind:'im' 订阅对飞书事件永不命中；CLI connect 优先 WATT_PLUGIN_TOKEN。
+  - **Docs 漂移回查**：`1523eff` Proto §2.3 规约豁免规范性补充（宪法先行）；doc-gaps #25① 收口标注 + 新增 #30（~help 注册校验延后）/#31（R27 实现声明簇）；modules-and-flows 注册流程标注实现状态。
+- 验证（主 assistant 亲自跑）：`pnpm verify` **exit 0（1108 tests**：shared 6 + dashboard 4 + core 444 + cli 140 + gateway 514+1skip**）**；`pnpm deploy:all` exit 0（toolbridge→gateway→dashboard + 四库 migrations 幂等）；**修复线上复验**：Send 幽灵实例 → 404 not_found / audit bogus filter → 400 / plugin 探活失败 → 400 拒绝注册；**DoD 复验**：③ tokens 7d v=1199 + group-by model + status tokensToday 2095；④ @llm 一次：manage/cron 对话 → CronJob{0 9 * * *, publish report.daily.tokens, target=测试群} → 清理；⑤ M10 全表 33+ 命令 --json sweep 全 PASS + 三入口（CLI/API/Dashboard-Origin）audit 对等各恰 3 行 allow 同主体；② 出站复验（consumer outcome ok 0 异常）+ WS 链路就绪（plugin 主体长驻），**入站真实群消息等人工**。
+- 勾选：**Phase 6 ① ③ ④ ⑤**（证据入 DOD.md）；② 待人工入站后勾 → Phase 6 正式关门。
+- 沉淀：llmdoc 更新（current-state 翻页 R27、pitfalls 新坑 ×4、doc-gaps #30/#31、reflection）；Proto §2.3 回写。
+- 遗留：**② @feishu 入站人工步骤**（connect 已长驻，群里已留请求配合消息）；19 条 MINOR backlog（metrics filter 静默忽略（已降级确认）、60s 超时覆盖整个 tool loop、模型中途抛错漏 usage、pluginToken 无轮换端点 §11.2、CORS 白名单不可收窄、dashboard base 默认同源、agent sink 不透传 claims、wrapEvent header 平铺假设、feishu Send 无 §11.4e 10s 超时、im.action 缺 session 声明、recordUsage/recordScriptAudit/audit best-effort 零覆盖等）；DoD ⑤ sweep 期间留下的良性残留：provider r27-relay（唯一 provider 行，resolveDefault 死代码不影响 harness）、plugin r27-plugin（已置 disabled）、channel-feishu built_in 标志经 Write 翻为 false（health 走 binding: 分支仍 healthy）。
+
 
 ## Round 26 — 2026-07-04（Phase 6 R26：Dashboard + PluginRegistry + CLI 完备——DoD ⑤ 地基）
 - 目标：Phase 6 / DoD ⑤（CLI 完备 + 三入口对等）的 Dashboard 与 plugin 面

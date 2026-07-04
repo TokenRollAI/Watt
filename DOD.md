@@ -103,11 +103,11 @@
 **范围**：飞书 ChannelAdapter（**WebSocket 长连接 push 型**，2026-07-02 决定，不走 webhook：Adapter 用 `@larksuiteoapi/node-sdk` 的 WSClient 自持连接，收事件后自行规约——填 session/channelUser/dedupeKey——并以 plugin token 调 `EventBus.Publish`；capabilities 声明 `push`，Verify/Decode 豁免（Proto §2.1 接入模式）。**宿主注意**：Workers 无法跑 Node WSClient，连接进程落在 Container（Heavy Runtime）或开发期由 CLI 承载——`watt channel connect feishu-main` 在本地起长连接把事件转发进平台，这正是"通过 CLI 创造请求"的实现路径）；Encode/Send 出站含 actions 卡片（走飞书 REST API，出站已实测通）；`IdentityMapper` 飞书映射（open_id→principal+roles）；`Metrics.Query` + `AuditLog`（Analytics Engine + D1，cf-aig-metadata 按 Agent 维度）；`manage/platform` 与 `manage/cron` Agent；Dashboard 最小版（只读视图 + Provider/Cron 写操作，Pages）；**CLI**：`watt channel connect|list|set` / `watt metrics query` / `watt status`（接真实指标）/ `watt audit list`（接真实数据面）/ `watt plugin register|list|health`。
 
 **DoD**：
-- [ ] 单测：飞书事件规约全字段义务（push 型下规约逻辑在 Adapter 内，义务同 Decode）、卡片 Encode（actions→signal 载荷）、身份映射缺省 anonymous、WS 断线重连/事件去重（dedupeKey=event_id）。
+- [x] 单测：飞书事件规约全字段义务（push 型下规约逻辑在 Adapter 内，义务同 Decode）、卡片 Encode（actions→signal 载荷）、身份映射缺省 anonymous、WS 断线重连/事件去重（dedupeKey=event_id）。（2026-07-04 Round 27：core channel/feishu 33 tests（R24）+ connectFeishu settle 语义 3 tests（R27 修复后断线重连真实可达）+ supervisor/退避既有测试；`pnpm verify` **1108 tests** 全绿）
 - [ ] 集成（真实飞书，tag `@feishu`）：`watt channel connect feishu-main` 建立长连接 → 测试群发消息 → 平台收到 im.message 且 principal 正确；平台出站 → 群里可见。
-- [ ] `watt metrics query --metric tokens --range 7d` 返回 Phase 4 以来真实的用量数据；`watt status` 汇总实例数/Task 数/今日 token。
-- [ ] 对 manage/cron 说"每天 9 点发 token 日报到测试群" → `watt cron list` 可见被正确创建的 CronJob（Case 6 的对话路径）。
-- [ ] **CLI 完备性核对**：Architecture M10 命令表的每条命令已实现且 `--json` 输出可解析；抽查三条命令与 Dashboard 同操作的 AuditLog 主体/结果一致（三入口对等的证据）。
+- [x] `watt metrics query --metric tokens --range 7d` 返回 Phase 4 以来真实的用量数据；`watt status` 汇总实例数/Task 数/今日 token。（2026-07-04 Round 27 线上：tokens 7d v=1199、`--group-by model` labels={model:glm-5.2}；status metrics{agentInstances,tasks,tokensToday:2095——当日 manage/cron 对话实时打点}）
+- [x] 对 manage/cron 说"每天 9 点发 token 日报到测试群" → `watt cron list` 可见被正确创建的 CronJob（Case 6 的对话路径）。（2026-07-04 Round 27 线上 @llm：spawn manage/cron#r27-gate → send 中文指令 → cron list 见 CronJob{schedule:"0 9 * * *", action:publish report.daily.tokens, payload.target=测试群, createdBy:user:djj, description 中文正确} → 清理）
+- [x] **CLI 完备性核对**：Architecture M10 命令表的每条命令已实现且 `--json` 输出可解析；抽查三条命令与 Dashboard 同操作的 AuditLog 主体/结果一致（三入口对等的证据）。（2026-07-04 Round 27 线上 sweep：M10 全表 33+ 命令逐条 `--json` PASS（tool describe 按契约输出 HTBP DSL 文本）；三入口对等：policy/scheduler/agent List 各经 CLI / Platform API / Dashboard(Origin=pages.dev) 三路调用 → audit 各恰 3 行 allow、principal 一致 user:djj）
 
 ## 9. Phase 7 — E2E 验收（最终 DoD）
 
