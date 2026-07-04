@@ -1,7 +1,9 @@
 import type { FeishuEvent } from '@watt/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  connectFeishu,
   type ConnectLogger,
+  type LarkModule,
   nextBackoffMs,
   publishDecodedEvent,
   runSupervisor,
@@ -136,5 +138,68 @@ describe('runSupervisor', () => {
       shouldStop: () => true,
     });
     expect(connects).toBe(0);
+  });
+});
+
+describe('connectFeishu settle 语义（R27 关门 MAJOR C4/C9/C11）', () => {
+  // fake lark：WSClient 记录构造参数；start 行为由测试注入。
+  function fakeLark(startBehavior: (params: Record<string, unknown>) => Promise<void> | void): {
+    lark: LarkModule;
+    seen: { params?: Record<string, unknown> };
+  } {
+    const seen: { params?: Record<string, unknown> } = {};
+    const lark: LarkModule = {
+      WSClient: class {
+        constructor(params: Record<string, unknown>) {
+          seen.params = params;
+        }
+        start(): Promise<void> | void {
+          return startBehavior(seen.params as Record<string, unknown>);
+        }
+      },
+      EventDispatcher: class {
+        register(): unknown {
+          return {};
+        }
+      },
+      Domain: { Feishu: 'feishu' },
+    };
+    return { lark, seen };
+  }
+
+  it('SDK 终态放弃触发 onError → connectFeishu reject（supervisor 重连可达）', async () => {
+    const { lark } = fakeLark((params) => {
+      // 模拟 SDK：连接建立后异步进入终态放弃（重连耗尽等）→ safeInvoke('onError')。
+      const onError = params.onError as (err: unknown) => void;
+      setTimeout(() => onError(new Error('reconnect exhausted')), 0);
+    });
+    await expect(
+      connectFeishu('https://gw.test', 'tok', { appId: 'a', appSecret: 's' }, silentLogger, lark),
+    ).rejects.toThrow('reconnect exhausted');
+  });
+
+  it('start() 异步 rejection 也 settle（不 unhandledRejection 挂死）', async () => {
+    const { lark } = fakeLark(async () => {
+      throw new Error('handshake failed');
+    });
+    await expect(
+      connectFeishu('https://gw.test', 'tok', { appId: 'a', appSecret: 's' }, silentLogger, lark),
+    ).rejects.toThrow('handshake failed');
+  });
+
+  it('构造参数带 wsConfig 必填坑位 + onReady/onError 回调', async () => {
+    const { lark, seen } = fakeLark((params) => {
+      (params.onError as (err: unknown) => void)(new Error('stop'));
+    });
+    await connectFeishu(
+      'https://gw.test',
+      'tok',
+      { appId: 'a', appSecret: 's' },
+      silentLogger,
+      lark,
+    ).catch(() => {});
+    expect(seen.params?.wsConfig).toEqual({ PingInterval: 30_000, PingTimeout: 60_000 });
+    expect(typeof seen.params?.onReady).toBe('function');
+    expect(typeof seen.params?.onError).toBe('function');
   });
 });

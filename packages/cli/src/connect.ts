@@ -112,30 +112,38 @@ export interface FeishuConnectConfig {
   domain?: string;
 }
 
+/** lark SDK 最小注入面（测试用 fake WSClient；生产缺省动态 import 真实 SDK）。 */
+export interface LarkModule {
+  WSClient: new (
+    params: Record<string, unknown>,
+  ) => { start: (opts: { eventDispatcher: unknown }) => Promise<void> | void };
+  EventDispatcher: new (opts: Record<string, unknown>) => {
+    register: (handlers: Record<string, (data: unknown) => Promise<void>>) => unknown;
+  };
+  Domain: { Feishu: unknown };
+}
+
 /**
  * 建立飞书 WS 连接并把事件转发到平台（真实 SDK 接线，@feishu 轮实测）。
  * SDK 坑（调研 §5）：wsClient config 必须带 wsConfig{PingInterval,PingTimeout}（缺失曾报 undefined）。
  * eventDispatcher 注册 im.message.receive_v1 / card.action.trigger 处理器，收到即
- *   publishDecodedEvent。connectOnce 语义：start() 阻塞直到断开（供 runSupervisor 重连）。
+ *   publishDecodedEvent。connectOnce 语义：返回的 Promise 在连接存续期间阻塞，SDK 终态放弃
+ *   （鉴权失败/重连耗尽/autoReconnect 关闭等）触发 onError → reject → runSupervisor 退避后
+ *   重建全新 WSClient 重连。SDK 1.68.0 的全部终态放弃路径都必然 safeInvoke('onError')
+ *   （lib/index.js L89250/89264 等）——onError 即「这次连接结束」的唯一可靠信号；SDK 内部
+ *   可自愈的断线走 onReconnecting（不 settle，本层不感知）。
  *
- * 注：本函数不写单测（依赖真实 WSClient）；纯逻辑（decode→publish、退避、监督）已单独测试。
+ * larkModule 可注入（测试用 fake WSClient 断言 settle 语义；缺省动态 import 真实 SDK——
+ *   @larksuiteoapi/node-sdk 是 Node-only，仅 connect 命令加载）。
  */
 export async function connectFeishu(
   base: string,
   token: string,
   config: FeishuConnectConfig,
   logger: ConnectLogger = consoleLogger,
+  larkModule?: LarkModule,
 ): Promise<void> {
-  // 动态 import：@larksuiteoapi/node-sdk 是 Node-only，仅 connect 命令加载（避免污染其他命令启动）。
-  const lark = await import('@larksuiteoapi/node-sdk');
-  const wsClient = new lark.WSClient({
-    appId: config.appId,
-    appSecret: config.appSecret,
-    domain: config.domain ?? lark.Domain.Feishu,
-    // 调研 §5：PingInterval/PingTimeout 必填，缺失会在启动时报 undefined。
-    // 类型上 wsConfig 属可选扩展字段，as 断言注入（SDK 未在公开类型导出该字段）。
-    ...({ wsConfig: { PingInterval: 30_000, PingTimeout: 60_000 } } as Record<string, unknown>),
-  });
+  const lark = larkModule ?? ((await import('@larksuiteoapi/node-sdk')) as unknown as LarkModule);
 
   const eventDispatcher = new lark.EventDispatcher({}).register({
     'im.message.receive_v1': async (data: unknown) => {
@@ -149,13 +157,26 @@ export async function connectFeishu(
   // SDK 的事件处理器收到的是 event 体（不含 header 信封）；重建 FeishuEvent 以复用 core decode。
   // header.event_id/create_time 若 SDK 已剥离则由 core decode 缺省补齐（now 时钟）。
   await new Promise<void>((_resolve, reject) => {
-    try {
-      wsClient.start({ eventDispatcher });
-    } catch (err) {
+    let settled = false;
+    const settle = (err: Error) => {
+      if (settled) return;
+      settled = true;
       reject(err);
-    }
-    // start() 内部维持长连接；断开由 SDK 内部处理。本 Promise 不 resolve（连接存续期间阻塞），
-    // 断线/错误由 reject 触发 runSupervisor 重连。生产由进程信号终止。
+    };
+    const wsClient = new lark.WSClient({
+      appId: config.appId,
+      appSecret: config.appSecret,
+      domain: config.domain ?? lark.Domain.Feishu,
+      // 调研 §5：PingInterval/PingTimeout 必填，缺失会在启动时报 undefined。
+      // wsConfig/onReady/onError 属 SDK 构造参数但未在公开类型导出——经 Record 注入。
+      wsConfig: { PingInterval: 30_000, PingTimeout: 60_000 },
+      onReady: () => logger.info('watt connect: ws ready'),
+      // SDK 终态放弃（不再自行重连）→ 本次 connectOnce 结束，交 runSupervisor 退避重建。
+      onError: (err: unknown) =>
+        settle(err instanceof Error ? err : new Error(String(err ?? 'ws error'))),
+    });
+    // start() 为 async（同步永不抛）；其 rejection 必须接住，否则 unhandledRejection 挂死进程。
+    void Promise.resolve(wsClient.start({ eventDispatcher })).catch(settle);
   });
 }
 
