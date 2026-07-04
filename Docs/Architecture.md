@@ -452,3 +452,24 @@ cli:
 ```
 
 **引导顺序（bootstrap）**：部署 Workers/DO/Workflows → 写入初始 admin principal 与种子 Policy（Proto §6.5c）→ 注册内置 Provider/Adapter（object/structured/vector Context Provider、builtin Tool Provider、各 IM Adapter）→ 写内置 AgentDefinition（`manage/*` 系列）→ 挂载工具树与 Context namespace → Dashboard 可用。
+
+### 附B.1 部署路径（两条；2026-07-04 P5）
+
+Watt 有两条互补的部署路径，产出同一套资源与拓扑，区别只在"谁来跑 provision/deploy"：
+
+**路径 1 — repo（贡献者/作者账户）：`pnpm deploy:all`**
+- 前置：仓库根 `.env`（结构见 `.env.example`）提供 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`；密钥经 `wrangler secret` / 本地 `.dev.vars`（`scripts/gen-dev-vars.mjs` 白名单）。
+- 编排：`scripts/deploy-all.mjs` → `provision.mjs`（幂等建资源 + 回填 `wrangler.jsonc`）→ 五库 migrations apply → 部署次序 **toolbridge → plugin-feishu → gateway → dashboard**。资源名硬编码 `watt-` 前缀、routes 走作者 custom domain。
+
+**路径 2 — npm（终端用户，零仓库）：`npx @tokenroll/watt init`**
+- 部署产物**随 npm 包分发**（`@tokenroll/watt` 的 `deploy/` 目录，由根 `pnpm build:deploy` 预生成、release 前强制刷新）：三个 Worker 的 esbuild 预 bundle（`worker.js`，`wrangler deploy --no-bundle`）+ `wrangler.template.jsonc` ×3（占位符 `__NAME_PREFIX__` / `__D1_*_ID__` / `__KV_*_ID__` / routes/services 段）+ 五库 migrations SQL + dashboard vite dist。wrangler 本体不进包，向导内 `npx --yes wrangler@<pinned>`。
+- 向导（`@clack/prompts`，`packages/cli/src/init/`）：wrangler auth 检查 → 问答（**部署名前缀**默认 `watt` / custom domain 可选默认 workers.dev / admin principal / LLM key 可选 / 是否启用飞书）→ provision（TS 移植 `provision.mjs`，资源名由前缀派生，解掉作者账户耦合）→ 渲染三份 `wrangler.jsonc` 到 `~/.watt/deployments/<prefix>/`（**飞书未启用时 gateway 模板不含 `FEISHU_PLUGIN` service binding**——同账户 workers.dev 互调被平台拦截，故飞书出站必经 service binding）→ 五库 migrations apply `--remote` → 信任根密钥（下）→ 部署（同路径 1 次序）→ 可选 LLM key 经 SecretStore 写入 → 收尾输出 URL + `watt setup feishu` 提示 + `watt status` 自检。
+- **可重入**：每步幂等；应答存档 `~/.watt/deployments/<prefix>/answers.json`（**无 secret**）支持 `watt init --resume --prefix <name>` 续跑，已完成步骤跳过。
+
+**信任根三 secret（两条路径共用，gateway `wrangler secret`）**：
+- `WATT_JWT_PRIVATE_JWK` — 平台 Ed25519 私钥（签发 user token + 派生 JWKS 公钥）；
+- `WATT_SECRET_ENCRYPTION_KEY` — SecretStore AES-256-GCM 主密钥（32B base64url）；
+- `WATT_ADMIN_PRINCIPAL` — 初始 admin principal（种子引导）。
+三者**保持 env-only、不走 KV 回退**（Proto §6.6：信任根若走 SecretStore 会形成"用 KV 密钥验证写 KV 权限"的循环）。业务密钥（LLM key 等）走 SecretStore runtime 化（`POST /htbp/platform/secret`）；飞书凭据随 `watt-plugin-feishu` Worker 自持。
+
+**首 admin 引导（消解鸡生蛋）**：`watt init` 生成 `WATT_JWT_PRIVATE_JWK` 时**同进程内存中先签一个 7d admin token** 再 `wrangler secret put` 再丢弃私钥（首次部署零轮换），token 写 `~/.watt/credentials.json`（0600）；后续人类登录走 device flow（Proto §6.5d）。已有部署的轮换 = `watt init --resign-admin`（破坏性，吊销全部存量 token 含 pluginToken，规范见 Proto §6.5c′）。

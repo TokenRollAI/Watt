@@ -6,7 +6,8 @@
     "watt": "./dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "deploy"
   ],
   "engines": {
     "node": ">=20"
@@ -18,9 +19,10 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "pnpm run build && pnpm run test"
+    "prepublishOnly": "pnpm -w run build:deploy && pnpm run build && pnpm run test"
   },
   "dependencies": {
+    "@clack/prompts": "^1.6.0",
     "commander": "14.0.2",
     "jose": "^6.2.3",
     "zod": "4.1.11"

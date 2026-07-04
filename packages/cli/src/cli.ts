@@ -41,6 +41,7 @@ import {
 } from './cron.ts';
 import { CliError, readEnv } from './env.ts';
 import { type EventView, eventGet, eventSubs, eventTail, formatEventLine } from './event.ts';
+import { runInit, runResignAdmin } from './init/index.ts';
 import { approveDevice, type DeviceAuthorizeResponse, login } from './login.ts';
 import { formatMetricsHuman, metricsQuery } from './metrics.ts';
 import {
@@ -1499,6 +1500,57 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
         );
         if (asJson()) out(JSON.stringify(result));
         else out(formatSetupGuidance(result));
+      },
+    );
+
+  // ── watt init（部署向导；P5 依赖 P3+P4）─────────────────────────────────────
+  program
+    .command('init')
+    .description('Interactive deployment wizard: provision + deploy Watt to your own CF account')
+    .option(
+      '--resume',
+      'resume a previous deployment from its saved answers (needs --prefix)',
+      false,
+    )
+    .option(
+      '--resign-admin',
+      'rotate the admin token for an existing deployment (destructive)',
+      false,
+    )
+    .option('--prefix <name>', 'deployment name prefix (default: watt; resume/resign key)')
+    .option('--domain <domain>', 'custom domain (default: workers.dev)')
+    .option('--admin-principal <p>', 'first admin principal, e.g. user:alice')
+    .option('--feishu', 'enable the feishu channel plugin', undefined)
+    .option('--yes', 'non-interactive mode (use flags/env, no prompts)', false)
+    .option('--force', 'skip destructive confirmation (with --resign-admin)', false)
+    .action(
+      async (cmdOpts: {
+        resume: boolean;
+        resignAdmin: boolean;
+        prefix?: string;
+        domain?: string;
+        adminPrincipal?: string;
+        feishu?: boolean;
+        yes: boolean;
+        force: boolean;
+      }) => {
+        const code = cmdOpts.resignAdmin
+          ? await runResignAdmin(
+              { prefix: cmdOpts.prefix, force: cmdOpts.force },
+              { fetch: opts.fetch, home: opts.env?.HOME },
+            )
+          : await runInit(
+              {
+                resume: cmdOpts.resume,
+                prefix: cmdOpts.prefix,
+                domain: cmdOpts.domain,
+                adminPrincipal: cmdOpts.adminPrincipal,
+                feishu: cmdOpts.feishu,
+                yes: cmdOpts.yes,
+              },
+              { fetch: opts.fetch, home: opts.env?.HOME },
+            );
+        if (code !== 0) throw new CliError('init did not complete', code);
       },
     );
 
