@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
 - **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
 - **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门（关门其余步骤本轮已全部完成）；随后 Phase 7（六条 E2E）
+- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门（关门其余步骤 R27 已全部完成）；Phase 7 已开跑——R28 完成 E2E-5/6，下一轮 R29（auto-delivery-lite 真实化 + E2E-1，调研见 `.llmdoc-tmp/investigations/phase7-e2e.md` §4）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,22 @@
 ---
 
 # 轮次记录
+
+## Round 28 — 2026-07-04（Phase 7 R28：E2E 地基 + E2E-5/6 线上采证）
+- 目标：Phase 7 首轮（按 investigator 调研 `.llmdoc-tmp/investigations/phase7-e2e.md` 五轮拆分）——补阻塞项 B1/B6/B7 + `pnpm e2e` 脚手架 + E2E-5/E2E-6 线上闭环
+- 动作（主 assistant 直接实现）：
+  - **B1 echo def 种子化**（`17ba81d`）：echo AgentDefinition 入 SEED_MANAGE_DEFS（Task 模板依赖，未注册卡 running——Round 20 backlog 收口）。
+  - **B7 harness 接 default provider**：AgentInstance.runHarness 每次调用查 ModelProviderRegistry.resolveDefault（def 缺省 model 或 `preferred:'default'` 哨兵 → 跟随平台默认渠道，set-default 即时生效）；secretRef 经 env 引用解析 key。resolveDefault 死代码收口（Phase 4 backlog）。
+  - **B6 非 admin token**：sign-admin-token `--extra <sub>=<roles>`（同一把新私钥多签，避免两次 --rotate 互相吊销）——E2E-4 身份对照就绪。
+  - **script 能力表扩容**：watt.queryMetric（只读 metrics，Check platform://metrics read + cron 链段 + 旁路审计）——Case 6「含真实数字的日报」数据源（Phase 5 backlog 收口）；+2 测试。
+  - **e2e 脚手架**：`scripts/e2e/{lib,index,e2e-5,e2e-6}.ts` + `pnpm e2e`——CLI --json 驱动（spawnSync bin.ts）、waitFor 重试、exit 0/1/2 分层、`E2E_LLM`/`E2E_FEISHU` 门控（每轮每 tag 一次）；未实现条目（1~4）标 TODO。
+  - **实测缺陷修复**（`adbf4e8`，E2E-6 首跑翻出）：script publish outbound.message 时 event-bus 出站 Check 带 cron:<jobId> 链段，而注入的平台 Authorizer cronJobs 索引恒空 → 误判 "cron job disabled/deleted"。修：script publish 用本 job 播种的判定包装（审计旁路留痕）；+1 回归测试（修复前必红）。顺带：grants 前缀通配需显式 `event://*`（match.ts 语义）。
+  - lib.ts 坑：node strip-only 不支持 constructor parameter properties（pitfalls 候选）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1131 tests**：shared 6 + dashboard 4 + core 444 + cli 140 + gateway 536+1skip）；`pnpm deploy:all` exit 0 ×2；**E2E-5 线上全绿**（`pnpm e2e 5`，E2E_LLM=1）：① tokens 7d total=3294 非空 ② e2e5-relay-a List 可见 ③ set-default b 后 a.default 翻转 false ④ **@llm 一次**：preferred:'default' def spawn→send → usage group-by model 出现 minimax-m3（新默认渠道模型，B7 实证）；**E2E-6 线上全绿**（`pnpm e2e 6`）：① job action=script + automations 脚本读回 ② 日报事件含真实数字（"过去 24h token 用量 3467"，watt.queryMetric 真实取数）③ fired/completed 成对 ok:true ④ 越权 job（无 event grants）publish → "cron script grant exceeded" deny。
+- 勾选：无（Phase 7 是整体验收——六条全绿 + `pnpm e2e` 编排后一并勾）。
+- 沉淀：pitfalls 候选（strip-only 无 parameter properties；script 出站 Check 需播种 cronJobs）；E2E-5/6 脚本即证据载体（可重跑）。
+- 遗留：R29 = B2（auto-delivery-lite 真实化：context feedback/bugs open→fixed + 接力链 agent.result 留痕）+ B4（checkpoint 卡片发飞书群，notify 参数化）+ E2E-1；随后 R30（B3 deep-research N=3 + E2E-2）、R31（B5 潜伏 agent + E2E-3）、R32（E2E-4 + Phase 7 关门）。@feishu 入站人工采证持续等待（connect 长驻中）。
+
 
 ## Round 27 — 2026-07-04（Phase 6 关门轮：质量关口 + DoD 复验，① ③ ④ ⑤ 全勾，② 等人工）
 - 目标：Phase 6 关门——五项 DoD 复验 + 4 维质量关口 workflow + 逐条对抗核查 + 确认项全修 + Docs 漂移回查 + llmdoc 沉淀
