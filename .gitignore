@@ -222,3 +222,4 @@ coverage/
 # Wrangler-generated binding types
 worker-configuration.d.ts
 
+.claude/

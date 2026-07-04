@@ -1,0 +1,28 @@
+{
+  "name": "@watt/plugin-feishu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/adapter/index.ts",
+  "types": "./src/adapter/index.ts",
+  "exports": {
+    ".": "./src/adapter/index.ts",
+    "./worker": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@watt/core": "workspace:*",
+    "@watt/shared": "workspace:*",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "vitest": "4.1.9",
+    "wrangler": "4.107.0"
+  }
+}

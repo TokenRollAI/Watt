@@ -26,22 +26,15 @@ import { fileURLToPath } from 'node:url';
 //   不会入库。若 .env 未提供该键（默认未提供），生成的 .dev.vars 就不含它——本地 vitest 集成测试
 //   走的是 packages/gateway/test/fixtures 的专用测试密钥（经 vitest miniflare.bindings 注入），
 //   不依赖 .dev.vars。生产私钥走 `wrangler secret put WATT_JWT_PRIVATE_JWK`（见 scripts/gen-jwt-keys.mjs）。
-// Phase 6（飞书出站接线 R24）：
-// - FEISHU_APP_ID / FEISHU_APP_SECRET：飞书 tenant_access_token 换取（gateway 出站 REST）。
-//   本地 wrangler dev 若测出站可注入 fake；缺省则出站 sender 返回 not configured（非阻断）。
-// - FEISHU_BASE_URL：可选，国际版 open.larksuite.com。
+// Phase 6（飞书出站接线 R24）→ P1 飞书 plugin 化后移除：飞书凭据（FEISHU_APP_ID/SECRET/ENCRYPT_KEY/
+//   VERIFICATION_TOKEN）随 P1 迁往 watt-plugin-feishu Worker 自持（其 .dev.vars / wrangler secret），
+//   gateway 出站经通用分发器（event/plugin-sender.ts）§11.4 调 channel-adapter plugin——gateway 不再持有
+//   任何飞书凭据。故 WORKER_VARS 不再含 FEISHU_*。
 // P3（SecretStore runtime 化）：
 // - WATT_SECRET_ENCRYPTION_KEY：SecretStore AES-256-GCM 主密钥（32 字节 base64url）。本地 wrangler dev
 //   固定一把测试值（.dev.vars 已 gitignore），生产走 wrangler secret put。缺省则 /htbp/platform/secret
 //   端点报 unavailable、resolveSecret 静默跳过 KV 分支（env-only 零回归）。
-const WORKER_VARS = [
-  'WATT_ADMIN_PRINCIPAL',
-  'WATT_JWT_PRIVATE_JWK',
-  'WATT_SECRET_ENCRYPTION_KEY',
-  'FEISHU_APP_ID',
-  'FEISHU_APP_SECRET',
-  'FEISHU_BASE_URL',
-];
+const WORKER_VARS = ['WATT_ADMIN_PRINCIPAL', 'WATT_JWT_PRIVATE_JWK', 'WATT_SECRET_ENCRYPTION_KEY'];
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');

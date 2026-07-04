@@ -57,7 +57,7 @@
 | 组件 | 职责 | 落地 |
 |---|---|---|
 | **Ingress Worker** | 接收入站 HTTP：渠道回调统一入口 `POST /channels/<channelId>/inbound`（按 `ChannelConfig.adapter` 分发给对应 Adapter：Verify → Decode → 补齐 → Publish，见 Proto §2.1 接入模式）、email、外部系统直接 API Call；验签、限流，规约成 Event。"直接通过 API Call" 的来源持 Bearer/OAuth 凭证调用 Platform API 的 `EventBus.Publish`，被规约为 `source.kind='webhook'` | Worker（`fetch` / `email` handler） |
-| **Channel Adapter** | 每种渠道一个适配器（feishu / dingding / slack / **email** / webhook），负责协议细节：验签（email 渠道的 Verify = SPF/DKIM/DMARC 校验）、长连接或回调维持、消息格式互转、出站投递 | Plugin（实现 `ChannelAdapter` 接口）；有状态渠道（如飞书长连接凭证、群会话）各占一个 DO；email 走 Email Routing 的 `email()` handler |
+| **Channel Adapter** | 每种渠道一个适配器（feishu / dingding / slack / **email** / webhook），负责协议细节：验签（email 渠道的 Verify = SPF/DKIM/DMARC 校验）、长连接或回调维持、消息格式互转、出站投递 | Plugin（实现 `ChannelAdapter` 接口）；有状态渠道（如飞书长连接凭证、群会话）各占一个 DO；email 走 Email Routing 的 `email()` handler。**飞书是首个独立发行的 channel-adapter plugin（`watt-plugin-feishu` 独立 Worker，自持回调 + 出站 Send，见 Proto §2.1 自持回调型 / Plugin.md）——渠道逻辑与凭据全在 plugin 侧，gateway 与飞书零硬编码耦合** |
 | **Event Bus** | 按订阅规则把 Event 分发给 Agent 实例 / Task / 外部 webhook；失败重试与死信 | Queues（缓冲/重试/DLQ）+ Router DO（订阅表） |
 | **Session Mapper** | 维护"渠道会话 ↔ Agent 实例"的映射（如：某飞书群 ↔ 某记录 Agent 实例），保证同一会话事件到达同一实例 | Router DO 内 SQLite |
 
@@ -391,6 +391,7 @@ Case 6 中 Manage Agent 正是先 `ContextProvider.Write` 存脚本、再调用 
 - **部署形态**：a) 平台内 Worker（推荐，享受 bindings）；b) 外部 HTTP 服务——只要实现接口对应的 HTTP 契约（HTBP 描述，见 Proto §11），托管在哪无所谓。
 - **注册**：`PluginRegistry.Write` 提交 manifest（类型、接口版本、endpoint、所需权限、健康检查路径）；平台验证接口契约（调 `~help` + 探活）后挂载到对应层。
 - **隔离**：Plugin 只持有自己声明的权限；对平台的回调（如 Channel Adapter 发布事件）用平台签发的 plugin token。
+- **出站分发（channel-adapter 通用机制）**：Agent/系统的 `outbound.message` 事件由 gateway consumer 的**通用出站分发器**投递——按 `ChannelConfig.adapter` 经约定 `channel-<adapter>`（或 `settings.pluginId` 覆盖）在 PluginRegistry 找到 enabled 的 channel-adapter，`endpoint` 为 `binding:<name>` 走 service binding、HTTPS 走 §11.4 的 `POST {"tool":"Send"}`（Bearer platform-token、`X-Watt-Request-Id`=event.id 幂等、10s 超时、`SendReceipt.error.retryable` → 队列重投）。此机制惠及所有 channel-adapter plugin，gateway 不含任何具体渠道代码。
 
 ### 必要接口（详见 Proto §11）
 
@@ -418,7 +419,7 @@ Case 6 中 Manage Agent 正是先 `ContextProvider.Write` 存脚本、再调用 
 workers:
   watt-gateway        # M1 Ingress + M5 中间件 + Platform API 路由
   watt-toolbridge     # M4 Tool Gateway（tool-bridge）
-  watt-plugins/*      # 各 Plugin（可独立仓库/账号）
+  watt-plugins/*      # 各 Plugin（可独立仓库/账号）；首个实例 watt-plugin-feishu（channel-adapter，自持回调，见 Proto §2.1 / Plugin.md）
 durable_objects:
   AgentInstance       # M2 Light Runtime（Agents SDK）
   AgentRegistry       # M2 定义注册表（三大 Registry 之一）

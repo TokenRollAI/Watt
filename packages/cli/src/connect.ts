@@ -2,8 +2,9 @@
  * `watt channel connect <channelId>`：本地承载飞书 WS 长连接（决策 feishu-websocket-channel.md）。
  *
  * 飞书 WSClient 是 Node SDK（ws + axios，跑不进 workerd）——由 CLI 进程承载。收到 WS 事件 →
- * core decodeFeishuEvent 规约 → 以 token 调平台 EventBus.Publish（POST /htbp/platform/event）。
- * dedupe 靠平台（dedupeKey=event_id）。
+ * @watt/plugin-feishu decodeFeishuEvent 规约 → 以 token 调平台 EventBus.Publish（POST /htbp/platform/event）。
+ * dedupe 靠平台（dedupeKey=event_id）。P1 后 decode 纯逻辑迁往 plugin 包（WS dev 路径与 Worker
+ *   webhook 宿主复用同一份）；本 WS 承载降为 dev-only 路径（生产走 plugin Worker webhook 回调）。
  *
  * 可测部分（本文件导出的纯逻辑 / 注入型函数）：
  *  - publishDecodedEvent：decode 结果 → EventBus.Publish 调用（注入 htbpCall，断言 body 形状）。
@@ -13,7 +14,7 @@
  *   本文件不写真实连接测试（LOOP 纪律：真实飞书每轮最多一次，留 R25）。
  */
 
-import { decodeFeishuEvent, type FeishuEvent } from '@watt/core';
+import { decodeFeishuEvent, type FeishuEvent } from '@watt/plugin-feishu';
 import { type HttpDeps, htbpCall } from './client.ts';
 
 /** 连接日志回调（连上/断线/重连/事件数）——注入以便测试与静默。 */

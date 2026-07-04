@@ -13,6 +13,7 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@watt/core": "workspace:*",
+    "@watt/plugin-feishu": "workspace:*",
     "@watt/shared": "workspace:*",
     "commander": "14.0.2"
   },

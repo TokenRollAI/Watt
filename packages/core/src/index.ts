@@ -97,17 +97,8 @@ export {
   subjectMatches,
 } from './authz/match.ts';
 export { toolActionFor } from './authz/tool-action.ts';
-// 飞书 ChannelAdapter 规约纯逻辑（§2.1 push 型 / §1.1）
-export {
-  type DecodeDeps,
-  decodeFeishuEvent,
-  encodeFeishuOutbound,
-  FEISHU_CHANNEL,
-  FEISHU_MESSAGE_PATH,
-  type FeishuDecodeResult,
-  type FeishuEvent,
-  type FeishuOutboundPayload,
-} from './channel/feishu.ts';
+// 飞书 ChannelAdapter 规约纯逻辑已随 P1 飞书 plugin 化迁往 @watt/plugin-feishu（decode/encode/verify/crypto/send）——
+//   core 不再导出飞书渠道逻辑（渠道自包含、可独立发行）。CLI channel connect 改从 @watt/plugin-feishu import。
 // Context Layer 纯逻辑（§4.1 ContextProvider / §4.2 ContextRegistry）
 export * from './context/index.ts';
 export {

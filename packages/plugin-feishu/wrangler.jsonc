@@ -1,0 +1,24 @@
+{
+  // watt-plugin-feishu Worker — 飞书 channel-adapter plugin（Proto §2.1 自持回调型 / Plugin.md 首实例）。
+  // 独立部署单元：自持 POST /webhook/event 入站回调（验签+解密+decode+Publish）+ §11.4 Encode/Send 出站面。
+  // 凭据自持（wrangler secret，非 gateway）：
+  //   FEISHU_APP_ID / FEISHU_APP_SECRET   —— tenant_access_token 换取（出站 REST）
+  //   FEISHU_ENCRYPT_KEY                  —— 事件订阅加密（配置后：验签 sha256 + AES-256-CBC 解密；推荐）
+  //   FEISHU_VERIFICATION_TOKEN           —— 明文模式来源校验（未配 ENCRYPT_KEY 时比对 token）
+  //   WATT_PLUGIN_TOKEN                   —— 回调平台 Publish 的 Bearer（PluginRegistry.Write 签发）
+  //   WATT_BASE_URL                       —— 平台基址（Publish 入口 + JWKS 验签 platform-token）
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watt-plugin-feishu",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  // 飞书回调 URL / 平台调 Send 均走公网 HTTPS——workers.dev 子域保留。
+  "workers_dev": true,
+  "vars": {
+    // 飞书开放平台基址（国际版覆盖为 https://open.larksuite.com）。
+    "FEISHU_BASE_URL": "https://open.feishu.cn"
+  }
+}

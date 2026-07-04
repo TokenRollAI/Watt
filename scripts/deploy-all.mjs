@@ -20,6 +20,7 @@ import { childEnvWithCfCreds } from './lib/env.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const skipProvision = process.argv.includes('--skip-provision');
 const skipDashboard = process.argv.includes('--skip-dashboard');
+const skipPlugins = process.argv.includes('--skip-plugins');
 
 // fix 5：注入 CF 凭据（缺失即 fail-fast），供 provision + wrangler deploy 复用。
 const childEnv = childEnvWithCfCreds('deploy-all');
@@ -141,6 +142,19 @@ steps.push({
   cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
 });
 
+// watt-plugin-feishu（M11 channel-adapter plugin，P1 飞书 plugin 化）：独立 Worker，自持回调 + §11.4 出站面。
+// 与 gateway 无部署顺序依赖（无 service binding 指向它——gateway 经 HTTPS §11.4 调用，plugin 经 registry
+// 注册）。可选（--skip-plugins 跳过）。其 secrets（FEISHU_* / WATT_PLUGIN_TOKEN / WATT_BASE_URL）由
+// checkPluginSecrets 单独预检；首次注册用 `watt setup feishu --endpoint <plugin-url>`（见报告线上步骤）。
+if (!skipPlugins) {
+  steps.push({
+    name: 'deploy watt-plugin-feishu (channel-adapter plugin; independent Worker)',
+    cmd: ['pnpm', '--filter', '@watt/plugin-feishu', 'exec', 'wrangler', 'deploy'],
+  });
+} else {
+  console.log('deploy-all: --skip-plugins set, skipping plugin worker deploys.');
+}
+
 // watt-dashboard（M10 Management）：静态 React SPA 部署到 Cloudflare Pages。可选（--skip-dashboard 跳过）。
 // 先 `pnpm --filter @watt/dashboard build`（Vite → packages/dashboard/dist）再 `wrangler pages deploy`。
 // Pages 项目 watt-dashboard 首次部署时 wrangler 会交互式提示创建——CI/非交互场景须先 `wrangler pages
@@ -184,6 +198,7 @@ console.log('\ndeploy-all: done.');
 // 但提前提示可省一轮"部署成功→端点 500→查半天"。@llm（ANTHROPIC_API_KEY）为可选，缺仅警告。
 // 放在 deploy 之后：wrangler secret list 需 Worker 已存在（首次从零拉起时 Worker 刚由上面部署出来）。
 checkGatewaySecrets();
+if (!skipPlugins) checkPluginFeishuSecrets();
 
 function checkGatewaySecrets() {
   console.log('\n=== check gateway secrets (advisory) ===');
@@ -200,7 +215,8 @@ function checkGatewaySecrets() {
   // secret list 输出可能是 JSON 数组或 name 行；用 substring 匹配名字（避开 env-token banner，§7）。
   const listed = `${res.stdout ?? ''}`;
   const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL', 'WATT_SECRET_ENCRYPTION_KEY'];
-  const OPTIONAL = ['ANTHROPIC_API_KEY', 'FEISHU_APP_ID', 'FEISHU_APP_SECRET'];
+  // 飞书凭据已随 P1 迁往 watt-plugin-feishu（见 checkPluginFeishuSecrets）——gateway 不再需要 FEISHU_*。
+  const OPTIONAL = ['ANTHROPIC_API_KEY'];
   const missingReq = REQUIRED.filter((n) => !listed.includes(n));
   const missingOpt = OPTIONAL.filter((n) => !listed.includes(n));
   if (missingReq.length) {
@@ -214,10 +230,46 @@ function checkGatewaySecrets() {
   }
   if (missingOpt.length) {
     console.warn(
-      `deploy-all: note — gateway 缺可选 secret: ${missingOpt.join(', ')}（相关路径不可用：ANTHROPIC_API_KEY→@llm agent，FEISHU_APP_*→飞书出站；非阻断）。`,
+      `deploy-all: note — gateway 缺可选 secret: ${missingOpt.join(', ')}（相关路径不可用：ANTHROPIC_API_KEY→@llm agent；非阻断）。`,
     );
   }
   if (!missingReq.length && !missingOpt.length) {
     console.log('deploy-all: gateway secrets present (required + optional).');
+  }
+}
+
+// watt-plugin-feishu 运行时 secrets 预检（非阻断）——飞书渠道逻辑/凭据全在 plugin 侧自持（P1）。
+// 加密模式（推荐）：FEISHU_ENCRYPT_KEY；明文模式：FEISHU_VERIFICATION_TOKEN（二者至少其一，缺则来源校验弱）。
+function checkPluginFeishuSecrets() {
+  console.log('\n=== check watt-plugin-feishu secrets (advisory) ===');
+  const res = spawnSync(
+    'pnpm',
+    ['--filter', '@watt/plugin-feishu', 'exec', 'wrangler', 'secret', 'list'],
+    { env: childEnv, encoding: 'utf8' },
+  );
+  if (res.status !== 0) {
+    console.warn('deploy-all: could not list plugin-feishu secrets (skip check); output tail:');
+    console.warn(`${res.stdout ?? ''}${res.stderr ?? ''}`.split('\n').slice(-8).join('\n'));
+    return;
+  }
+  const listed = `${res.stdout ?? ''}`;
+  // 出站 + 回调必需；入站来源校验（加密 or 明文）二选一。
+  const REQUIRED = ['FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'WATT_PLUGIN_TOKEN', 'WATT_BASE_URL'];
+  const missingReq = REQUIRED.filter((n) => !listed.includes(n));
+  const hasSourceCheck =
+    listed.includes('FEISHU_ENCRYPT_KEY') || listed.includes('FEISHU_VERIFICATION_TOKEN');
+  if (missingReq.length) {
+    console.warn(
+      `deploy-all: note — watt-plugin-feishu 缺 secret: ${missingReq.join(', ')}（飞书收发不可用；` +
+        ' 补：wrangler secret put <NAME> 到 watt-plugin-feishu，随后 watt setup feishu --endpoint <plugin-url>）。',
+    );
+  }
+  if (!hasSourceCheck) {
+    console.warn(
+      'deploy-all: note — watt-plugin-feishu 未配 FEISHU_ENCRYPT_KEY（推荐加密模式）或 FEISHU_VERIFICATION_TOKEN（明文模式来源校验）。',
+    );
+  }
+  if (!missingReq.length && hasSourceCheck) {
+    console.log('deploy-all: watt-plugin-feishu secrets present.');
   }
 }

@@ -150,6 +150,45 @@ function json(data: unknown): Response {
   });
 }
 
+// Fake watt-plugin-feishu（service binding FEISHU_PLUGIN，P1 出站分发器测试用）——忠实复现 plugin worker
+// 的 §11.4 Send 契约：要求 Bearer platform-token（此 fake 只断言 Bearer 存在，不做 JWKS 验签）、
+// 按 X-Watt-Request-Id 幂等、返回 SendReceipt（并按 receipt.retryable 映射 HTTP 状态，同真实 worker）。
+// 消息 target 驱动分支：'RETRY' → 503 retryable / 'REJECT' → 422 non-retryable / 其余 → 200 ok。
+async function fakeFeishuPlugin(request: Request): Promise<Response> {
+  const auth = request.headers.get('Authorization') ?? '';
+  if (!auth.startsWith('Bearer ') || auth.length < 12) {
+    return new Response(
+      JSON.stringify({ code: 'permission_denied', message: 'no token', retryable: false }),
+      {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  }
+  const call = (await request.json().catch(() => ({}))) as {
+    tool?: string;
+    arguments?: { message?: { target?: string } };
+  };
+  const reqId = request.headers.get('X-Watt-Request-Id') ?? '';
+  const target = call.arguments?.message?.target;
+  if (target === 'RETRY') {
+    return new Response(JSON.stringify({ ok: false, retryable: true, error: 'plugin blip' }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  if (target === 'REJECT') {
+    return new Response(JSON.stringify({ ok: false, retryable: false, error: 'bad receive_id' }), {
+      status: 422,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  return new Response(JSON.stringify({ ok: true, channelMessageId: `om-${reqId}` }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 export default defineConfig({
   test: {
     setupFiles: ['./test/apply-migrations.ts'],
@@ -169,7 +208,7 @@ export default defineConfig({
         d1Databases: { DB_CONTEXT: 'watt-context-local' },
         // TOOLBRIDGE service binding：wrangler.jsonc 声明它指向独立 Worker watt-toolbridge，本地
         // 无从加载 → 用 fakeToolBridge 函数覆盖（忠实上游契约，读共享 KV 树，见函数注释）。
-        serviceBindings: { TOOLBRIDGE: fakeToolBridge },
+        serviceBindings: { TOOLBRIDGE: fakeToolBridge, FEISHU_PLUGIN: fakeFeishuPlugin },
         bindings: {
           WATT_JWT_PRIVATE_JWK: JSON.stringify(testKey.privateJwk),
           WATT_ADMIN_PRINCIPAL: testKey.adminPrincipal,

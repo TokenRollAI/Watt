@@ -173,9 +173,8 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
     const body = (await res.json()) as { items: Array<{ id: string }> };
     expect(Array.isArray(body.items)).toBe(true);
     const ids = body.items.map((i) => i.id);
-    // 首请求幂等种子内置 webhook/feishu channel adapter。
+    // 首请求幂等种子内置 webhook channel adapter（feishu 不再内置种子——经 watt setup feishu 真实注册，P1）。
     expect(ids).toContain('channel-webhook');
-    expect(ids).toContain('channel-feishu');
   });
 
   it('List filter kind=channel-adapter returns only channel adapters', async () => {
@@ -204,15 +203,15 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
 
   it('seed does not resurrect an admin Update on isolate cold start (enabled=false persists)', async () => {
     const token = await signAdmin();
-    // 内置 channel-feishu 先由种子建出，管理员将其停用。
+    // 内置 channel-webhook 先由种子建出，管理员将其停用。
     const upd = await call(token, 'Update', {
-      pluginId: 'channel-feishu',
+      pluginId: 'channel-webhook',
       patch: { enabled: false },
     });
     expect(upd.status).toBe(200);
     // 模拟新 isolate 冷启动：清种子 once-guard 后再打任意 platform 请求（触发种子中间件重跑）。
     resetPluginSeedGuardForTests();
-    const got = await call(token, 'Get', { pluginId: 'channel-feishu' });
+    const got = await call(token, 'Get', { pluginId: 'channel-webhook' });
     expect(got.status).toBe(200);
     const body = (await got.json()) as { plugin: { enabled: boolean } };
     expect(body.plugin.enabled).toBe(false);
@@ -243,7 +242,7 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
 describe('PluginLifecycle.Health via route (§11.2)', () => {
   it('built-in channel-adapter → healthy ok (no external probe)', async () => {
     const token = await signAdmin();
-    const res = await call(token, 'Health', { pluginId: 'channel-feishu' });
+    const res = await call(token, 'Health', { pluginId: 'channel-webhook' });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { health: { healthy: boolean; detail?: string } };
     expect(body.health.healthy).toBe(true);
