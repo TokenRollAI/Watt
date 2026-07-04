@@ -2,6 +2,9 @@
 /**
  * scripts/sign-admin-token.mjs — 验收专用：为 device flow/Platform API 集成验收签发一个 admin user token。
  *
+ * ⚠️ 推荐改用 `watt init --resign-admin --prefix <name>`（P5）：交互化包装、jwksBase 从部署存档取、
+ *    破坏性确认内建——本脚本保留给 repo 部署路径（pnpm deploy:all）的验收轮换。
+ *
  * 背景（鸡生蛋）：生产私钥经 gen-jwt-keys.mjs 生成后只进了 wrangler secret，本地拿不回。
  * 本脚本在**单进程内**完成：
  *   1. 生成一把新 Ed25519 私钥（EdDSA）；
@@ -11,7 +14,8 @@
  *
  * 用法（在仓库根）：
  *   export CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=...   # 或从 .env
- *   ADMIN_TOKEN=$(node scripts/sign-admin-token.mjs --rotate)
+ *   export WATT_JWKS_BASE_URL=https://<your-gateway>.workers.dev   # 或 --jwks-base <url>
+ *   ADMIN_TOKEN=$(node scripts/sign-admin-token.mjs --rotate --jwks-base https://<gateway-url>)
  *
  * 额外 token（R28 B6，E2E-4 权限对照）：`--extra <sub>=<roles>`（可重复；roles 逗号分隔可空）
  *   用同一把新私钥签发非 admin token——一次轮换多 token（两次 --rotate 会互相吊销）。
@@ -25,8 +29,8 @@
  * 传播确认：secret put 成功后，轮询 ${base}/.well-known/jwks.json，比对返回公钥的 `x`
  *   等于本次生成的公钥 x（kid 固定 watt-platform-1，不能作为传播判据），确认新私钥已
  *   在边缘生效后再把 token 写 stdout；60s 超时则 stderr 警告并非零退出。
- *   base 取 WATT_JWKS_BASE_URL，缺省 workers.dev（本机对 watt.pdjjq.org
- *   有 DNS 污染，不复用 .env 的 WATT_BASE_URL；见 toolchain-pitfalls §11）。
+ *   base 取 `--jwks-base <url>` 或 WATT_JWKS_BASE_URL env——**缺省即报错**（不再硬编码作者
+ *   域名；勿复用 .env 的 WATT_BASE_URL，本机对 watt.pdjjq.org 有 DNS 污染，见 toolchain §11）。
  *
  * 约束（LOOP）：不落盘/打印私钥；token 仅 stdout 一行；提示/警告一律走 stderr。
  */
@@ -79,12 +83,20 @@ const audience = process.env.WATT_JWT_AUDIENCE || dotenv.WATT_JWT_AUDIENCE || 'w
 const kid = 'watt-platform-1';
 const ttlSec = 60 * 60;
 
-// jwks 轮询 base：本机对 watt.pdjjq.org 有 DNS 污染，默认走 workers.dev（可 env 覆盖）。
-const jwksBase = (
-  process.env.WATT_JWKS_BASE_URL ||
-  dotenv.WATT_JWKS_BASE_URL ||
-  'https://watt-gateway.shuaiqijianhao.workers.dev'
-).replace(/\/+$/, '');
+// jwks 轮询 base：--jwks-base <url> 优先，其次 WATT_JWKS_BASE_URL env——**缺省即报错**
+// （不再硬编码作者域名；本机对 watt.pdjjq.org 有 DNS 污染，勿复用 .env 的 WATT_BASE_URL，见 toolchain §11）。
+const jwksBaseArgIdx = process.argv.indexOf('--jwks-base');
+const jwksBaseArg = jwksBaseArgIdx >= 0 ? process.argv[jwksBaseArgIdx + 1] : undefined;
+const jwksBaseRaw = jwksBaseArg || process.env.WATT_JWKS_BASE_URL || dotenv.WATT_JWKS_BASE_URL;
+if (!jwksBaseRaw) {
+  process.stderr.write(
+    'sign-admin-token: missing gateway base URL for JWKS propagation check.\n' +
+      '  Provide --jwks-base <https://your-gateway-url> or export WATT_JWKS_BASE_URL.\n' +
+      '  (Recommended: use `watt init --resign-admin --prefix <name>` instead.)\n',
+  );
+  process.exit(1);
+}
+const jwksBase = jwksBaseRaw.replace(/\/+$/, '');
 
 // 1. 生成新私钥。
 const { publicKey, privateKey } = await generateKeyPair('EdDSA', {

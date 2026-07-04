@@ -738,6 +738,8 @@ interface IdentityMapper {
 
 **c) 引导（bootstrap）**：部署时以配置（环境变量/wrangler secret）声明初始 admin principal；平台内置一条种子 Policy `{ subject: "role:admin", resource: "*", actions: ["*"], effect: "allow" }` 并将初始 principal 绑定 `admin` 角色——由此 Case 5/6 的 "admin 登录 Dashboard" 在默认拒绝模型下可完成第一次授权，后续角色/Policy 全部经 `PolicyStore` 管理。
 
+**c′) 初始 admin token 的本地签发（规范性补充，2026-07-04；解"鸡生蛋"）**：平台私钥 `WATT_JWT_PRIVATE_JWK` 生成后即进 `wrangler secret`、本地不可回取，故首次部署无任何存量 token 可发起 device flow。部署工具（`watt init`，Architecture 部署章节）在**密钥生成的同一进程内存中**用刚生成的私钥直接签发一个短期 admin token（`sub=`初始 admin principal，`roles=["admin"]`，7d exp，与 §6.5a 的 user token 形状一致），随后 `wrangler secret put` 并丢弃私钥——**首次部署零轮换**（无存量 token 被吊销）。该 token 写入部署机的 `~/.watt/credentials.json`（0600），供后续 CLI 调用；正常人类登录仍走 §6.5d device flow。对已有部署的 admin token 轮换（`watt init --resign-admin` / `sign-admin-token.mjs --rotate`）会覆盖 `WATT_JWT_PRIVATE_JWK`，**吊销全部存量 token（含 pluginToken）**——属破坏性操作，须显式确认并重跑受影响的引导（如 `watt setup feishu`）。
+
 **d) CLI 设备授权（规范性补充，2026-07-02）**：`watt login` 走 **RFC 8628 Device Authorization Grant** 的最小子集，端点挂平台根：
 
 - `POST /oauth/device/authorize` → `{ device_code, user_code, verification_uri, expires_in, interval }`（无认证；user_code 8 位大写字母数字，`expires_in` 默认 600s，`interval` 默认 5s）；
