@@ -21,8 +21,9 @@ cron://<job-id>
 model://<provider-id>
 plugin://<plugin-id>
 platform://<module>[/<method>]       # 平台接口本身（metrics / audit / scheduler / policy /
-                                     #   registry/<name> ...），供 Policy 与 grants 授权
+                                     #   secret / registry/<name> ...），供 Policy 与 grants 授权
                                      #   平台能力调用，如 platform://metrics + action "read"
+                                     #   platform://secret 见 §6.6（SecretStore 运行时密钥）
 ```
 
 ### 0.2 通用类型
@@ -744,6 +745,27 @@ interface IdentityMapper {
 - **device_code 一次性使用（2026-07-02 补充，对齐 RFC 8628 单次授权语义）**：换取成功后 grant 即被消费（存储删除），同一 `device_code` 再次请求 → `{ error: "invalid_grant" }`。`user_code` 匹配对大小写鲁棒（服务端归一化为大写再查）。
 - 非交互环境（CI/loop）不走 device flow：直接以 `WATT_TOKEN` 环境变量提供 token（本地用平台私钥离线签发）。
 
+### 6.6 SecretStore（运行时密钥，规范性）
+
+平台密钥有两种来源：**部署期** secret（`wrangler secret put` / `.dev.vars`，注入为 Worker 运行时 `env.<NAME>`）与 **运行时** secret（经保护端点写入 KV，无需重新部署）。`ModelProvider.secretRef`（§9）、`ChannelConfig.settings.verifySecretRef`（§2.1）等**引用名**在解析时统一走同一条**回退链**（见下）。
+
+```ts
+interface SecretStore {
+  Write(name: string, value: string): { name: string, updatedAt: Timestamp }   // 覆写即更新
+  Delete(name: string): { deleted: true }
+  List(): { items: { name: string, updatedAt: Timestamp, shadowedByEnv: boolean }[] }
+  Get(name: string): { name: string, updatedAt: Timestamp | null, shadowedByEnv: boolean }  // 仅元数据
+}
+```
+
+- **四动词经 `POST /htbp/platform/secret`**（`{"tool":"Write"|"Delete"|"List"|"Get","arguments":{...}}`），资源 `platform://secret`；`Write`/`Delete` → action `manage`，`List`/`Get` → action `read`（种子 admin policy `role:admin`→`*` 天然覆盖）。审计经 `Authorizer.Check` 单点天然落账。
+- **永不回显明文**：`Write` 回 `{name, updatedAt}`，`Get`/`List` 只回元数据（`name`/`updatedAt`/`shadowedByEnv`）——密文值任何端点响应都不出现。写入值经 stdin/TTY/表单提交，绝不走 URL/argv/日志。
+- **名字约束**：`^[A-Z][A-Z0-9_]{0,63}$`（`secretRef` 命名空间的延伸——大写字母开头、字母数字下划线、≤64）；不合法 → `invalid_argument`。
+- **加密义务**：值经 **AES-256-GCM** 加密后存 KV（键 `secret:<name>`），**每次写用随机 12 字节 IV**，**附加认证数据（AAD）= secret 名**（防 KV 内容对调：把 `A` 的密文搬到 `B` 键位下解密必失败）；存储形状 `{v:1, iv, ct, updatedAt}`（iv/ct 为 base64url）。加密密钥是一把**专用主密钥** `WATT_SECRET_ENCRYPTION_KEY`（32 字节 base64url，部署期 secret），**不从 JWT 私钥派生**（JWT 轮换会静默毁掉全部密文）。主密钥缺失 → 端点返回 `unavailable`（`retryable:false`），解析回退链**静默跳过 KV 分支**（env-only 零回归）。
+- **resolveSecret 回退链语义（规范性）**：解析一个引用名 `ref` 时——① `env.<ref>` 命中（部署期 secret）→ 直接返回，**env 优先**；② 未命中且主密钥存在 → 查 `KV.get('secret:'+ref)` 解密返回；③ 双缺失 → `undefined`。实现可加 isolate 级短 TTL 缓存（本平台 60s）——故 KV 写入到线上生效有最长约 1 分钟窗口（KV 最终一致 + 缓存 TTL 叠加）。`shadowedByEnv=true` 即表示"KV 里虽有此名，但 env 同名会先命中、KV 值不生效"，供运营诊断。
+- **信任根排除**：平台 JWT 私钥 `WATT_JWT_PRIVATE_JWK` 与主密钥 `WATT_SECRET_ENCRYPTION_KEY` **不走此回退链**（保持 env-only）——否则形成"用 KV 里的密钥去验证写 KV 的权限"的信任循环。
+- **主密钥轮换 = 存量密文全失效**：换 `WATT_SECRET_ENCRYPTION_KEY` 后旧密文解不开（AAD/GCM tag 校验失败，解析返回 undefined 不报错），运营须对每个 secret 重新 `Write`。
+
 ---
 
 ## §7. Scheduler
@@ -871,7 +893,8 @@ interface ModelProvider {
   models: string[]                      // 该渠道可服务的模型名
   priority: number                      // 路由排序
   default: boolean                      // 全局默认渠道（同时只有一个，Write/Update 时由实现保证）
-  secretRef: string                     // 密钥引用（Secrets），永不回显
+  secretRef: string                     // 密钥引用（Secrets），永不回显；解析走 §6.6 回退链
+                                        //   （env.<secretRef> 优先 → SecretStore KV 解密 → undefined）
   enabled: boolean
 }
 

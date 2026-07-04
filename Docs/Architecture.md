@@ -279,6 +279,7 @@ Case 6 中 Manage Agent 正是先 `ContextProvider.Write` 存脚本、再调用 
 
 - 所有 LLM 流量经 **AI Gateway**：统一 endpoint、缓存、重试、fallback、per-provider token/费用/缓存命中率 analytics（Case 5 的数据源）。
 - Provider 配置（渠道、密钥、优先级、默认指向）存 D1；密钥经 Secrets 管理，不进 Agent 环境。
+- **密钥两源**（Proto §6.6）：部署期 secret（`wrangler secret` → `env.<NAME>`）与运行时 secret（`SecretStore` 经 `POST /htbp/platform/secret` 写入 KV，AES-256-GCM + AAD=名，无需重新部署）。`ModelProvider.secretRef` / `ChannelConfig.verifySecretRef` 等引用名统一走 `resolveSecret` 回退链（env 优先 → KV 解密 → undefined）；主密钥 `WATT_SECRET_ENCRYPTION_KEY` 与 JWT 私钥 `WATT_JWT_PRIVATE_JWK` 是**信任根**，保持 env-only 不走 KV 回退。
 
 ### 必要接口（详见 Proto §9）
 
