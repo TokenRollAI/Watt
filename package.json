@@ -19,7 +19,8 @@
     "migrate": "pnpm --filter @watt/gateway exec wrangler d1 migrations apply watt-policies --remote",
     "deploy:all": "node scripts/deploy-all.mjs",
     "smoke": "node scripts/smoke.ts",
-    "e2e": "node scripts/e2e/index.ts"
+    "e2e": "node scripts/e2e/index.ts",
+    "release:cli": "pnpm --filter @tokenroll/watt typecheck && pnpm --filter @tokenroll/watt test && pnpm --filter @tokenroll/watt build && node scripts/pack-smoke-cli.mjs && pnpm publish --filter @tokenroll/watt --access public --no-git-checks"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
