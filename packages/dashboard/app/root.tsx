@@ -8,12 +8,21 @@ import './app.css';
 import {
   isRouteErrorResponse,
   Links,
+  type LinksFunction,
   Meta,
   Outlet,
   Scripts,
   ScrollRestoration,
 } from 'react-router';
 import { Toaster } from '~/components/ui/sonner';
+
+// 图标素材源 Icons/Watt.png，经 ffmpeg 派生（Icons/gen/），产物入 public/ 随构建分发。
+export const links: LinksFunction = () => [
+  { rel: 'icon', href: '/favicon.ico', sizes: '32x32' },
+  { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' },
+  { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
+  { rel: 'manifest', href: '/site.webmanifest' },
+];
 
 // 首帧前应用主题（默认 dark——控制台形态），避免 FOUC；切换见 layout 的 ThemeToggle。
 const THEME_BOOT = `(function(){try{var t=localStorage.getItem('watt.theme');if(t==='light'){document.documentElement.classList.remove('dark')}else{document.documentElement.classList.add('dark')}}catch(e){document.documentElement.classList.add('dark')}})();`;
