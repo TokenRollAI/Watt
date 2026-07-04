@@ -77,7 +77,7 @@ Watt Plugin = 实现某一层纯接口的可注册部署单元。三步：挑类
 要点：
 - **模型渠道不是 Plugin**——只是 `ModelProviderRegistry.Write` 的一条数据。
 - 能力边界：Plugin 只能 (a) 响应平台对接口的调用；(b) 用 plugin token 回调平台，scope 严格等于 manifest 的 `requiredGrants`。
-- 注册流程：探活（healthPath）→ 抓 `~help` 契约校验（方法集与 `interfaceVersion` 不符则拒绝挂载）→ 挂载；响应含 `platformBaseUrl`/`jwksUrl`/`pluginToken`。健康检查连续失败标 unhealthy 并告警，**不自动注销**。
+- 注册流程：探活（healthPath）→ 抓 `~help` 契约校验（方法集与 `interfaceVersion` 不符则拒绝挂载）→ 挂载；响应含 `platformBaseUrl`/`jwksUrl`/`pluginToken`。健康检查连续失败标 unhealthy 并告警，**不自动注销**。实现状态（R27）：探活已实现（失败拒绝注册）；`~help` 契约校验延后（doc-gaps #30）。
 - 双向认证：平台→Plugin 用 `platform-token`（JWT，平台公钥验签）或 `bearer`（静态密钥经 Secrets）；Plugin→平台用 plugin token。
 - 版本：`interfaceVersion` = `<kind>/v<major>`；同 major 向后兼容；未知字段必须忽略。
 - 部署形态：平台内 Worker（推荐）/ 外部 HTTP 服务 / Container（agent-harness 需完整 OS）。

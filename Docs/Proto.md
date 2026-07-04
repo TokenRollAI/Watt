@@ -262,7 +262,12 @@ interface EventBus {
    *  鉴权（规范性）：type="outbound.message" 时判定
    *  Check(context, event://<channel>/<target>, 'write')——"Agent 能否向某渠道发消息"
    *  在此收敛；外部系统经 Platform API（Bearer/OAuth，见 §11.3）直接 Publish 时，
-   *  事件被规约为 source.kind='webhook'，与入站 webhook 同权处理 */
+   *  事件被规约为 source.kind='webhook'，与入站 webhook 同权处理。
+   *  规约豁免（规范性补充，2026-07-04）：调用主体是已注册且 enabled 的 channel-adapter
+   *  Plugin（pluginToken，principal=plugin:<id>，§11.2 签发）时，其自报的 source.kind='im'
+   *  予以保留——push 型渠道（§2.1）的 Adapter 自行规约后 Publish，字段义务同 Decode，
+   *  kind 失真会使 sourceKind 订阅匹配失效；白名单仅 'im'（防冒用 system/cron 等特权 kind），
+   *  其余自报 kind 仍规约为 'webhook' */
   Publish(event: Omit<Event, 'id' | 'traceId' | 'occurredAt'>): { eventId: string }
 
   /** 订阅：匹配的事件将投递到 sink */
