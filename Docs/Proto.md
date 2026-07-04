@@ -376,7 +376,10 @@ interface AgentRuntime {
 
 interface SpawnRequest {
   definition: string                    // AgentDefinition.name
-  instanceKey?: string                  // 幂等键；如 session id（同键返回同实例）
+  instanceKey?: string                  // 幂等键；如 session id（同键返回同实例）。
+                                        // 同键实例已 terminated 时，Spawn **复活**为全新实例
+                                        // （重置运行态并按当前 def 重新快照 toolScopes/systemPrompt 等）；
+                                        // Send 不复活（幽灵投递防护不变，见 §3.2 Terminate）
   input?: unknown                       // 初始任务/参数
   ttl?: number                          // 秒；到期自动 Terminate（临时 subagent）
   expect?: ExpectSpec                   // 需要结果的派生（Case 2 的 fan-out）：

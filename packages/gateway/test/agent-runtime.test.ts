@@ -237,6 +237,29 @@ describe('AgentRuntime.terminate cascade (§3.4 rule 4)', () => {
     // child 的 pending correlation 被 failProducer settle（规则 4）→ resolve 为 null。
     expect(await corr.resolve('cid-term')).toBeNull();
   });
+
+  it('re-Spawn revives a terminated instance with a fresh def snapshot (R33, §3.2 复活语义)', async () => {
+    const reg = new AgentRegistry(env.DB_PROVIDERS);
+    const name = uniq('revive');
+    await reg.write({ ...D(name), toolScopes: ['old-scope'] });
+    const rt = new AgentRuntime(runtimeDeps());
+    const key = uniq('key');
+    await rt.spawn({ definition: name, instanceKey: key });
+    await rt.terminate(key);
+    expect((await (await instanceRpc(key)).getInfo()).status).toBe('terminated');
+
+    // def 更新后 re-Spawn：复活为全新实例，快照取当前 def（toolScopes 刷新）。
+    await reg.write({ ...D(name), toolScopes: ['new-scope'] });
+    const revived = await rt.spawn({ definition: name, instanceKey: key });
+    expect('code' in revived).toBe(false);
+    const info = await (await instanceRpc(key)).getInfo();
+    expect(info.status).toBe('idle');
+    expect(info.toolScopes).toEqual(['new-scope']);
+    // correlation 索引行同步复活（Send 依赖行存在且非 terminated）。
+    const corr2 = correlationStub();
+    const row = await corr2.getInstance(key);
+    expect(row?.state).toBe('idle');
+  });
 });
 
 describe('AgentRuntime.listInstances tree (§3.2)', () => {

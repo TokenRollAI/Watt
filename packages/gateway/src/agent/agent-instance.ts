@@ -127,7 +127,10 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
    *  命名 initInstance（非 init）以不覆盖 Agents SDK 基类的 init 钩子。
    *  幂等（2026-07-03 修正）：**只在首次初始化**（createdAt 为 INITIAL_STATE 的空串时）落全套 state；
    *   已初始化的实例重复 Spawn（同 instanceKey）不重置 children/status/input——否则派生子树/运行态会
-   *   被后续 Spawn 抹掉（Spawn 幂等语义 §3.2「同键返回同实例」要求状态稳定）。返回当前 state。 */
+   *   被后续 Spawn 抹掉（Spawn 幂等语义 §3.2「同键返回同实例」要求状态稳定）。返回当前 state。
+   *  复活（R33，§3.2 SpawnRequest 补充）：同键实例已 **terminated** 时，Spawn 视为全新实例——
+   *   重置全套 state 并按当前 def 重新快照（toolScopes/systemPrompt 随 def 更新生效）；
+   *   Send 不复活（onEvent terminated 守卫不变，幽灵投递防护保持）。 */
   async initInstance(args: {
     definition: string;
     harness: string;
@@ -138,8 +141,8 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
     parent?: string;
     nowIso: string;
   }): Promise<AgentInstanceState> {
-    // 已初始化（非 INITIAL_STATE）：幂等返回现有 state，不重置。
-    if (this.state.createdAt !== '') {
+    // 已初始化（非 INITIAL_STATE）且未 terminated：幂等返回现有 state，不重置。
+    if (this.state.createdAt !== '' && this.state.status !== 'terminated') {
       return this.state;
     }
     const next: AgentInstanceState = {

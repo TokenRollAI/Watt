@@ -154,7 +154,11 @@ export class AgentCorrelation extends DurableObject {
       `INSERT INTO instances (instance_id, definition, parent_id, state, created_at)
        VALUES (?, ?, ?, 'idle', ?)
        ON CONFLICT(instance_id) DO UPDATE SET
-         definition = excluded.definition, parent_id = excluded.parent_id`,
+         definition = excluded.definition, parent_id = excluded.parent_id,
+         -- 复活（R33，Proto §3.2）：terminated 行被显式 re-Spawn 时重置为 idle + 新 created_at；
+         -- 其余状态保持（Spawn 幂等不打扰运行态）。set 表达式引用的 instances.* 均为旧行值。
+         state = CASE WHEN instances.state = 'terminated' THEN 'idle' ELSE instances.state END,
+         created_at = CASE WHEN instances.state = 'terminated' THEN excluded.created_at ELSE instances.created_at END`,
       args.instanceId,
       args.definition,
       args.parentId ?? null,
