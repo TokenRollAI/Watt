@@ -16,6 +16,7 @@
 
 import { decodeFeishuEvent, type FeishuEvent } from '@watt/plugin-feishu';
 import { type HttpDeps, htbpCall } from './client.ts';
+import { CliError } from './env.ts';
 
 /** 连接日志回调（连上/断线/重连/事件数）——注入以便测试与静默。 */
 export interface ConnectLogger {
@@ -93,6 +94,9 @@ export async function runSupervisor(deps: SupervisorDeps): Promise<void> {
       logger.warn('watt connect: connection closed');
       attempt = 0; // 曾成功连接过 → 下次断线从头退避
     } catch (err) {
+      // CliError = 不可重试的配置错误（如 optional lark SDK 缺失）——直接抛出交 run() 以其 exitCode
+      //   退出，而非当作瞬时断线无限退避重连。瞬时连接失败（普通 Error）才走退避重连。
+      if (err instanceof CliError) throw err;
       logger.warn(
         `watt connect: connection failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -127,6 +131,24 @@ export interface LarkModule {
 }
 
 /**
+ * 动态加载 @larksuiteoapi/node-sdk（optionalDependency——发行 bundle 里 external，仅本地 WS dev 路径需要）。
+ * 未安装（`npm i -g @tokenroll/watt` 默认不装 optional 或安装失败）→ CliError(2) 给安装指引，
+ *   而非抛裸 ERR_MODULE_NOT_FOUND 崩栈。生产走 plugin Worker webhook 回调，不需此包。
+ */
+async function loadLarkSdk(): Promise<LarkModule> {
+  try {
+    return (await import('@larksuiteoapi/node-sdk')) as unknown as LarkModule;
+  } catch {
+    throw new CliError(
+      'feishu WS connect requires the optional package @larksuiteoapi/node-sdk.\n' +
+        '  Install it:  npm i -g @larksuiteoapi/node-sdk   (or add it to your project)\n' +
+        '  Note: production feishu runs via the plugin Worker webhook; `channel connect` is a local dev-only path.',
+      2,
+    );
+  }
+}
+
+/**
  * 建立飞书 WS 连接并把事件转发到平台（真实 SDK 接线，@feishu 轮实测）。
  * SDK 坑（调研 §5）：wsClient config 必须带 wsConfig{PingInterval,PingTimeout}（缺失曾报 undefined）。
  * eventDispatcher 注册 im.message.receive_v1 / card.action.trigger 处理器，收到即
@@ -146,7 +168,7 @@ export async function connectFeishu(
   logger: ConnectLogger = consoleLogger,
   larkModule?: LarkModule,
 ): Promise<void> {
-  const lark = larkModule ?? ((await import('@larksuiteoapi/node-sdk')) as unknown as LarkModule);
+  const lark = larkModule ?? (await loadLarkSdk());
 
   const eventDispatcher = new lark.EventDispatcher({}).register({
     'im.message.receive_v1': async (data: unknown) => {

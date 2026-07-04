@@ -1,24 +1,39 @@
 {
-  "name": "watt-cli",
+  "name": "@tokenroll/watt",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "bin": {
-    "watt": "./src/bin.ts"
+    "watt": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build && pnpm run test"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.68.0",
-    "@watt/core": "workspace:*",
-    "@watt/plugin-feishu": "workspace:*",
-    "@watt/shared": "workspace:*",
-    "commander": "14.0.2"
+    "commander": "14.0.2",
+    "jose": "^6.2.3",
+    "zod": "4.1.11"
+  },
+  "optionalDependencies": {
+    "@larksuiteoapi/node-sdk": "^1.68.0"
   },
   "devDependencies": {
     "@types/node": "24.3.0",
+    "@watt/core": "workspace:*",
+    "@watt/plugin-feishu": "workspace:*",
+    "@watt/shared": "workspace:*",
+    "tsup": "8.5.1",
     "vitest": "4.1.9"
   }
 }
