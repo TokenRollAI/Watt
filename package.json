@@ -21,7 +21,7 @@
     "deploy:all": "node scripts/deploy-all.mjs",
     "smoke": "node scripts/smoke.ts",
     "e2e": "node scripts/e2e/index.ts",
-    "release:cli": "pnpm build:deploy && pnpm --filter @token-roll/watt typecheck && pnpm --filter @token-roll/watt test && pnpm --filter @token-roll/watt build && node scripts/pack-smoke-cli.mjs && pnpm publish --filter @token-roll/watt --access public --no-git-checks"
+    "release:cli": "pnpm build:deploy && pnpm --filter @tokenroll/watt typecheck && pnpm --filter @tokenroll/watt test && pnpm --filter @tokenroll/watt build && node scripts/pack-smoke-cli.mjs && pnpm publish --filter @tokenroll/watt --access public --no-git-checks"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",

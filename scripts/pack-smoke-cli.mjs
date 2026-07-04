@@ -2,7 +2,7 @@
 /**
  * CLI 发行冒烟（release:cli 的 `npm pack` 环节，计划 §P4）。
  *
- * 1. `pnpm pack` 打出 @token-roll/watt tarball（尊重 package.json files 白名单）；
+ * 1. `pnpm pack` 打出 @tokenroll/watt tarball（尊重 package.json files 白名单）；
  * 2. 在临时项目里 `npm install <tarball>`（安装 external deps commander/zod/jose，
  *    optionalDependency @larksuiteoapi/node-sdk 缺失不阻塞）；
  * 3. 运行安装后的 `watt --version` / `watt --help` 断言 bundle 依赖闭环、可独立运行。
@@ -26,7 +26,7 @@ function sh(cmd, args, cwd) {
 }
 
 try {
-  console.error(`[pack-smoke] packing @token-roll/watt → ${packDir}`);
+  console.error(`[pack-smoke] packing @tokenroll/watt → ${packDir}`);
   sh('pnpm', ['pack', '--pack-destination', packDir], cliDir);
   const tarball = readdirSync(packDir).find((f) => f.endsWith('.tgz'));
   if (!tarball) throw new Error('no tarball produced');

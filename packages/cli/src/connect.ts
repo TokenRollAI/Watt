@@ -132,7 +132,7 @@ export interface LarkModule {
 
 /**
  * 动态加载 @larksuiteoapi/node-sdk（optionalDependency——发行 bundle 里 external，仅本地 WS dev 路径需要）。
- * 未安装（`npm i -g @token-roll/watt` 默认不装 optional 或安装失败）→ CliError(2) 给安装指引，
+ * 未安装（`npm i -g @tokenroll/watt` 默认不装 optional 或安装失败）→ CliError(2) 给安装指引，
  *   而非抛裸 ERR_MODULE_NOT_FOUND 崩栈。生产走 plugin Worker webhook 回调，不需此包。
  */
 async function loadLarkSdk(): Promise<LarkModule> {

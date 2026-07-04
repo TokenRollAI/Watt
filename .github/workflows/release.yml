@@ -1,9 +1,9 @@
-# Release：推 v* tag（或手动触发）→ 全量校验 → 构建部署产物 → 发布 @token-roll/watt 到 npm。
+# Release：推 v* tag（或手动触发）→ 全量校验 → 构建部署产物 → 发布 @tokenroll/watt 到 npm。
 #
 # 认证两路兼容（见同目录 README.md）：
 #  - Trusted Publishing（推荐）：npmjs 包设置里配置 GitHub Actions trusted publisher 后，
 #    npm publish 经 OIDC 免密发布（需要 permissions.id-token: write）。
-#  - NPM_TOKEN secret：设置了就走 NODE_AUTH_TOKEN（granular token，@token-roll 写权限）。
+#  - NPM_TOKEN secret：设置了就走 NODE_AUTH_TOKEN（granular token，@tokenroll 写权限）。
 name: release
 
 on:
@@ -44,7 +44,7 @@ jobs:
 
       # 部署产物（deploy/ 随包分发，watt init 依赖）+ CLI bundle + tarball 冒烟。
       - run: pnpm build:deploy
-      - run: pnpm --filter @token-roll/watt build
+      - run: pnpm --filter @tokenroll/watt build
       - run: node scripts/pack-smoke-cli.mjs
 
       # 发布：显式步骤已跑完，跳过 prepublishOnly 防重复构建；--provenance 公开构建溯源。
