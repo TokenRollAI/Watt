@@ -19,7 +19,6 @@ import { childEnvWithCfCreds } from './lib/env.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skipProvision = process.argv.includes('--skip-provision');
-const skipDashboard = process.argv.includes('--skip-dashboard');
 const skipPlugins = process.argv.includes('--skip-plugins');
 
 // fix 5：注入 CF 凭据（缺失即 fail-fast），供 provision + wrangler deploy 复用。
@@ -152,38 +151,18 @@ if (!skipPlugins) {
   console.log('deploy-all: --skip-plugins set, skipping plugin worker deploys.');
 }
 
+// watt-dashboard（M10 Management，R34 单域化）：静态 SPA 经 Workers Static Assets 随 gateway 同 Worker
+// 服务（gateway wrangler.jsonc "assets" → ../dashboard/dist）——**必须在 gateway deploy 之前 build**，
+// 否则 assets 目录缺失 gateway deploy 失败。独立 Pages 项目 watt-dashboard 已弃用（保留的项目可手动删除）。
 steps.push({
-  name: 'deploy watt-gateway',
-  cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
+  name: 'build watt-dashboard (Vite static SPA; served via gateway Workers Static Assets)',
+  cmd: ['pnpm', '--filter', '@watt/dashboard', 'build'],
 });
 
-// watt-dashboard（M10 Management）：静态 React SPA 部署到 Cloudflare Pages。可选（--skip-dashboard 跳过）。
-// 先 `pnpm --filter @watt/dashboard build`（Vite → packages/dashboard/dist）再 `wrangler pages deploy`。
-// Pages 项目 watt-dashboard 首次部署时 wrangler 会交互式提示创建——CI/非交互场景须先 `wrangler pages
-//   project create watt-dashboard --production-branch main`（见报告部署待办）。gateway CORS 已放行 *.pages.dev。
-if (!skipDashboard) {
-  steps.push({
-    name: 'build watt-dashboard (Vite static SPA)',
-    cmd: ['pnpm', '--filter', '@watt/dashboard', 'build'],
-  });
-  steps.push({
-    name: 'deploy watt-dashboard (Cloudflare Pages)',
-    cmd: [
-      'pnpm',
-      '--filter',
-      '@watt/dashboard',
-      'exec',
-      'wrangler',
-      'pages',
-      'deploy',
-      'dist',
-      '--project-name',
-      'watt-dashboard',
-    ],
-  });
-} else {
-  console.log('deploy-all: --skip-dashboard set, skipping dashboard build + Pages deploy.');
-}
+steps.push({
+  name: 'deploy watt-gateway (serves /htbp API + dashboard static assets on one domain)',
+  cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
+});
 
 for (const step of steps) {
   console.log(`\n=== ${step.name} ===`);

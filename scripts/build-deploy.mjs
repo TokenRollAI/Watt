@@ -142,6 +142,8 @@ function gatewayTemplate(src) {
   );
   // services 段 → 占位符（TOOLBRIDGE 常在；FEISHU_PLUGIN 视飞书开关，render 时决定）。
   s = s.replace(/"services"\s*:\s*\[[\s\S]*?\]\s*,/, '__SERVICES_BLOCK__,');
+  // assets 目录（R34 单域化）：仓库布局 ../dashboard/dist → init 部署布局 <dir>/dashboard（deploy.ts 拷贝落点）。
+  s = s.replace('"directory": "../dashboard/dist"', '"directory": "../dashboard"');
   return finalize(s);
 }
 

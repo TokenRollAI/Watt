@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 0~7 全部关门 + R33 可用性冲刺完成**（飞书 plugin 化 / HTBP 工具注入 / SecretStore / CLI npm 化 / watt init 向导 / dashboard 配置页 / lurker LLM 化）
 - **已勾选**：Phase 0~7 全部；**Phase 6 ② @feishu 入站真实群消息已采证**（R33：webhook plugin 主路径，真实群 @watt 收到回复，用户截图 + events/audit 双留痕）
 - **Blocker**：无。飞书后台需保持"事件发送至开发者服务器"=`https://watt-feishu.pdjjq.org/webhook/event`（workers.dev 境内被干扰不可用）；群上下文累积需飞书应用加 `接收群聊中所有消息` 权限（当前仅 @ 消息可达）
-- **下一目标**：npm 真实发布（`pnpm release:cli`，需 @tokenroll org 权限人工确认）；`watt init` 真实账户全程验证（交互式 TUI，建议前缀 watt-init-test）；R33 MINOR backlog（httpbin 上游不稳→换可靠桩工具、admin token 1h 短命 + 轮换连坐 pluginToken 的运维摩擦）
+- **下一目标**：npm 真实发布（`pnpm release:cli`，需 @tokenroll org 权限人工确认）；`watt init` 真实账户全程验证（交互式 TUI，建议前缀 watt-init-test）；R33 MINOR backlog（~~httpbin 上游不稳→换可靠桩工具~~ R34 已换 httpbingo、admin token 1h 短命 + 轮换连坐 pluginToken 的运维摩擦）；R34 遗留：真人群内 @watt 验证入站新 pluginToken
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,18 @@
 ---
 
 # 轮次记录
+
+## Round 34 — 2026-07-04（维护轮：飞书群 agent 工具链路修复——两关授权 + httpbin 桩）
+
+- 目标：修复用户截图报障——真实飞书群 @watt 用工具取 uuid 失败（先「"test" 工具树 permission denied」，后「工具调用 503」）。
+- 根因（investigator 报告 `.llmdoc-tmp/investigations/agent-htbp-test-tree-denied.md`，实测修正一处）：
+  - **permission denied 是两层授权缺口**：① §6.4c 步骤 1——`agent:lurker/scribe` 主体对 `tool://test` 无任何 allow policy（全库唯一种子是 `role:admin→*→*`）；② 步骤 2——线上 def 的 `grants` 只有 `event://*` write，不含 tool://（报告推断 def 有 `tool://*` 有误，实测第一次修复后暴露 `agent definition grant exceeded`）。另发现线上 def `toolScopes` 已被某次 def 重写冲回 `[]`（运行中实例靠旧快照仍见 test）。
+  - **503 = `test/echo` 树 `get-uuid` 指向 `https://httpbin.org/uuid`**（R33 遗留点名的不稳桩），toolbridge 兜成 500 回喂。
+- 动作（全部为线上配置/种子数据修复，零代码改动）：admin token 过期→`sign-admin-token.mjs --rotate` 轮换（连坐 pluginToken→`watt plugin register channel-feishu` 重签 + 重 put `WATT_PLUGIN_TOKEN`，未跑完整 setup feishu 以免冲掉 def）；`watt policy add` ×2（`lurker-tool-test-root`/`lurker-tool-test-sub`：agent:lurker/scribe → tool://test 与 tool://test/*，read,invoke allow）；agent Write 恢复 def `toolScopes:["test"]` + grants 增补 `{resources:[tool://test,tool://test/*],actions:[read,invoke]}`；`watt tool mount test/echo` 换 `https://httpbingo.org/uuid`。
+- 验证：`watt tool call test/echo get-uuid` → 200 真 uuid（admin 路径）；API 注入 `@watt 用工具取 uuid` 到真实群 session `feishu:chat:oc_9096...` → 第一次回复复现 grant exceeded（暴露第②层）→ 补 grants 后再注入 → **出站回答「（基于本群 1 条上下文）取到了，UUID 是：37174c0f-…」真实投递进飞书群**。@llm 本轮实耗 2 次（第一次为必要的中途修复复验，留痕声明）。
+- 勾选：无（维护轮，DOD 无新增项；R33 遗留「httpbin 换可靠桩」就此收口）。
+- 沉淀：/llmdoc:update（agent 工具访问两关授权模式 + def Write 整体覆盖会冲掉部署侧 toolScopes/grants 的运维坑）。
+- 遗留：**入站 webhook 的新 pluginToken 未经真实飞书消息验证**（本轮注入走 admin Publish 旁路），需真人在群里 @watt 一条确认；`setup feishu`/`e2e-3` 的 def Write 仍会把部署侧 toolScopes/grants 冲回默认（建议后续给 setup 加 merge 语义或文档警示）；admin token 轮换连坐 pluginToken 的运维摩擦依旧（R33 遗留项不变）。
 
 ## Round 33 — 2026-07-04（可用性冲刺：六期并行全落地 + 飞书真实闭环 + lurker LLM 化）
 - 目标：用户四痛点（部署重 / 飞书不回复 / agent 无工具 / CLI 发 npm）→ 六期计划（P1 飞书 plugin 化、P2 HTBP 工具注入、P3 SecretStore、P4 CLI 打包、P5 init 向导、P6 dashboard 配置页）全做。

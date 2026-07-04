@@ -16,6 +16,16 @@
   "routes": [
     { "pattern": "watt.pdjjq.org", "custom_domain": true }
   ],
+  // 单域部署（R34）：dashboard 静态产物经 Workers Static Assets 随 gateway 同 Worker 服务——
+  //   https://watt.pdjjq.org/ = 控制台 UI，API 面（run_worker_first 列表）恒走 Worker 脚本；
+  //   其余路径直出静态资产（SPA fallback index.html）。同域后 dashboard 相对路径请求免 CORS、
+  //   免 base URL 配置。**deploy 前必须先 `pnpm --filter @watt/dashboard build`**（deploy-all 已编排；
+  //   vitest pool-workers 读本配置同样要求 dist 存在——根 verify 已前置 dashboard build）。
+  "assets": {
+    "directory": "../dashboard/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/htbp/*", "/oauth/*", "/channels/*", "/healthz", "/.well-known/*"]
+  },
   "vars": {
     // lurker scratch TTL（秒）：生产 1h；代码缺省 120 保 E2E 分钟级过期断言（lurker.ts scratchTtlSec）。
     "LURKER_SCRATCH_TTL_SEC": "3600"

@@ -4,7 +4,7 @@
  * wrangler 经 `npx --yes wrangler@4.107.0`（不把 wrangler 本体进 CLI deps；版本 pin 对齐 toolchain 锚点）。
  * 部署产物已由 build:deploy 预 bundle（worker.js），故 `wrangler deploy --no-bundle`（main: worker.js）。
  *
- * 部署次序（deploy-all.mjs 既定）：toolbridge → plugin-feishu(启用时) → gateway → dashboard(Pages)。
+ * 部署次序（deploy-all.mjs 既定，R34 单域化）：toolbridge → plugin-feishu(启用时) → gateway（dashboard 静态产物经 Workers Static Assets 随 gateway 上传，无独立 Pages 步）。pages helpers 保留仅为兼容旧部署清理。
  *   service binding 目标 Worker 必须先于 gateway 存在（同账户 workers.dev 互调被拦截，走 binding）。
  *
  * 所有 spawn 经 Spawner 注入（单测不做真实部署——真验证由人工在真实账户跑）。

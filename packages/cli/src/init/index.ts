@@ -29,9 +29,7 @@ import { secretSet } from '../secret.ts';
 import {
   applyMigration,
   checkAuth,
-  deployPages,
   deployWorker,
-  ensurePagesProject,
   putSecret,
   type Spawner,
   type SpawnOpts,
@@ -291,17 +289,10 @@ export async function runInit(
         }
       }
     }
-    // dashboard（Pages）：幂等确保项目 + deploy。
-    const dashDir = join(dir, 'dashboard');
-    if (existsSync(dashDir)) {
-      ensurePagesProject(spawn, `${state.namePrefix}-dashboard`); // 已存在报错吞掉
-      const res = deployPages(spawn, dashDir, `${state.namePrefix}-dashboard`);
-      if (res.status !== 0) {
-        p.log.warn(`dashboard Pages deploy failed (exit ${res.status}); continue (non-fatal)`);
-      } else {
-        dashboardUrl = extractDeployUrl(res.stdout);
-      }
-    }
+    // dashboard（R34 单域化）：静态产物经 gateway Workers Static Assets 同 Worker 服务
+    //   （gateway wrangler 模板 assets → ../dashboard，deploy 时随 gateway 一并上传）——
+    //   无独立 Pages 项目；控制台 URL 即 gateway URL。
+    dashboardUrl = gatewayUrl;
     state = { ...state, gatewayUrl, dashboardUrl };
     complete('deploy');
   });

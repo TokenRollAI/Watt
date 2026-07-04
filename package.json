@@ -12,7 +12,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "pnpm -r --stream test",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test",
+    "verify": "pnpm --filter @watt/dashboard build && pnpm typecheck && pnpm lint && pnpm test",
     "gen-dev-vars": "node scripts/gen-dev-vars.mjs",
     "gen-jwt-keys": "node scripts/gen-jwt-keys.mjs",
     "provision": "node scripts/provision.mjs",

@@ -42,6 +42,7 @@
 - [memory/reflections/2026-07-04-round27-phase6-gate.md](memory/reflections/2026-07-04-round27-phase6-gate.md) — Round 27 关门轮反思：验证命令 exit code 勿经管道采集、biome 排错先 --diagnostic-level=error、幽灵实例排查靠物理量对账（11ms≠模型调用）、.env 存在≠有值（grep 断言非空）、对抗核查连续五 Phase 0 误报（codeFacts 精确到行→主 assistant 直修无返工）。
 - [memory/reflections/2026-07-03-round13-phase3-gate.md](memory/reflections/2026-07-03-round13-phase3-gate.md) — Round 13 关门轮反思：宽容解析是契约漂移温床（"mock 全绿线上坏"四连击→解析失败就报错）、评审 finding 聚类找共同根因再决定补丁 vs 重构（vector 三 MAJOR 同根=D1 sidecar 一个架构动作）、对抗核查连续四 Phase 0 误报（价值=修严重度+补代码事实+doc-gaps 比对滤实现自由）、worker idle≠done（验收指令置 prompt 末尾）。
 - [memory/reflections/2026-07-04-round33-usability-sprint.md](memory/reflections/2026-07-04-round33-usability-sprint.md) — R33 可用性冲刺反思：worktree 基线漂移与并行纪律、实测逼出的三个架构修正。
+- [memory/reflections/2026-07-04-round34-feishu-tool-authz.md](memory/reflections/2026-07-04-round34-feishu-tool-authz.md) — R34 维护轮反思：调查报告须区分代码路径事实 vs 运行时数据事实（两处推断被 `watt agent get` 证伪）、两关授权一次修双侧 + 真实主体路径验证、轮换连坐只跑所需子步骤、`--json` 全局选项须前置。
 
 ## 检索路由
 
