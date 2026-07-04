@@ -114,6 +114,17 @@ describe('AuditLog data plane (§10) — Check writes a record', () => {
     expect(body.items.some((r) => r.context.principal === 'user:bob')).toBe(true);
   });
 
+  it('rejects an unknown filter key with invalid_argument (400), not silent ignore (§0.2)', async () => {
+    const admin = await signAdmin();
+    const list = await post('/htbp/platform/audit', admin, {
+      tool: 'List',
+      arguments: { opts: { filter: { bogus: 'x' } } },
+    });
+    expect(list.status).toBe(400);
+    const body = (await list.json()) as { code: string };
+    expect(body.code).toBe('invalid_argument');
+  });
+
   it('filter by principal narrows results', async () => {
     const admin = await signAdmin();
     const bob = await signNonAdmin();

@@ -49,7 +49,7 @@ export interface Page<T> {
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
 
-/** §10 List 合法 filter 键：principal/agent/resource/decision（其余键忽略，不误当条件收窄）。 */
+/** §10 List 合法 filter 键：principal/agent/resource/decision（未声明键 → invalid_argument，§0.2）。 */
 const ALLOWED_FILTER_KEYS = new Set(['principal', 'agent', 'resource', 'decision']);
 
 interface AuditRow {
@@ -131,14 +131,17 @@ export class AuditStore {
 
   /**
    * List（§10）——filter principal/agent/resource/decision（前缀匹配 resource，精确匹配其余）。
-   * limit 默认 50 上限 200；按 at 倒序（最新在前）。非法 filter 键忽略。
+   * limit 默认 50 上限 200；按 at 倒序（最新在前）。未声明 filter 键 → invalid_argument
+   * （§0.2；对齐 PolicyStore.list——静默忽略会让调用方误以为条件已收窄）。
    */
-  async list(opts: ListOptions = {}): Promise<Page<AuditRecord>> {
+  async list(opts: ListOptions = {}): Promise<Page<AuditRecord> | WattError> {
     const filter = opts.filter ?? {};
     const where: string[] = [];
     const binds: string[] = [];
     for (const [key, value] of Object.entries(filter)) {
-      if (!ALLOWED_FILTER_KEYS.has(key)) continue;
+      if (!ALLOWED_FILTER_KEYS.has(key)) {
+        return wattError('invalid_argument', `unknown filter key: ${key}`, false);
+      }
       if (key === 'agent') {
         where.push('agent_inst = ?');
         binds.push(value);

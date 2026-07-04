@@ -306,6 +306,7 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
     // List：filter principal/agent/resource/decision + limit（§10 / §0.2 Page{items}）。
     const opts = (args.opts ?? {}) as { filter?: Record<string, string>; limit?: number };
     const page = await auditStore.list(opts);
+    if (isWattError(page)) return wattErrorResponse(c, page);
     return c.json(page);
   });
 
