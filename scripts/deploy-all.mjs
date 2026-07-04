@@ -199,14 +199,17 @@ function checkGatewaySecrets() {
   }
   // secret list 输出可能是 JSON 数组或 name 行；用 substring 匹配名字（避开 env-token banner，§7）。
   const listed = `${res.stdout ?? ''}`;
-  const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL'];
+  const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL', 'WATT_SECRET_ENCRYPTION_KEY'];
   const OPTIONAL = ['ANTHROPIC_API_KEY', 'FEISHU_APP_ID', 'FEISHU_APP_SECRET'];
   const missingReq = REQUIRED.filter((n) => !listed.includes(n));
   const missingOpt = OPTIONAL.filter((n) => !listed.includes(n));
   if (missingReq.length) {
     console.warn(
       `deploy-all: WARNING — gateway 缺必需 secret: ${missingReq.join(', ')}。` +
-        ' 认证端点会 500。补：wrangler secret put <NAME>（见 scripts/gen-jwt-keys.mjs）。',
+        ' 认证端点会 500（WATT_JWT_PRIVATE_JWK/WATT_ADMIN_PRINCIPAL）；' +
+        'WATT_SECRET_ENCRYPTION_KEY 缺则 /htbp/platform/secret 报 unavailable（32B base64url，' +
+        "生成：node -e \"process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))\")。" +
+        ' 补：wrangler secret put <NAME>（见 scripts/gen-jwt-keys.mjs）。',
     );
   }
   if (missingOpt.length) {

@@ -30,9 +30,14 @@ import { fileURLToPath } from 'node:url';
 // - FEISHU_APP_ID / FEISHU_APP_SECRET：飞书 tenant_access_token 换取（gateway 出站 REST）。
 //   本地 wrangler dev 若测出站可注入 fake；缺省则出站 sender 返回 not configured（非阻断）。
 // - FEISHU_BASE_URL：可选，国际版 open.larksuite.com。
+// P3（SecretStore runtime 化）：
+// - WATT_SECRET_ENCRYPTION_KEY：SecretStore AES-256-GCM 主密钥（32 字节 base64url）。本地 wrangler dev
+//   固定一把测试值（.dev.vars 已 gitignore），生产走 wrangler secret put。缺省则 /htbp/platform/secret
+//   端点报 unavailable、resolveSecret 静默跳过 KV 分支（env-only 零回归）。
 const WORKER_VARS = [
   'WATT_ADMIN_PRINCIPAL',
   'WATT_JWT_PRIVATE_JWK',
+  'WATT_SECRET_ENCRYPTION_KEY',
   'FEISHU_APP_ID',
   'FEISHU_APP_SECRET',
   'FEISHU_BASE_URL',
