@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）、§46~53 为 Round 23~32（Phase 6/7 + E2E）、§54~61 为 Round 33（可用性冲刺：plugin 化 + worktree 并行）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -284,4 +284,37 @@ event-bus publish ① 对 type=outbound.message 做 Check(event://<channel>/<tar
 
 ## 53. 平台 Authorizer 空索引对带 agent_def 的 claims 同样误拒（§51 的 agent 面）
 
-newAuthorizer 的 agentDefs/cronJobs/instances 恒空——claims 带 agent_def 时 core authorize 步骤 2 查无此 def 即 deny "agent definition not found"。agent 主体（如 lurker 出站）要过 Check 必须播种本 def（`agentDefs: {[def.name]: def}`）走 core authorize，审计单独补。与 §51（cron 链段）同根：**判定点必须能解析 claims 引用的数据面**。
+newAuthorizer 的 agentDefs/cronJobs/instances 恒空——claims 带 agent_def 时 core authorize 步骤 2 查无此 def 即 deny "agent definition not found"。agent 主体（如 lurker 出站）要过 Check 必须播种本 def（`agentDefs: {[def.name]: def}`）走 core authorize，审计单独补。与 §51（cron 链段）同根：**判定点必须能解析 claims 引用的数据面**。（R33 系统性收口：Authorizer 接 AgentDefLoader 惰性播种，见 memory/decisions/agent-spawn-revive-and-defloader.md。）
+
+## 54. 同账户 worker→worker 经 workers.dev URL 被平台拦截（收 404 非 1042）
+
+同账户下 gateway 经 HTTPS 调自家 plugin 的 workers.dev URL（探活/Send）一律收 **404**（不是文档所述的 1042 错误码，极易误判为路由没注册）。同账户 plugin 互调必须走 **service binding**（`binding:` 形态），跨账户才走 HTTPS（R33 实测，决策见 memory/decisions/plugin-outbound-dispatcher.md）。
+
+## 55. workers.dev 境内被干扰：境内回调方（飞书等）3s 握手必超时
+
+飞书事件订阅对 workers.dev URL 的回调验证必然超时失败。回调面必须挂 **custom domain**（如 `watt-feishu.pdjjq.org`）；注意 Universal SSL 只覆盖一级子域，勿用二级子域（证书不覆盖）。
+
+## 56. agent worktree（.claude/worktrees/*）嵌套 biome.jsonc 干扰 biome check
+
+worktree 内嵌套的 biome.jsonc 会让根目录 `biome check .` 报错（根 biome 配置已 ignore `**/.claude`）；而在 worktree 内跑 `biome check .` 则命中 0 文件 exit 1——worktree 内验证要用**显式文件路径**，或回主仓库根跑。
+
+## 57. 并行 worktree 基线漂移：worker 首步必须核对 HEAD
+
+worktree 可能从旧 commit 切出（创建时机早于最新 main）——并行 worker 首步必须 `git rev-parse HEAD` 对照 main 并 fast-forward，否则在过期基线上开发（R33 P1/P2 均踩）。
+
+## 58. zsh 无 `${!var}` 间接展开且管道右侧仍执行——空值写进 wrangler secret
+
+zsh 对 `${!var}` 报 bad substitution，但**管道右侧的 `wrangler secret put` 照常执行**，把空串静默写进 secret。批量 put 必须 `bash -c` 执行，且**逐个校验值非空**后再 put。
+
+## 59. `.env` 值位为注释的"假非空"（R27 §同类再现）
+
+`FEISHU_ENCRYPT_KEY=<空格+#注释>` 这种行，grep 判"行存在且等号后有内容"会误判已配——判非空必须**先 strip 行内注释**再看长度。
+
+## 60. 新 worktree 的 per-package node_modules 不全
+
+在 worktree 里 `pnpm add` 只补 touched 包的 node_modules，其余包缺依赖——跑 esbuild/vitest 前先全量 `pnpm install`。
+
+## 61. 飞书验签是纯 sha256 拼接非 HMAC；bot 收非 @ 群消息取决于权限
+
+- 签名 = `sha256(timestamp + nonce + encrypt_key + body)`，直接拼接**无分隔符、非 HMAC**——按 HMAC 实现永远验不过。
+- bot 能否收到**非 @ 的群消息**取决于应用是否有「接收群聊中所有消息」权限——缺该权限则只有 @ 消息可达，lurker 的 scratch 上下文永远 0 条。

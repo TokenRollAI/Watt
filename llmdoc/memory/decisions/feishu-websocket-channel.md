@@ -1,7 +1,8 @@
 # 决策：飞书渠道走 WebSocket 长连接（push 型），不走 webhook
 
 - 日期：2026-07-02
-- 状态：已定案（Phase 6 实现依据；DOD §8/§9 已按此写入）
+- 状态：**已被取代**（2026-07-04 Round 33：主路径改为独立 channel-adapter plugin + 自持 webhook 回调，见 [feishu-plugin-webhook.md](feishu-plugin-webhook.md)；WS `channel connect` 降为 dev-only 备用。以下原文保留作历史依据）
+- 原状态：已定案（Phase 6 实现依据；DOD §8/§9 已按此写入）
 
 ## 决定
 
