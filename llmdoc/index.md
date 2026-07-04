@@ -25,6 +25,7 @@
 - [reference/external-facts.md](reference/external-facts.md) — Cloudflare 原语选型、外部仓库归属（含 Flue 勘误）、模型渠道双路径与易错点、飞书 webhook plugin 主路径要点（验签/权限/回调域名境内约束）。
 - [memory/doc-gaps.md](memory/doc-gaps.md) — Docs 缺口台账（P1/P2 需修 Docs，P3 仅记录）。
 - [memory/decisions/feishu-websocket-channel.md](memory/decisions/feishu-websocket-channel.md) — 飞书走 WS push 型不走 webhook（2026-07-02；**已被 feishu-plugin-webhook 取代**）。
+- [memory/decisions/root-key-bootstrap.md](memory/decisions/root-key-bootstrap.md) — Root Key 持久引导凭据：摘要存储+仅展示一次+换发制，与 JWT 轮换解耦（2026-07-04 R35）。
 - [memory/decisions/feishu-plugin-webhook.md](memory/decisions/feishu-plugin-webhook.md) — 飞书转正为独立 channel-adapter plugin + 自持 webhook 回调主路径，WS connect 降 dev-only；custom domain 解境内干扰（2026-07-04 Round 33）。
 - [memory/decisions/plugin-outbound-dispatcher.md](memory/decisions/plugin-outbound-dispatcher.md) — 通用出站分发器：adapter→channel-<adapter>→binding:/HTTPS §11.4 Send；同账户 workers.dev 互调被拦（404）是选 service binding 的决定性理由（2026-07-04 Round 33）。
 - [memory/decisions/secretstore-runtime-keys.md](memory/decisions/secretstore-runtime-keys.md) — SecretStore 密钥 runtime 化：AES-256-GCM + 专用 WATT_SECRET_ENCRYPTION_KEY（不从 JWT 派生）+ AAD=名字 + 永不回显 + resolveSecret env→KV（2026-07-04 Round 33）。

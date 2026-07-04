@@ -17,6 +17,18 @@
 
 # 轮次记录
 
+## Round 35 — 2026-07-04（Root Key 持久引导凭据 + npm 发布/CI/CD + dashboard 单域化）
+- 目标：用户三连需求——npm 真实发布 + GitHub CI/CD、dashboard 挂到"一个 domain"、Root Key（仅展示一次）解决登录引导。
+- 动作：
+  - **npm**：scope 定名 `@tokenroll/watt`（用户拥有 tokenroll org，disdjj=owner；token-roll 弃用）；首发 0.1.0 由用户交互完成（OTP）；`.github/workflows/{ci,release}.yml`（ci=pnpm verify；release=v* tag 触发，OIDC provenance/NPM_TOKEN 双兼容 + tag/版本一致性护栏）。
+  - **dashboard 单域化**：Workers Static Assets 挂进 gateway（`assets` 配置 + run_worker_first API 白名单 + SPA fallback）——`watt.pdjjq.org/` = 控制台、`/htbp/*` = API，同源免 CORS 免 base 配置；deploy-all/init 去 Pages 步；根 verify 前置 dashboard build（assets 目录存在性要求）。旧 Pages 项目弃用。
+  - **Root Key（Proto §6.5e 新增规范）**：`wrk_`+32B 高熵 key，平台只存 SHA-256 摘要（WATT_ROOT_KEY_HASH）；`POST /oauth/root/token` 换发 admin token（TTL 缺省 7d 钳 30d，成功/失败都写 platform://auth root-exchange 审计）；`scripts/set-root-key.mjs`（明文仅展示一次）+ `watt login --root`（stdin）+ dashboard Settings Root Key 登录 + init 向导集成（收尾仅展示一次，不入 answers 存档）。**与 JWT 轮换解耦——admin token 过期不再需要轮换私钥，pluginToken 连坐链自此消解**（R33/R34 遗留运维摩擦收口）。
+  - sign-admin-token 增 `--ttl`；发现并修复：R35 期间的 setup feishu 重跑再次冲掉 R34 def 修复（pitfalls §63 实锤第二次）——已按 R34 终态恢复（toolScopes ['test'] + tool://test 两级 grants）。
+- 验证：`pnpm verify` 全绿 **1238 passed / 1 skipped**（gateway 581+1skip 含 oauth-root 4 新测试）；线上：set-root-key → 换发 200 → whoami admin ✓；错误 key 401 invalid_grant ✓；`/` 出 dashboard SPA（workers.dev + custom domain 双 URL）✓；npm `@tokenroll/watt@0.1.0` 已发布（用户 OTP 完成）。
+- 勾选：无（维护/可用性轮）。
+- 沉淀：Proto §6.5e、llmdoc decision root-key-bootstrap、CI/CD workflows README。
+- 遗留：Trusted Publisher 待用户在 npmjs 配置（或 NPM_TOKEN secret）；入站 webhook 新 pluginToken 仍待真人群消息验证（R34 遗留）；setup feishu 的 def Write merge 语义仍未实现（连续两轮踩 §63，优先级上调）。
+
 ## Round 34 — 2026-07-04（维护轮：飞书群 agent 工具链路修复——两关授权 + httpbin 桩）
 
 - 目标：修复用户截图报障——真实飞书群 @watt 用工具取 uuid 失败（先「"test" 工具树 permission denied」，后「工具调用 503」）。
