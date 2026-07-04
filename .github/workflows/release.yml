@@ -1,0 +1,55 @@
+# Release：推 v* tag（或手动触发）→ 全量校验 → 构建部署产物 → 发布 @token-roll/watt 到 npm。
+#
+# 认证两路兼容（见同目录 README.md）：
+#  - Trusted Publishing（推荐）：npmjs 包设置里配置 GitHub Actions trusted publisher 后，
+#    npm publish 经 OIDC 免密发布（需要 permissions.id-token: write）。
+#  - NPM_TOKEN secret：设置了就走 NODE_AUTH_TOKEN（granular token，@token-roll 写权限）。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance / OIDC trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      # tag 与 package.json 版本一致性护栏（tag 触发时）。
+      - name: check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG_VERSION=$(node -p "require('./packages/cli/package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag v$TAG_VERSION != packages/cli version $PKG_VERSION"
+            exit 1
+          fi
+
+      - run: pnpm verify
+
+      # 部署产物（deploy/ 随包分发，watt init 依赖）+ CLI bundle + tarball 冒烟。
+      - run: pnpm build:deploy
+      - run: pnpm --filter @token-roll/watt build
+      - run: node scripts/pack-smoke-cli.mjs
+
+      # 发布：显式步骤已跑完，跳过 prepublishOnly 防重复构建；--provenance 公开构建溯源。
+      - name: publish to npm
+        working-directory: packages/cli
+        run: npm publish --provenance --access public --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

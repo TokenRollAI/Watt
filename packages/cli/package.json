@@ -1,5 +1,5 @@
 {
-  "name": "@tokenroll/watt",
+  "name": "@token-roll/watt",
   "version": "0.1.0",
   "type": "module",
   "bin": {

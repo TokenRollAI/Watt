@@ -1,6 +1,6 @@
 /**
  * `watt init` 部署向导（P5，计划 §P5）——新用户在自己 CF 账户交互式完成 provision + 部署 + 密钥引导
- * + 首 admin token，不 clone 仓库（`npx @tokenroll/watt init`）。
+ * + 首 admin token，不 clone 仓库（`npx @token-roll/watt init`）。
  *
  * 流程（每步幂等可重入；--resume 从应答存档续跑，completed 步骤跳过）：
  *   ① wrangler auth 检查（npx --yes wrangler@4.107.0 whoami；接受 CLOUDFLARE_API_TOKEN/ACCOUNT_ID env）

@@ -461,8 +461,8 @@ Watt 有两条互补的部署路径，产出同一套资源与拓扑，区别只
 - 前置：仓库根 `.env`（结构见 `.env.example`）提供 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`；密钥经 `wrangler secret` / 本地 `.dev.vars`（`scripts/gen-dev-vars.mjs` 白名单）。
 - 编排：`scripts/deploy-all.mjs` → `provision.mjs`（幂等建资源 + 回填 `wrangler.jsonc`）→ 五库 migrations apply → 部署次序 **toolbridge → plugin-feishu → gateway → dashboard**。资源名硬编码 `watt-` 前缀、routes 走作者 custom domain。
 
-**路径 2 — npm（终端用户，零仓库）：`npx @tokenroll/watt init`**
-- 部署产物**随 npm 包分发**（`@tokenroll/watt` 的 `deploy/` 目录，由根 `pnpm build:deploy` 预生成、release 前强制刷新）：三个 Worker 的 esbuild 预 bundle（`worker.js`，`wrangler deploy --no-bundle`）+ `wrangler.template.jsonc` ×3（占位符 `__NAME_PREFIX__` / `__D1_*_ID__` / `__KV_*_ID__` / routes/services 段）+ 五库 migrations SQL + dashboard vite dist。wrangler 本体不进包，向导内 `npx --yes wrangler@<pinned>`。
+**路径 2 — npm（终端用户，零仓库）：`npx @token-roll/watt init`**
+- 部署产物**随 npm 包分发**（`@token-roll/watt` 的 `deploy/` 目录，由根 `pnpm build:deploy` 预生成、release 前强制刷新）：三个 Worker 的 esbuild 预 bundle（`worker.js`，`wrangler deploy --no-bundle`）+ `wrangler.template.jsonc` ×3（占位符 `__NAME_PREFIX__` / `__D1_*_ID__` / `__KV_*_ID__` / routes/services 段）+ 五库 migrations SQL + dashboard vite dist。wrangler 本体不进包，向导内 `npx --yes wrangler@<pinned>`。
 - 向导（`@clack/prompts`，`packages/cli/src/init/`）：wrangler auth 检查 → 问答（**部署名前缀**默认 `watt` / custom domain 可选默认 workers.dev / admin principal / LLM key 可选 / 是否启用飞书）→ provision（TS 移植 `provision.mjs`，资源名由前缀派生，解掉作者账户耦合）→ 渲染三份 `wrangler.jsonc` 到 `~/.watt/deployments/<prefix>/`（**飞书未启用时 gateway 模板不含 `FEISHU_PLUGIN` service binding**——同账户 workers.dev 互调被平台拦截，故飞书出站必经 service binding）→ 五库 migrations apply `--remote` → 信任根密钥（下）→ 部署（同路径 1 次序）→ 可选 LLM key 经 SecretStore 写入 → 收尾输出 URL + `watt setup feishu` 提示 + `watt status` 自检。
 - **可重入**：每步幂等；应答存档 `~/.watt/deployments/<prefix>/answers.json`（**无 secret**）支持 `watt init --resume --prefix <name>` 续跑，已完成步骤跳过。
 
