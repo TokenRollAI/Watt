@@ -5,8 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resetManageSeedGuardForTests } from '../src/agent/manage/manage-defs.ts';
 import { resetSeedGuardForTests } from '../src/authz/seed.ts';
 import { PLATFORM_KID } from '../src/env.ts';
-import { resetPluginSeedGuardForTests } from '../src/plugin/plugin-seed.ts';
 import { setRegistrationProbeFetchForTests } from '../src/plugin/plugin-registry.ts';
+import { resetPluginSeedGuardForTests } from '../src/plugin/plugin-seed.ts';
 import {
   TEST_ADMIN_PRINCIPAL,
   TEST_JWT_AUDIENCE,
@@ -205,7 +205,10 @@ describe('PluginRegistry verbs via route (§11.1)', () => {
   it('seed does not resurrect an admin Update on isolate cold start (enabled=false persists)', async () => {
     const token = await signAdmin();
     // 内置 channel-feishu 先由种子建出，管理员将其停用。
-    const upd = await call(token, 'Update', { pluginId: 'channel-feishu', patch: { enabled: false } });
+    const upd = await call(token, 'Update', {
+      pluginId: 'channel-feishu',
+      patch: { enabled: false },
+    });
     expect(upd.status).toBe(200);
     // 模拟新 isolate 冷启动：清种子 once-guard 后再打任意 platform 请求（触发种子中间件重跑）。
     resetPluginSeedGuardForTests();

@@ -127,7 +127,8 @@ export function feishuSenderFromEnv(
         const token = await getTenantToken(cfg);
         const payload = encodeFeishuOutbound(message);
         // uuid：飞书 create message 幂等键（服务端按 uuid 去重）——队列重投同一事件不重复发消息（C3）。
-        const reqBody = opts?.dedupeId !== undefined ? { ...payload, uuid: opts.dedupeId } : payload;
+        const reqBody =
+          opts?.dedupeId !== undefined ? { ...payload, uuid: opts.dedupeId } : payload;
         const res = await cfg.fetchImpl(
           `${cfg.baseUrl}/open-apis/im/v1/messages?receive_id_type=chat_id`,
           {

@@ -1,8 +1,8 @@
 import type { FeishuEvent } from '@watt/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  connectFeishu,
   type ConnectLogger,
+  connectFeishu,
   type LarkModule,
   nextBackoffMs,
   publishDecodedEvent,

@@ -117,7 +117,9 @@ export interface LarkModule {
   WSClient: new (
     params: Record<string, unknown>,
   ) => { start: (opts: { eventDispatcher: unknown }) => Promise<void> | void };
-  EventDispatcher: new (opts: Record<string, unknown>) => {
+  EventDispatcher: new (
+    opts: Record<string, unknown>,
+  ) => {
     register: (handlers: Record<string, (data: unknown) => Promise<void>>) => unknown;
   };
   Domain: { Feishu: unknown };
