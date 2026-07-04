@@ -253,3 +253,19 @@
 
 - `getAgentByName` 返回 DO stub；传给 `runInDurableObject(stub, fn)` 时直接用 stub 类型即可，fn 参数里才是真实 instance。
 - 把 stub cast 成实例类会撞类型冲突（如 `name` 属性：实例类是 `string`，stub 包装后是 `Promise<string>`）——与 §31 的 RPC 包装破坏收窄同源（gateway `test/scheduler-hub.test.ts` 即正确写法）。
+
+## 46. ai@6 的 `result.usage` 只算最后一步——多步 tool loop 计量必须取 `totalUsage`
+
+`generateText` 带 tools + `stopWhen: stepCountIs(N)` 时跑多步；`result.usage` 语义是"最后一步的用量"、`result.totalUsage` 才是全步累计（ai@6.0.219 类型定义原文）。取 usage 会系统性漏账前面所有 step 的 token（manage/* 对话恰是大头）。无 tools 单步时二者相等，零回归。锁定测试：fake fetchImpl 两步应答（tool_use→end_turn）断言 usage=两步之和（`test/anthropic-caller-usage.test.ts`）。
+
+## 47. DO `idFromName` 对任意名字隐式创建幽灵实例——投递面必须先查索引
+
+`idFromName(<拼错的 id>)` 不报错，直接创建一个 INITIAL_STATE 的新 DO（AgentInstance 缺省 harness=echo、不在实例索引里）。Send 直投这种幽灵会**静默回显**而非报错——R27 实测把 `r27-gate` 误写成 `manage/cron#r27-gate`，send accepted、onEvent ok、无任何事件留痕，排查耗时显著（tail 日志才看出 11ms onEvent 不可能调过模型）。修复模式：对外的投递入口先查权威索引（correlation 实例表），未 Spawn → not_found。教训通用：**任何 idFromName 消费面都要考虑"名字不存在"不是错误而是隐式创建**。
+
+## 48. vitest-pool-workers 0.18（Vite 插件 API）没有 `fetchMock` 导出
+
+`import { fetchMock } from 'cloudflare:test'` 得 undefined（dist 里根本没有该实现）。测试里拦截 Worker 出站 fetch 的替代：被测模块暴露 `set<X>FetchForTests(fetchImpl)` 模块级钩子（对齐 resetSeedGuardForTests 习惯）——SELF.fetch 与测试代码共享同一 isolate 的模块态，钩子对路由生效（plugin-registry 注册探活即此模式）。
+
+## 49. 飞书 WSClient（node-sdk 1.68.0）构造参数有未导出的 `onReady`/`onError` 回调
+
+`start()` 是 async 且内部自持重连，正常路径永不返回也永不抛——把它包进只在同步 throw 时 reject 的 Promise 是死代码（连接后永不 settle，外层监督循环不可达）。SDK 全部终态放弃路径（鉴权失败/重连耗尽/autoReconnect 关）都必然 `safeInvoke('onError')`（lib/index.js L89250/89264 等）——正确写法：构造参数传 `onError: reject`（类型未导出，经 Record 注入），并 `Promise.resolve(start()).catch(reject)` 接住异步 rejection 防 unhandledRejection。SDK 自愈型断线走 onReconnecting，不 settle。

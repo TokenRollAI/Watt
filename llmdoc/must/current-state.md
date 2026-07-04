@@ -1,19 +1,22 @@
 # 当前项目状态快照
 
-> 本文档随轮次更新。最后更新：2026-07-03（Round 21，Phase 5 三项 DoD 全勾）。
+> 本文档随轮次更新。最后更新：2026-07-04（Round 27，Phase 6 关门轮——DoD ①③④⑤ 勾选，② 等人工入站）。
 
 ## 阶段
 
 - 规格真源：`Docs/{Vision,Architecture,Proto,Plugin,Reference}.md` + `DOD.md`（验收）+ `LOOP.md`（执行契约）。
-- Phase 0~4 已关门（Round 3/7/10/13/18）；**Phase 5（Task + Scheduler）三项 DoD 全勾**（Round 19/20/21，证据 `PROGRESS.md`）——项 1 单测面（core+gateway）、项 2 集成链（Workflows introspect + HITL 闭环 + cron）、项 3 线上全链（task run→waiting_human→signal→done / cancel；cron publish+script 三留痕，LOADER 真 isolate）。
-- **下一目标：Round 22 Phase 5 关门**——4 维质量关口 workflow + 逐条对抗核查 + Docs 漂移回查（doc-gap #11 的 Proto §3.4 回写候选）+ PROGRESS 入账。
-- Phase 5 遗留 backlog：模板依赖的 agent def 需种子化（冒烟发现 echo def 未注册会卡 running）、script 能力表扩容（当前仅 watt.publish）。实现声明簇见 doc-gaps **#29**；两条决策见 [../memory/decisions/task-workflow-instance-id.md](../memory/decisions/task-workflow-instance-id.md) 与 [../memory/decisions/scheduler-script-runner.md](../memory/decisions/scheduler-script-runner.md)。
+- Phase 0~5 已关门（Round 3/7/10/13/18/22）。**Phase 6（飞书 + Observability + Management）R23~R27**：R23 AuditLog 数据面 + Metrics；R24 飞书 adapter（core 规约 + IdentityMapper 渠道映射 + 出站接线 + CLI connect）；R25 manage/cron Agent（llm harness agentic tool loop + 种子 def）；R26 Dashboard（Pages SPA 五视图）+ PluginRegistry + CLI plugin 族；**R27 关门轮：质量关口 12 MAJOR 全修（0 误报）+ DoD ①③④⑤ 勾选**。
+- **唯一未闭环：DoD ②「@feishu 入站真实群消息」需人工配合**——connect（plugin 主体）已就绪，测试群里已留请求配合消息；任意成员回一条即可采证（未映射 principal=user:anonymous 即 §6.3 正确语义）。勾 ② 后 Phase 6 正式关门 → Phase 7（六条 E2E）。
+- R27 质量关口修复要点（详见 PROGRESS Round 27 + doc-gaps #31）：种子改 get-不存在才-write（不覆写人工修改）/ Send 未 Spawn → not_found（幽灵 DO 防护）/ 飞书出站 retryable 重投 + 重投幂等（dedupeKey 短路 + uuid 去重）/ connectFeishu onError settle（断线重连真实可达）/ push 型 plugin 主体保留 kind='im'（Proto §2.3 已回写）/ plugin Write 注册探活 / audit filter 严格校验 / dashboard tree:'all' 契约漂移 + api 测试从零建立 / llm usage 取 totalUsage（多步漏账）。
+- Phase 5 遗留 backlog：模板 agent def 种子化（manage defs 已种子，echo/deep-research 模板 def 仍手工）、script 能力表扩容（仅 watt.publish）。声明簇 doc-gaps #29。
 - Phase 4 遗留：13 条 MINOR backlog（ModelProvider resolveDefault 死代码未接 harness、output ≤1MiB 未实施、lastActiveAt 语义漂移、toolbridge 公网可达+固定转发凭据、vendored 未合并分支锚点等）不阻塞；Round 18 有 6 个 finding 因中转 502 未复核（按 MINOR 保守处理，碰到相关文件顺手核）；Phase 4 实现声明簇见 doc-gaps **#28**。
 - Phase 3 遗留：14 条 MINOR backlog 不阻塞；实现声明簇见 doc-gaps #26/#27。Phase 2 遗留：17 条 MINOR backlog；实现声明簇见 doc-gaps #25。
 - Phase 路线：0 骨架/部署管道 → 1 Auth+Event 信封 → 2 Event Gateway → 3 Context Layer → 4 Tool+Agent Runtime → 5 Task+Scheduler → 6 飞书+Observability+Management → 7 六条 E2E 验收（详见 [../overview/project-overview.md](../overview/project-overview.md)）。
 - 上游 tool-bridge：分支 `feat/watt-builtin-and-tool-semantics`（56ab13b，已 push 未开 PR/未合 main）——ToolSpec effect/scope/confirm 语义字段 + builtin 节点类型。Watt 侧以 vendored 方式消费（见下）。
 
-## 源码现状（Round 21 后，测试共 896 个：shared 6 + core 396 + cli 107 + gateway 387+1skip（@llm 门控）；core 覆盖率 100%，门禁挂 verify）
+## 源码现状（Round 27 后，测试共 **1108** 个：shared 6 + dashboard 4 + core 444 + cli 140 + gateway 514+1skip（@llm 门控）；core 覆盖率 100%，门禁挂 verify）
+
+Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/audit/`（AuditStore + Authorizer wrapper 单点 writeAudit，watt-audit 0001）、`src/metrics/`（usage 表 D1+AE 双写 + Metrics.Query + /htbp/platform/metrics）、`src/event/feishu-sender.ts`（出站 REST + tenant_access_token KV 缓存 + retryable 语义 + uuid 幂等）、`src/plugin/`（PluginRegistry watt-providers 0004 + 内置 webhook/feishu 种子 + Write 注册探活）、`src/agent/manage/`（manage/cron·platform 种子 def + scheduler 工具绑定）、CORS 中间件；core `src/channel/feishu.ts`（WS 事件 decode / 卡片 encode）；cli `channel connect`（WSClient + supervisor 重连 + WATT_PLUGIN_TOKEN plugin 主体）、`metrics query`、`plugin register|list|health`、`status` 汇总；**packages/dashboard**（Vite+React Pages SPA：Overview/Agents/Tasks/Cron/Audit 五视图 + HTBP 客户端 + vitest）。
 
 - `packages/shared` — `WattError`（规范 7 码，裸 body 契约见 [../memory/decisions/bare-watterror-body.md](../memory/decisions/bare-watterror-body.md)）。
 - `packages/core`（@watt/core，平台核心纯逻辑，零 Cloudflare 依赖）：
@@ -53,7 +56,7 @@
 - watt-gateway 双 URL：
   - `https://watt-gateway.shuaiqijianhao.workers.dev` — 本机验证首选；本机直连偶发超时，验证命令带 `https_proxy=http://127.0.0.1:7890`，Node 脚本另加 `NODE_USE_ENV_PROXY=1`（toolchain-pitfalls §28）。
   - `https://watt.pdjjq.org` — CF 边缘正常，本机 ISP DNS 污染持续；`.env` 的 `WATT_BASE_URL` 指向它，本机验证脚本勿直接复用。
-- secrets：`WATT_JWT_PRIVATE_JWK`（轮换用 `scripts/sign-admin-token.mjs --rotate`）+ **`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`**（Round 17，llm harness 中转直连）。put 后 ~15s 传播窗口。
+- secrets：`WATT_JWT_PRIVATE_JWK`（轮换用 `scripts/sign-admin-token.mjs --rotate`；admin token TTL 1h）+ `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`（llm harness 中转直连）+ **`FEISHU_APP_ID` / `FEISHU_APP_SECRET`**（R24 出站；deploy-all 内置 secrets 检查）。put 后 ~15s 传播窗口。
 - **`pnpm deploy:all` 内置四库 migrations**：`d1 migrations apply {watt-policies,watt-events,watt-context,watt-providers} --remote`（幂等）；新库带 migrations 时须同步扩展。
 - Queue `watt-events` consumer 已绑；DLQ `watt-events-dlq` 已建（consumer/重放工具留 Phase 6）。
 - `scripts/smoke.ts` 内置 5 次重试（边缘传播窗口 + 旧 isolate 首击，toolchain-pitfalls §9）。
@@ -62,7 +65,7 @@
 
 | 类型 | 资源 |
 |---|---|
-| D1 ×5 | `watt-policies`（0001） / `watt-providers`（**0001~0003**：tool/agent/model registry，Round 15/17） / `watt-audit` / `watt-events`（**0001~0002**：events/channels + tasks，Round 20） / `watt-context`（0001） |
+| D1 ×5 | `watt-policies`（0001~0002：+channel_identities，R24） / `watt-providers`（**0001~0004**：tool/agent/model/plugin registry，R15/17/26） / `watt-audit`（**0001**：audit_records + usage，R23） / `watt-events`（0001~0002：events/channels + tasks） / `watt-context`（0001） |
 | KV ×2 | `watt-authz-cache`（判定缓存，未用） / `watt-tenants`（device grant 存储 + **toolbridge 租户树配置**，provision 回填 toolbridge KV id） |
 | R2 ×2 | `watt-context-objects` / `watt-artifacts` |
 | Queue ×2 | `watt-events`（producer+consumer） / `watt-events-dlq` |
@@ -71,7 +74,9 @@
 | DO ×5 | `EVENT_ROUTER` / `CONTEXT_REGISTRY` / `AGENT_INSTANCE`（AgentInstance，Round 17） / `AGENT_CORRELATION`（AgentCorrelation，Round 17/18） / **`SCHEDULER_HUB`（SchedulerHub，Round 21，DO migration v4）** |
 | Workflows ×1 | **`watt-task`（binding WATT_TASK，class WattTaskWorkflow，Round 20）** |
 | Worker Loader | **`LOADER`（worker_loaders binding，Round 21；线上 open beta，DJJ 账户已开通实证）** |
-| Worker ×2 | `watt-gateway` / **`watt-toolbridge`（Round 16）** |
+| Worker ×2 | `watt-gateway` / `watt-toolbridge`（Round 16） |
+| Analytics Engine | `AE_METRICS`（watt_metrics dataset，usage 双写，R23；本地 no-op 见 pitfalls） |
+| Pages ×1 | **`watt-dashboard`（https://watt-dashboard-4tn.pages.dev，R26；deploy-all 编排，--skip-dashboard 可跳）** |
 
 命名/多库/维度决策见 [../memory/decisions/resource-naming-and-provision.md](../memory/decisions/resource-naming-and-provision.md)。
 
@@ -90,7 +95,7 @@
   - ⚠️ 验证只用 `wrangler whoami`；`/user/tokens/verify` 对 Account API Token 必然误报，勿作判据。
 - **模型**：双路径已实测通——① 中转直连 `https://llm.fantacy.live`（Anthropic Messages 格式；llm harness 已接，Round 17/18 真实模型 DoD 复验通过）；② AI Gateway custom provider（`glm-5.2` / `minimax-m3`）。易错点见 [../reference/external-facts.md](../reference/external-facts.md)。@llm 真实测试每轮每 tag 一次（LOOP 纪律 3）。
 - **飞书**：WS 长连接 push 型方案已定（[../memory/decisions/feishu-websocket-channel.md](../memory/decisions/feishu-websocket-channel.md)）；出站发消息已实测；`E2E_FEISHU_TEST_CHAT_ID` 已在 `.env`。
-- **空缺项**：`E2E_FEISHU_ADMIN_OPEN_ID` / `E2E_FEISHU_EMPLOYEE_OPEN_ID`（E2E-4 降级为 API 模拟身份，不阻塞）；`E2E_WEBHOOK_SINK_URL`（可选，不阻塞）。
+- **空缺项**：`E2E_FEISHU_ADMIN_OPEN_ID` / `E2E_FEISHU_EMPLOYEE_OPEN_ID`（**R27 实测确认 .env 中为空**——grep 掩码曾误判已配；入站身份未映射 → user:anonymous 属 §6.3 正确语义，不阻塞）；`E2E_WEBHOOK_SINK_URL`（可选，不阻塞）。
 
 ## 外部仓库可达性（已用 gh 核实）
 
