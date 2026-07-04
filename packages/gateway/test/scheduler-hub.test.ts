@@ -347,6 +347,67 @@ describe('SchedulerHub — Trigger full chain (fired → action → completed) (
     expect(scriptOut.items.length).toBe(0);
   });
 
+  it('script action: watt.publish of outbound.message passes the outbound Check with the cron chain (R28 修复)', async () => {
+    // 回归：event-bus 的出站 Check（type=outbound.message）带 cron:<jobId> 链段——平台 Authorizer
+    //   的 cronJobs 索引恒空会误判 "disabled/deleted"（E2E-6 实测）。修复=script publish 用本 job
+    //   播种的判定包装。
+    const stub = await hub(hubName());
+    const captured: { eventId?: string; err?: string } = {};
+    const fakeRunner: ScriptRunner = {
+      async run(ctx: ScriptRunContext) {
+        try {
+          const r = await ctx.watt.publish({
+            type: 'outbound.message',
+            payload: { channel: 'nochannel', target: 'nobody', content: { text: 'report 42' } },
+          });
+          captured.eventId = r.eventId;
+        } catch (e) {
+          captured.err = e instanceof Error ? e.message : JSON.stringify(e);
+          throw e;
+        }
+        return { done: true };
+      },
+    };
+    const job = PUBLISH_JOB('t-script-outbound', {
+      createdBy: env.WATT_ADMIN_PRINCIPAL,
+      action: {
+        kind: 'script',
+        scriptRef: 'context://automations/s5',
+        grants: [
+          { resources: ['platform://event'], actions: ['manage'] },
+          { resources: ['event://*'], actions: ['write'] }, // 前缀通配需显式 *（match.ts）
+        ],
+      },
+    });
+    await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.writeJob(job);
+    });
+    const registry = env.CONTEXT_REGISTRY.get(env.CONTEXT_REGISTRY.idFromName('registry'));
+    await registry.write({ namespace: 'automations', provider: 'structured' });
+    const { StructuredContextProvider } = await import('../src/context/providers/structured.ts');
+    await new StructuredContextProvider(env.DB_CONTEXT, 'automations').write('s5', {
+      content: 'export default { async run() { return { ok: true }; } };',
+      contentType: 'text/javascript',
+    });
+    const { PolicyStore } = await import('../src/authz/policy-store.ts');
+    const { IdentityMapper } = await import('../src/authz/identity-mapper.ts');
+    const { ensureSeedPolicy } = await import('../src/authz/seed.ts');
+    await ensureSeedPolicy(
+      new PolicyStore(env.DB_POLICIES),
+      new IdentityMapper(env.DB_POLICIES),
+      env.WATT_ADMIN_PRINCIPAL,
+    );
+    const res = await runInDurableObject(stub, (h: SchedulerHub) => {
+      h.scriptRunner = fakeRunner;
+      return h.triggerJob('t-script-outbound');
+    });
+    expect('code' in res).toBe(false);
+    // 修复前：captured.err = "script publish failed: cron job disabled/deleted: t-script-outbound"。
+    expect(captured.err).toBeUndefined();
+    expect(typeof captured.eventId).toBe('string');
+  });
+
   it('script action: watt.queryMetric reads real usage when grants cover metrics read (R28 能力扩容)', async () => {
     const stub = await hub(hubName());
     // 播种一行 usage（真实数字来源）。

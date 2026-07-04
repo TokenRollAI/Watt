@@ -48,14 +48,16 @@ export function loadEnv(): E2eEnv {
 }
 
 /** 跑一条 watt CLI 命令（--json），解析 stdout 为 JSON。失败抛 CliFailure（stderr 附带）。 */
+// 注意：node --experimental-strip-types 不支持 constructor parameter properties（strip-only），
+//   字段显式声明 + 赋值。
 export class CliFailure extends Error {
-  constructor(
-    message: string,
-    readonly exitCode: number,
-    readonly stderr: string,
-  ) {
+  readonly exitCode: number;
+  readonly stderr: string;
+  constructor(message: string, exitCode: number, stderr: string) {
     super(message);
     this.name = 'CliFailure';
+    this.exitCode = exitCode;
+    this.stderr = stderr;
   }
 }
 

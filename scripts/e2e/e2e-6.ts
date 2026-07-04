@@ -66,6 +66,8 @@ await runE2e('e2e-6', async () => {
     '--grants',
     JSON.stringify([
       { resources: ['platform://event'], actions: ['manage'] },
+      // outbound.message 触发出站 Check(event://<channel>/<target>,'write')——前缀通配需显式 *。
+      { resources: ['event://*'], actions: ['write'] },
       { resources: ['platform://metrics'], actions: ['read'] },
     ]),
     '--description',

@@ -151,7 +151,27 @@ class WattBindingRpc extends RpcTarget implements WattScriptBinding {
       );
     }
     const { newAuthorizer } = await import('../audit/audit-sink.ts');
-    const authorizer = newAuthorizer(env, claims.trace);
+    const platformAuthorizer = newAuthorizer(env, claims.trace);
+    // outbound.message 的出站 Check（event-bus ①）会带着本 claims 的 cron:<jobId> 链段判定——
+    //   平台 Authorizer 的 cronJobs 索引恒空，链段查无此 job 会误判 "disabled/deleted"（R28 E2E-6
+    //   实测）。以本 job 播种的判定包装之（与 checkCapability 同源；审计经旁路留痕）。
+    const authorizer = {
+      check: async (c: TokenClaims, resource: string, action: string) => {
+        const candidates = await new PolicyStore(env.DB_POLICIES).resolveCandidatePolicies(c);
+        const decision = authorize({
+          claims: c,
+          resource,
+          action,
+          policies: candidates,
+          agentDefs: {},
+          cronJobs: { [job.id]: job },
+          instances: {},
+        });
+        await recordScriptAudit(env, c, resource, action, decision);
+        return decision;
+      },
+      checkBatch: platformAuthorizer.checkBatch.bind(platformAuthorizer),
+    } as unknown as import('../authz/authorizer.ts').Authorizer;
     const result = await publish(
       {
         source: { kind: 'cron', ref: job.id },
