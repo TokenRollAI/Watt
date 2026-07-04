@@ -32,11 +32,20 @@ export interface FeishuSendResult {
   messageId?: string;
   /** 失败详情（留痕用）。 */
   error?: string;
+  /**
+   * 失败是否可重试（§0.2 retryable 语义，R27 关门 C2）：网络/token 换取/token 失效 → true
+   * （队列重投有意义）；飞书业务拒绝（如 receive_id 非法）→ false（重投必然同败）。
+   */
+  retryable?: boolean;
 }
 
 /** 飞书出站投递抽象（consumer 注入，便于测试 fake fetch）。 */
 export interface FeishuSender {
-  send(message: OutboundMessage): Promise<FeishuSendResult>;
+  /**
+   * dedupeId：投递幂等键（映射飞书 create message 的 uuid 字段，服务端按 uuid 去重）——
+   * 队列 at-least-once 重投时同一事件不产生重复消息（R27 关门 C3）。
+   */
+  send(message: OutboundMessage, opts?: { dedupeId?: string }): Promise<FeishuSendResult>;
 }
 
 interface FeishuSenderConfig {
@@ -47,6 +56,8 @@ interface FeishuSenderConfig {
   /** token 缓存读写（缺省 KV_TENANTS；测试可注入内存实现）。 */
   cacheGet: (key: string) => Promise<string | null>;
   cachePut: (key: string, value: string, ttlSec: number) => Promise<void>;
+  /** token 失效时作废缓存（缺省 KV_TENANTS.delete）——否则重投复用同一失效 token 必然连败。 */
+  cacheDelete: (key: string) => Promise<void>;
   now: () => number;
 }
 
@@ -88,6 +99,9 @@ async function getTenantToken(cfg: FeishuSenderConfig): Promise<string> {
   return body.tenant_access_token;
 }
 
+/** 飞书 token 失效类业务码（access token invalid/expired 家族）——作废缓存后重投可自愈。 */
+const TOKEN_INVALID_CODES = new Set([99991661, 99991663, 99991665]);
+
 /** 构造飞书 sender（生产依赖：env secrets + KV_TENANTS + 全局 fetch）。 */
 export function feishuSenderFromEnv(
   env: Bindings,
@@ -103,14 +117,17 @@ export function feishuSenderFromEnv(
     cachePut:
       overrides.cachePut ??
       ((key, value, ttlSec) => env.KV_TENANTS.put(key, value, { expirationTtl: ttlSec })),
+    cacheDelete: overrides.cacheDelete ?? ((key) => env.KV_TENANTS.delete(key)),
     now: overrides.now ?? Date.now,
     ...overrides,
   };
   return {
-    async send(message: OutboundMessage): Promise<FeishuSendResult> {
+    async send(message: OutboundMessage, opts?: { dedupeId?: string }): Promise<FeishuSendResult> {
       try {
         const token = await getTenantToken(cfg);
         const payload = encodeFeishuOutbound(message);
+        // uuid：飞书 create message 幂等键（服务端按 uuid 去重）——队列重投同一事件不重复发消息（C3）。
+        const reqBody = opts?.dedupeId !== undefined ? { ...payload, uuid: opts.dedupeId } : payload;
         const res = await cfg.fetchImpl(
           `${cfg.baseUrl}/open-apis/im/v1/messages?receive_id_type=chat_id`,
           {
@@ -119,19 +136,35 @@ export function feishuSenderFromEnv(
               authorization: `Bearer ${token}`,
               'content-type': 'application/json',
             },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(reqBody),
           },
         );
         const body = (await res.json()) as SendMessageResponse;
         if (body.code !== 0) {
+          // token 失效家族：作废缓存（否则重投复用同一失效 token 必然连败）→ retryable。
+          if (body.code !== undefined && TOKEN_INVALID_CODES.has(body.code)) {
+            await cfg.cacheDelete(TOKEN_CACHE_KEY).catch(() => {});
+            return {
+              ok: false,
+              retryable: true,
+              error: `feishu token invalid: code=${body.code} msg=${body.msg ?? 'unknown'}`,
+            };
+          }
+          // 其他业务拒绝（receive_id 非法等）：重投必然同败 → 不可重试。
           return {
             ok: false,
+            retryable: false,
             error: `feishu send failed: code=${body.code} msg=${body.msg ?? 'unknown'}`,
           };
         }
         return { ok: true, messageId: body.data?.message_id };
       } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        // 网络抖动 / 飞书 5xx / token 换取失败：瞬时故障 → 可重试。
+        return {
+          ok: false,
+          retryable: true,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
     },
   };

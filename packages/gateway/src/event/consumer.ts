@@ -210,25 +210,36 @@ export function defaultTaskSignaler(env: Bindings): TaskSignaler {
 
 /**
  * 内置 system subscriber 规则（§1.1 / §2.3）——在用户订阅分发之前跑，不占用户订阅表。
- * 返回值不参与消息 ack/retry 判定：内置规则的失败（畸形 payload 等）console.error 后不阻塞，
- * 由用户订阅分发独立决定 ack/retry。毒丸事件（payload 不合形状）不触发 retry（重投无意义）。
+ * 返回值参与消息 ack/retry 判定（R27 关门 C2/C3 修正）：
+ * - 毒丸（payload 不合形状）console.error 后按 true 处理（重投无意义）；
+ * - outbound.message 飞书投递**可重试失败** → false（队列重投，上限 max_retries=3 → DLQ）；
+ * - handler 抛错（store/queue 等基础设施瞬时故障）→ false 重投——重投幂等由 systemPublish
+ *   的 dedupeKey 短路 + 飞书 uuid 去重保证（不重复发卡片/消息）。
  */
-async function runSystemSubscribers(event: Event, deps: ConsumerDeps): Promise<void> {
-  switch (event.type) {
-    case 'task.checkpoint':
-      await handleTaskCheckpoint(event, deps);
-      break;
-    case 'im.action':
-      await handleImAction(event, deps);
-      break;
-    case 'im.bot_joined':
-      await handleBotJoined(event, deps);
-      break;
-    case 'outbound.message':
-      await handleOutboundMessage(event, deps);
-      break;
-    default:
-      break;
+async function runSystemSubscribers(event: Event, deps: ConsumerDeps): Promise<boolean> {
+  try {
+    switch (event.type) {
+      case 'task.checkpoint':
+        await handleTaskCheckpoint(event, deps);
+        return true;
+      case 'im.action':
+        await handleImAction(event, deps);
+        return true;
+      case 'im.bot_joined':
+        await handleBotJoined(event, deps);
+        return true;
+      case 'outbound.message':
+        return await handleOutboundMessage(event, deps);
+      default:
+        return true;
+    }
+  } catch (err) {
+    console.error('event consumer: system subscriber failed, will retry', {
+      eventId: event.id,
+      type: event.type,
+      err: String(err),
+    });
+    return false;
   }
 }
 
@@ -263,6 +274,9 @@ async function handleTaskCheckpoint(event: Event, deps: ConsumerDeps): Promise<v
       type: 'outbound.message',
       session: event.session,
       payload: outbound,
+      // 确定性幂等键（源事件 id 派生）：队列重投重放本规则时，窗内命中即短路——
+      // 不重复留痕、不重复投递确认卡片（R27 关门 C3）。
+      dedupeKey: `system:checkpoint:${event.id}`,
     },
     event,
     deps,
@@ -316,33 +330,38 @@ async function handleBotJoined(event: Event, deps: ConsumerDeps): Promise<void> 
 
 /**
  * §2.1 出站接线（R24）：outbound.message → 若目标渠道 adapter=feishu，调飞书 REST 投递。
- * payload 经 outboundMessageSchema 校验（畸形 → console.error 后返回，毒丸不重投）。
+ * payload 经 outboundMessageSchema 校验（畸形 → console.error 后返回 true，毒丸不重投）。
  * 渠道解析：ChannelStore.get(payload.channel) 拿 ChannelConfig；adapter!=feishu / channel 不存在
- *   → 跳过（本轮只接飞书；其他渠道出站留后续轮）。投递失败 console.error 留痕（不阻塞 ack/retry
- *   判定——出站是内置 system 规则，与用户订阅分发解耦；重投由队列层不覆盖此路径，失败仅留痕）。
+ *   → 跳过（本轮只接飞书；其他渠道出站留后续轮）。
+ * 投递失败（R27 关门 C2 修正）：retryable（网络/token）→ 返回 false 触发队列重投（uuid=event.id
+ *   服务端去重，重投不重复发消息）；非 retryable（业务拒绝）→ 留痕后 true（重投必然同败）。
+ * HITL 链路依赖此可靠性：checkpoint 确认卡片丢失 = 人永远看不到确认请求、任务挂到超时。
  */
-async function handleOutboundMessage(event: Event, deps: ConsumerDeps): Promise<void> {
+async function handleOutboundMessage(event: Event, deps: ConsumerDeps): Promise<boolean> {
   const parsed = outboundMessageSchema.safeParse(event.payload);
   if (!parsed.success) {
     console.error('event consumer: outbound.message malformed payload (dropped)', {
       eventId: event.id,
     });
-    return;
+    return true;
   }
   const outbound = parsed.data;
   const config = await deps.channels.get(outbound.channel);
-  if ('code' in config) return; // 渠道未配置 → 跳过（无投递目标）
-  if (config.adapter !== 'feishu') return; // 本轮只接飞书出站
+  if ('code' in config) return true; // 渠道未配置 → 跳过（无投递目标）
+  if (config.adapter !== 'feishu') return true; // 本轮只接飞书出站
 
-  const result = await deps.feishu.send(outbound);
+  const result = await deps.feishu.send(outbound, { dedupeId: event.id });
   if (!result.ok) {
     console.error('event consumer: feishu outbound delivery failed', {
       eventId: event.id,
       channel: outbound.channel,
       target: outbound.target,
       error: result.error,
+      retryable: result.retryable ?? false,
     });
+    return result.retryable !== true;
   }
+  return true;
 }
 
 /**
@@ -358,12 +377,19 @@ async function systemPublish(input: EventInput, source: Event, deps: ConsumerDep
     genTraceId: deps.genTraceId,
     traceId: source.traceId, // 链路透传（§0.3）
   });
+  // dedupeKey 幂等短路（对齐 event-bus.publish ⑤ 语义，R27 关门 C3）：队列 at-least-once 重投
+  // 重放本规则时，窗内命中既存事件即跳过——不重复留痕、不重复下发（否则每次重投都会用 genId
+  // 生成全新事件，绕过 dedupe 管道产生重复卡片）。
+  if (event.dedupeKey !== undefined) {
+    const existing = await deps.store.findByDedupeKey(event.dedupeKey, Date.parse(deps.now()));
+    if (existing !== null) return;
+  }
   await deps.store.put(event);
   await deps.queue.send(event);
 }
 
 /**
- * 处理单条消息：先跑内置 system subscriber 规则（§1.1/§2.3，不影响 ack/retry），
+ * 处理单条消息：先跑内置 system subscriber 规则（§1.1/§2.3，可重试失败参与 ack/retry），
  * 再匹配用户订阅并分发。任一 webhook sink 投递失败 → 返回 false（调用方 retry）。
  * agent/task sink 占位（不阻塞、不影响 ack），投递留 Phase 4/5。
  */
@@ -386,12 +412,12 @@ async function handleEvent(event: Event, deps: ConsumerDeps): Promise<boolean> {
     return true;
   }
 
-  // 内置 system subscriber 规则（不占用户订阅表；失败不阻塞用户订阅分发）。
-  await runSystemSubscribers(event, deps);
+  // 内置 system subscriber 规则（不占用户订阅表）；可重试失败参与 ack/retry 判定（C2/C3）。
+  const sysOk = await runSystemSubscribers(event, deps);
 
   const router = deps.router();
   const hits = await router.matchSubscriptions(event);
-  let ok = true;
+  let ok = sysOk;
   for (const sub of hits) {
     switch (sub.sink.kind) {
       case 'webhook': {

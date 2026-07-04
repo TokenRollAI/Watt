@@ -895,3 +895,83 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
     }
   });
 });
+
+describe('Queue consumer 出站可靠性 + system 规则重投幂等 (R27 关门 C2/C3)', () => {
+  async function seedFeishuChannel2(id: string): Promise<void> {
+    const channels = new ChannelStore(env.DB_EVENTS);
+    await channels.write({ id, adapter: 'feishu', enabled: true, settings: {} });
+  }
+
+  it('飞书投递 retryable 失败 → 消息 retry（不静默 ack 丢消息）；uuid=event.id 传给 sender', async () => {
+    await env.DB_EVENTS.prepare('DELETE FROM channels').run();
+    await seedFeishuChannel2('feishu');
+    const stub = freshRouterStub();
+    const sentOpts: Array<{ dedupeId?: string } | undefined> = [];
+    const feishu: FeishuSender = {
+      async send(_message: OutboundMessage, opts?: { dedupeId?: string }) {
+        sentOpts.push(opts);
+        return { ok: false, retryable: true, error: 'network blip' };
+      },
+    };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+      const ev = E({
+        id: 'ob-retry-1',
+        type: 'outbound.message',
+        source: { kind: 'system' },
+        payload: {
+          channel: 'feishu',
+          target: 'oc_room',
+          content: { text: 'x' },
+        } satisfies OutboundMessage,
+      });
+      const batch = createMessageBatch(QUEUE, [
+        { id: 'or1', timestamp: new Date(), body: ev, attempts: 1 },
+      ]);
+      const ctx = createExecutionContext();
+      await handleQueue(batch, deps);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.retryMessages.map((r: { msgId: string }) => r.msgId)).toContain('or1');
+      expect(result.explicitAcks).not.toContain('or1');
+      // 幂等键 = 事件 id（飞书 uuid 服务端去重，重投不重复发消息）。
+      expect(sentOpts[0]?.dedupeId).toBe('ob-retry-1');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('task.checkpoint 重投（同源事件）→ dedupeKey 短路，确认卡片只下发一次', async () => {
+    const stub = freshRouterStub();
+    const queue = memQueue();
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, queue });
+    const ev = E({
+      id: 'ck-redeliver-1',
+      type: 'task.checkpoint',
+      session: 'feishu:chat:oc_room',
+      payload: {
+        taskId: 'task-rd',
+        checkpoint: 'confirm-release',
+        prompt: '上线确认：批准发布？',
+        options: ['approve', 'reject'],
+        notify: { channel: 'feishu', target: 'oc_room' },
+      },
+    });
+    const ctx = createExecutionContext();
+    // 第一次投递：产出一条 outbound.message。
+    await handleQueue(
+      createMessageBatch(QUEUE, [{ id: 'ck1', timestamp: new Date(), body: ev, attempts: 1 }]),
+      deps,
+    );
+    // 队列 at-least-once 重投同一事件：dedupeKey=system:checkpoint:<源事件 id> 窗内命中 → 短路。
+    await handleQueue(
+      createMessageBatch(QUEUE, [{ id: 'ck2', timestamp: new Date(), body: ev, attempts: 2 }]),
+      deps,
+    );
+    await getQueueResult(
+      createMessageBatch(QUEUE, [{ id: 'ck3', timestamp: new Date(), body: E(), attempts: 1 }]),
+      ctx,
+    ).catch(() => {});
+    expect(queue.sent.filter((e) => e.type === 'outbound.message')).toHaveLength(1);
+  });
+});

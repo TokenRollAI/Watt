@@ -184,3 +184,75 @@ describe('feishuSenderFromEnv — token 换取 + 消息投递', () => {
     expect(cache.store.get('feishu:tenant_access_token')?.ttl).toBe(60);
   });
 });
+
+describe('feishuSenderFromEnv — retryable 语义 + uuid 幂等（R27 关门 C2/C3）', () => {
+  it('dedupeId → 发消息 body 带 uuid（飞书服务端去重键）', async () => {
+    const { fetch, calls } = fakeFetch({
+      tenant_access_token: { code: 0, tenant_access_token: 'tat', expire: 7200 },
+      'im/v1/messages': { code: 0, data: { message_id: 'om-1' } },
+    });
+    const cache = memCache();
+    const sender = feishuSenderFromEnv(env, {
+      fetchImpl: fetch,
+      cacheGet: cache.get,
+      cachePut: cache.put,
+    });
+    const r = await sender.send(textMsg, { dedupeId: 'evt-42' });
+    expect(r.ok).toBe(true);
+    const msgCall = calls.find((c) => c.url.includes('im/v1/messages'));
+    expect(JSON.parse(msgCall?.init.body as string).uuid).toBe('evt-42');
+  });
+
+  it('token 失效业务码（99991663）→ retryable:true + 作废缓存 token', async () => {
+    const { fetch } = fakeFetch({
+      tenant_access_token: { code: 0, tenant_access_token: 'tat-stale', expire: 7200 },
+      'im/v1/messages': { code: 99991663, msg: 'token invalid' },
+    });
+    const cache = memCache();
+    const deleted: string[] = [];
+    const sender = feishuSenderFromEnv(env, {
+      fetchImpl: fetch,
+      cacheGet: cache.get,
+      cachePut: cache.put,
+      cacheDelete: async (k) => {
+        deleted.push(k);
+      },
+    });
+    const r = await sender.send(textMsg);
+    expect(r.ok).toBe(false);
+    expect(r.retryable).toBe(true);
+    expect(deleted).toContain('feishu:tenant_access_token');
+  });
+
+  it('业务拒绝（如 bot not in chat）→ retryable:false（重投必然同败）', async () => {
+    const { fetch } = fakeFetch({
+      tenant_access_token: { code: 0, tenant_access_token: 'tat', expire: 7200 },
+      'im/v1/messages': { code: 230001, msg: 'bot not in chat' },
+    });
+    const cache = memCache();
+    const sender = feishuSenderFromEnv(env, {
+      fetchImpl: fetch,
+      cacheGet: cache.get,
+      cachePut: cache.put,
+    });
+    const r = await sender.send(textMsg);
+    expect(r.ok).toBe(false);
+    expect(r.retryable).toBe(false);
+  });
+
+  it('网络抛错 → retryable:true（瞬时故障重投可自愈）', async () => {
+    const throwingFetch = (async () => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+    const cache = memCache();
+    const sender = feishuSenderFromEnv(env, {
+      fetchImpl: throwingFetch,
+      cacheGet: cache.get,
+      cachePut: cache.put,
+    });
+    const r = await sender.send(textMsg);
+    expect(r.ok).toBe(false);
+    expect(r.retryable).toBe(true);
+    expect(r.error).toContain('network down');
+  });
+});
