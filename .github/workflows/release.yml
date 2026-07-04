@@ -47,6 +47,9 @@ jobs:
       - run: pnpm --filter @tokenroll/watt build
       - run: node scripts/pack-smoke-cli.mjs
 
+      # OIDC trusted publishing 需 npm>=11.5（Node 22 自带 npm 10）；token 路径不受影响。
+      - run: npm install -g npm@latest
+
       # 发布：显式步骤已跑完，跳过 prepublishOnly 防重复构建；--provenance 公开构建溯源。
       - name: publish to npm
         working-directory: packages/cli
