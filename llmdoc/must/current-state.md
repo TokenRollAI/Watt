@@ -1,12 +1,13 @@
 # 当前项目状态快照
 
-> 本文档随轮次更新。最后更新：2026-07-04（Round 27，Phase 6 关门轮——DoD ①③④⑤ 勾选，② 等人工入站）。
+> 本文档随轮次更新。最后更新：2026-07-04（Round 32，**Phase 7 正式关门**——六条 E2E 全绿；项目唯一未闭环 = Phase 6 ② @feishu 入站人工采证）。
 
 ## 阶段
 
 - 规格真源：`Docs/{Vision,Architecture,Proto,Plugin,Reference}.md` + `DOD.md`（验收）+ `LOOP.md`（执行契约）。
-- Phase 0~5 已关门（Round 3/7/10/13/18/22）。**Phase 6（飞书 + Observability + Management）R23~R27**：R23 AuditLog 数据面 + Metrics；R24 飞书 adapter（core 规约 + IdentityMapper 渠道映射 + 出站接线 + CLI connect）；R25 manage/cron Agent（llm harness agentic tool loop + 种子 def）；R26 Dashboard（Pages SPA 五视图）+ PluginRegistry + CLI plugin 族；**R27 关门轮：质量关口 12 MAJOR 全修（0 误报）+ DoD ①③④⑤ 勾选**。
-- **唯一未闭环：DoD ②「@feishu 入站真实群消息」需人工配合**——connect（plugin 主体）已就绪，测试群里已留请求配合消息；任意成员回一条即可采证（未映射 principal=user:anonymous 即 §6.3 正确语义）。勾 ② 后 Phase 6 正式关门 → Phase 7（六条 E2E）。
+- Phase 0~5 已关门（Round 3/7/10/13/18/22）；Phase 6 R27 关门轮完成（DoD ①③④⑤ 勾选）；**Phase 7（六条 E2E）R28~R32 已正式关门**——`pnpm e2e` 六条线上全绿（`scripts/e2e/`，证据 PROGRESS R28~R32 + DOD §9 入账），R32 质量关口 22 MAJOR 全修（0 误报）。DOD §0 五条全局 Done 除"真实飞书"人工面外全部成立。
+- **项目唯一未闭环：Phase 6 DoD ②「@feishu 入站真实群消息」需人工配合**——connect（plugin 主体）本机长驻，测试群里已留请求配合消息；任意成员回一条即可采证。人工体感清单（协议判据已全过）：飞书卡片真实点击、群内可见核对。
+- Phase 7 新增面：`scripts/e2e/{lib,index,e2e-1..6}.ts`（pnpm e2e；E2E_LLM/E2E_FEISHU 门控）；echo def 种子化；harness 接 default provider（'default' 哨兵，钉死 model 不受 default 影响——R32 修正 secretRef 同源）；script watt.queryMetric；auto-delivery-lite/deep-research 真实化（feedback/bugs open→fixed、N=3、expect.schema、notify 参数化、publishTaskOutbound 带 dedupe 短路）；lurker/scribe 潜伏 agent（TTL scratch + @提及回答 + 出站两关 Check）；sign-admin-token --extra 多身份。
 - R27 质量关口修复要点（详见 PROGRESS Round 27 + doc-gaps #31）：种子改 get-不存在才-write（不覆写人工修改）/ Send 未 Spawn → not_found（幽灵 DO 防护）/ 飞书出站 retryable 重投 + 重投幂等（dedupeKey 短路 + uuid 去重）/ connectFeishu onError settle（断线重连真实可达）/ push 型 plugin 主体保留 kind='im'（Proto §2.3 已回写）/ plugin Write 注册探活 / audit filter 严格校验 / dashboard tree:'all' 契约漂移 + api 测试从零建立 / llm usage 取 totalUsage（多步漏账）。
 - Phase 5 遗留 backlog：模板 agent def 种子化（manage defs 已种子，echo/deep-research 模板 def 仍手工）、script 能力表扩容（仅 watt.publish）。声明簇 doc-gaps #29。
 - Phase 4 遗留：13 条 MINOR backlog（ModelProvider resolveDefault 死代码未接 harness、output ≤1MiB 未实施、lastActiveAt 语义漂移、toolbridge 公网可达+固定转发凭据、vendored 未合并分支锚点等）不阻塞；Round 18 有 6 个 finding 因中转 502 未复核（按 MINOR 保守处理，碰到相关文件顺手核）；Phase 4 实现声明簇见 doc-gaps **#28**。

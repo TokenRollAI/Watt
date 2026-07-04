@@ -277,3 +277,11 @@
 ## 51. script 的 watt.publish 发 outbound.message 会触发出站 Check——注入的 Authorizer 必须播种 cronJobs
 
 event-bus publish ① 对 type=outbound.message 做 Check(event://<channel>/<target>,'write')，claims 带 cron:<jobId> 链段；平台 newAuthorizer 的 cronJobs 索引恒空 → core authorize 步骤 3 查无此 job → 误判 "cron job disabled/deleted"（R28 E2E-6 实测：job 明明 enabled）。修复模式 = script 侧传本 job 播种的判定包装（cronJobs: {[job.id]: job}）。通用教训：**凡 claims 带链段（cron:/instance）的调用路径，判定点必须能解析链段对应的数据面**——用平台默认 Authorizer 前先查它的索引是不是空的。另注意 grants 前缀通配要显式星号（`event://*`；`event://` 是精确匹配，match.ts §6.2）。
+
+## 52. E2E 长跑最常见 FAIL 源 = admin token 1h 过期
+
+`sign-admin-token.mjs` 签发的 token TTL 1h；六条 E2E 串行 + 部署间隔很容易越界，症状是脚本中途 401（"invalid or expired token"）——不是代码问题。纪律：**每次全量 e2e 前重签**（需双身份时 `--rotate --extra user:staff=staff` 同轮换双签——两次 --rotate 会互相吊销）。另一个模式：E2E 脚本的清理必须有 `process.on('exit')` 兜底（断言失败即 process.exit(1) 会跳过顺序清理——e2e-6 曾因此可能遗留每天 09:00 真实触发的 CronJob）；注意 exit 钩子引用的 let 变量声明须在顶层 await 之前（TDZ）。
+
+## 53. 平台 Authorizer 空索引对带 agent_def 的 claims 同样误拒（§51 的 agent 面）
+
+newAuthorizer 的 agentDefs/cronJobs/instances 恒空——claims 带 agent_def 时 core authorize 步骤 2 查无此 def 即 deny "agent definition not found"。agent 主体（如 lurker 出站）要过 Check 必须播种本 def（`agentDefs: {[def.name]: def}`）走 core authorize，审计单独补。与 §51（cron 链段）同根：**判定点必须能解析 claims 引用的数据面**。
