@@ -7,7 +7,7 @@
 - **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
 - **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
 - **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅、R30 E2E-2 ✅，下一轮 R31（B5 潜伏群聊 agent + E2E-3，调研 §4）
+- **下一目标**：@feishu 入站人工采证 → 勾 DoD ② → Phase 6 正式关门；Phase 7 进行中——R28 E2E-5/6 ✅、R29 E2E-1 ✅、R30 E2E-2 ✅、R31 E2E-3 ✅，下一轮 R32（E2E-4 权限对照 + `pnpm e2e` 六条复跑 + Phase 7 关门）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,15 @@
 ---
 
 # 轮次记录
+
+## Round 31 — 2026-07-04（Phase 7 R31：潜伏群聊 agent + E2E-3 线上全绿）
+- 目标：调研 §4 R31——B5（潜伏群聊 agent 整体缺失）+ E2E-3 四判据线上采证
+- 动作（主 assistant 直接实现，commit 87dbd94）：`agent/lurker.ts`——lurker/* 定义前缀分派专用 harness：无 @ 的 im.message 静默写会话级 **TTL scratch namespace**（`context://scratch/<session>`，惰性挂载 structured + ttl=120s，path=event.id 天然幂等，零出站）；含 `@watt` → 读 scratch 出站回答（含上下文条数=协议事实，经 publishTaskOutbound system 管道）。session 粘性=声明式订阅 instanceBy:'session'（def Write 联动建立）。LURKER_SCRIBE_DEF 不入全局种子（订阅全量 im.message 是部署级决策，E2E 脚本注册）。+3 集成测试（真实 DO+D1）。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1135 tests**）；`pnpm deploy:all` exit 0；**E2E-3 线上全绿**（`pnpm e2e 3`，API 模拟 5+1 消息经真实订阅→consumer→agent 投递）：① 静默期对本会话零出站 ② scratch namespace ≥5 条目（mount ttl=120s 单测锁定；过期等待 E2E_WAIT_TTL=1 可选）③ @watt 后 **8.8s** 收到回答且含"5 条上下文" ④ 全程同一实例 `agent:lurker/scribe#session:...`（粘性）→ terminate 清理。
+- 勾选：无（六条全绿后一并勾）。
+- 沉淀：无新坑（narrow-to-never 复用 pitfalls §31 已知解法）。
+- 遗留：R32 = E2E-4（B6 --extra token 已就绪：admin/employee 对桩财务工具的 PEP 对照 + audit chain）+ 六条 `pnpm e2e` 复跑 + Phase 7 关门（质量关口 + DOD §0 五条终验）。人工清单不变（@feishu 入站、卡片点击）。
+
 
 ## Round 30 — 2026-07-04（Phase 7 R30：deep-research 真实化 + E2E-2 线上全绿）
 - 目标：调研 §4 R30——B3（deep-research 真实化）+ E2E-2 四判据线上采证
