@@ -161,18 +161,18 @@ await runE2e('e2e-3', async () => {
   const lurker = lurkers[0];
   if (lurker !== undefined) cli(env, ['agent', 'terminate', lurker.instanceId]);
   // def rewrite 不拆旧订阅（registry 联动只增不删）——经 event Unsubscribe 显式移除。
-  const subs = cli<{ items: { id?: string; sink: { kind: string; definition?: string } }[] }>(env, [
-    'event',
-    'subs',
-  ]);
-  for (const sub of subs.items) {
+  type SubRow = { id?: string; sink: { kind: string; definition?: string } };
+  const subsRaw = cli<{ items: SubRow[] } | SubRow[]>(env, ['event', 'subs']);
+  const subItems = Array.isArray(subsRaw) ? subsRaw : subsRaw.items;
+  for (const sub of subItems) {
     if (sub.sink.kind === 'agent' && sub.sink.definition === 'lurker/scribe' && sub.id) {
       await htbp(env, 'event', 'Unsubscribe', { subscriptionId: sub.id });
     }
   }
-  const after2 = cli<{ items: { sink: { definition?: string } }[] }>(env, ['event', 'subs']);
+  const after2raw = cli<{ items: SubRow[] } | SubRow[]>(env, ['event', 'subs']);
+  const after2 = Array.isArray(after2raw) ? after2raw : after2raw.items;
   assert(
-    after2.items.every((sub) => sub.sink.definition !== 'lurker/scribe'),
+    after2.every((sub) => sub.sink.definition !== 'lurker/scribe'),
     'lurker im.message subscription must be removed after the run',
   );
   try {

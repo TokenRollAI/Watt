@@ -25,6 +25,7 @@ const JOB = `e2e6-daily-tokens-${RUN}`;
 const DENY_JOB = `e2e6-deny-probe-${RUN}`;
 const SCRIPT_PATH = `e2e6-daily-report-${RUN}`;
 const DENY_SCRIPT_PATH = `e2e6-deny-script-${RUN}`;
+let cleaned = false; // 声明须在 runE2e 顶层 await 之前（TDZ）
 
 await runE2e('e2e-6', async () => {
   const env = loadEnv();
@@ -176,7 +177,6 @@ await runE2e('e2e-6', async () => {
 });
 
 /** 幂等清理（C13：断言失败也不遗留每天 09:00 真实触发的 CronJob）。 */
-let cleaned = false;
 function cleanup(env: ReturnType<typeof loadEnv>): void {
   for (const id of [JOB, DENY_JOB]) {
     try {
