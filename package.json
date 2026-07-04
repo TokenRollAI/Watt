@@ -16,15 +16,17 @@
     "gen-dev-vars": "node scripts/gen-dev-vars.mjs",
     "gen-jwt-keys": "node scripts/gen-jwt-keys.mjs",
     "provision": "node scripts/provision.mjs",
+    "build:deploy": "node scripts/build-deploy.mjs",
     "migrate": "pnpm --filter @watt/gateway exec wrangler d1 migrations apply watt-policies --remote",
     "deploy:all": "node scripts/deploy-all.mjs",
     "smoke": "node scripts/smoke.ts",
     "e2e": "node scripts/e2e/index.ts",
-    "release:cli": "pnpm --filter @tokenroll/watt typecheck && pnpm --filter @tokenroll/watt test && pnpm --filter @tokenroll/watt build && node scripts/pack-smoke-cli.mjs && pnpm publish --filter @tokenroll/watt --access public --no-git-checks"
+    "release:cli": "pnpm build:deploy && pnpm --filter @tokenroll/watt typecheck && pnpm --filter @tokenroll/watt test && pnpm --filter @tokenroll/watt build && node scripts/pack-smoke-cli.mjs && pnpm publish --filter @tokenroll/watt --access public --no-git-checks"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
     "@types/node": "24.3.0",
+    "esbuild": "^0.28.1",
     "jose": "^6.2.3",
     "typescript": "5.9.3",
     "wrangler": "4.107.0"

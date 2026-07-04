@@ -211,6 +211,8 @@ __marimo__/
 # -----------------------------------------------------------------------------
 node_modules/
 dist/
+# P5: CLI 部署产物（build:deploy 生成的 worker bundle + 模板 + migrations + dashboard dist）——不进 git
+packages/cli/deploy/
 *.tsbuildinfo
 # Vitest / v8 coverage output (@vitest/coverage-v8)
 coverage/
