@@ -64,6 +64,7 @@ import {
   providerList,
   providerSetDefault,
 } from './provider.ts';
+import { formatSecretListHuman, secretList, secretRm, secretSet } from './secret.ts';
 import { fetchStatus, formatStatusHuman } from './status.ts';
 import {
   formatDefinitionListHuman as formatTaskDefsHuman,
@@ -1405,6 +1406,56 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const health = await pluginHealth(base, token, pluginId, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(health));
       else out(formatPluginHealthHuman(pluginId, health));
+    });
+
+  // ── watt secret（§6.6 SecretStore：运行时密钥，值绝不走 argv）─────────────────
+  const secret = program
+    .command('secret')
+    .description('Manage runtime secrets (SecretStore; values never shown/logged)');
+  secret
+    .command('set')
+    .description('Set/overwrite a secret (value read from stdin/TTY, never from argv)')
+    .argument('<name>', 'secret name matching ^[A-Z][A-Z0-9_]{0,63}$')
+    .action(async (name: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      // value 只从 stdin/TTY 读——绝不作 argv（防 shell history 泄漏）。
+      const readStdin = opts.readStdin ?? defaultReadStdin;
+      if (opts.readStdin === undefined && process.stdin.isTTY) {
+        err(`Enter value for secret ${name}, then Ctrl-D:`);
+      }
+      const raw = await readStdin();
+      const value = raw.replace(/\r?\n$/, '');
+      if (value.length === 0) {
+        throw new CliError('secret value is empty (provide the value via stdin)', 2);
+      }
+      const result = await secretSet(base, token, name, value, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(result));
+      else
+        out(
+          `Set secret ${result.name} (updatedAt ${result.updatedAt}). KV 传播最长约 1 分钟后生效。`,
+        );
+    });
+  secret
+    .command('list')
+    .description('List secret names + metadata (values never shown)')
+    .action(async () => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const secrets = await secretList(base, token, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(secrets));
+      else out(formatSecretListHuman(secrets));
+    });
+  secret
+    .command('rm')
+    .description('Remove a secret by name (SecretStore.Delete)')
+    .argument('<name>', 'secret name')
+    .action(async (name: string) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const result = await secretRm(base, token, name, { fetch: opts.fetch });
+      if (asJson()) out(JSON.stringify(result));
+      else out(`Removed secret ${name}`);
     });
 
   let exitCode = 0;
