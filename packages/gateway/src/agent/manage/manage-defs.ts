@@ -46,7 +46,10 @@ export const MANAGE_CRON_SYSTEM_PROMPT = [
   '若工具返回 permission denied，如实告知用户你没有相应权限，不要伪造成功。',
 ].join('\n');
 
-/** manage/cron 的内置 AgentDefinition（种子）。model=glm-5.2，grants 含 platform://scheduler manage/read。 */
+/** manage/cron 的内置 AgentDefinition（种子）。model=glm-5.2，grants 含 platform://scheduler manage/read。
+ *  toolScopes 用 `platform://scheduler`（含 `://`）——这是 M10 manage Agent 经 builtin Provider 直调
+ *  平台接口的**捷径特例标记**，**不参与** HTBP 三工具生成（那只认纯路径工具树前缀，见 htbp-tools.ts /
+ *  Proto §3.1）；本层工具经 resolveManageBinding 的 buildTools 直调 SchedulerManager（工具面选型 B）。 */
 export const MANAGE_CRON_DEF: AgentDefinition = {
   name: 'manage/cron',
   description:

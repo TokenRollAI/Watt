@@ -144,6 +144,10 @@ export class AgentRuntime {
       definition: req.definition,
       harness: harness.name,
       model: harness.model,
+      // toolScopes/systemPrompt 从 def 透传落进实例状态（§3.1；免每 onEvent 查 D1）——
+      //   纯路径 toolScopes 条目在 onEvent 注入 HTBP 三工具，systemPrompt 参与 system 拼装。
+      toolScopes: def.toolScopes,
+      systemPrompt: def.systemPrompt,
       input: req.input,
       parent: opts.parent,
       nowIso,

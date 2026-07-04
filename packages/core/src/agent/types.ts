@@ -56,6 +56,9 @@ export const agentDefinitionSchema = z.object({
   grants: z.array(agentGrantSchema),
   contextNamespaces: z.array(z.string()),
   toolScopes: z.array(z.string()),
+  // 系统提示（§3.1）——人格/任务约束。随实例落地；onEvent 拼装顺序 def.systemPrompt → HTBP 说明段
+  //   → manage ~skill（详见 Proto §3.1 拼装规则）。可选（旧 def / 已存在实例零迁移，读取容 undefined）。
+  systemPrompt: z.string().optional(),
   subscriptions: z.array(agentSubscriptionSchema).optional(),
 });
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
