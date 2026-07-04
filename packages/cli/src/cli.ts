@@ -219,6 +219,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
   program
     .name('watt')
     .description('Watt platform CLI (pure Platform API client, DOD M10)')
+    .version('0.1.0', '-v, --version', 'print the watt CLI version')
     .option('--json', 'output raw JSON instead of human-readable text', false)
     .exitOverride() // 抛错而非直接 process.exit，交由本函数统一处理退出码。
     .configureOutput({
