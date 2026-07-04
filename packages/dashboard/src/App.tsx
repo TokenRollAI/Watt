@@ -1,11 +1,11 @@
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import {
   type AgentDefinition,
   type AgentInstance,
-  ApiError,
   type AuditRecord,
   api,
   type CronJob,
+  formatError,
   getBase,
   getToken,
   healthz,
@@ -13,14 +13,27 @@ import {
   setToken,
   type TaskInfo,
 } from './api.ts';
+import { Msg, Panel, Table, useLoad } from './ui.tsx';
+import { ChannelsView } from './views/channels.tsx';
+import { ProvidersView } from './views/providers.tsx';
+import { SecretsView } from './views/secrets.tsx';
 
 /**
- * Watt Dashboard（M10）——三对等管理入口之一（Dashboard/ManageAgent/CLI），纯 Platform API 客户端。
- * 视图对齐 M10 视图↔接口表：Overview / Agents / Tasks / Cron（含写操作）/ Audit。
+ * Watt Dashboard（M10 + P6 配置面）——三对等管理入口之一（Dashboard/ManageAgent/CLI），纯 Platform API 客户端。
+ * 视图：Overview / Agents / Tasks / Cron / Audit / Secrets / Channels / Providers（含写操作）/ Settings。
  * token 手填持久化 localStorage（最小面）；所有数据经 HTBP /htbp/platform/*（同 CLI 调用面 → AuditLog 对等）。
  */
 
-type Tab = 'overview' | 'agents' | 'tasks' | 'cron' | 'audit' | 'settings';
+type Tab =
+  | 'overview'
+  | 'agents'
+  | 'tasks'
+  | 'cron'
+  | 'audit'
+  | 'secrets'
+  | 'channels'
+  | 'providers'
+  | 'settings';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -28,6 +41,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'tasks', label: 'Tasks' },
   { id: 'cron', label: 'Cron' },
   { id: 'audit', label: 'Audit' },
+  { id: 'secrets', label: 'Secrets' },
+  { id: 'channels', label: 'Channels' },
+  { id: 'providers', label: 'Providers' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -70,66 +86,13 @@ export function App(): ReactNode {
         {tab === 'tasks' && <Tasks />}
         {tab === 'cron' && <Cron />}
         {tab === 'audit' && <Audit />}
+        {tab === 'secrets' && <SecretsView />}
+        {tab === 'channels' && <ChannelsView />}
+        {tab === 'providers' && <ProvidersView />}
         {tab === 'settings' && <Settings onSaved={() => setTab('overview')} />}
       </main>
     </div>
   );
-}
-
-/** 通用异步加载 hook（load fn + 依赖，返回 data/error/loading/reload）。 */
-function useLoad<T>(
-  fn: () => Promise<T>,
-  deps: unknown[] = [],
-): {
-  data: T | undefined;
-  error: string;
-  loading: boolean;
-  reload: () => void;
-} {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const run = useCallback(() => {
-    setLoading(true);
-    setError('');
-    fn()
-      .then((d) => setData(d))
-      .catch((e) => setError(e instanceof ApiError ? e.message : String(e)))
-      .finally(() => setLoading(false));
-    // biome-ignore lint/correctness/useExhaustiveDependencies: fn 由 deps 驱动，避免 fn 引用抖动重渲。
-  }, deps);
-  useEffect(run, [run]);
-  return { data, error, loading, reload: run };
-}
-
-function Panel({
-  title,
-  children,
-  onReload,
-}: {
-  title: string;
-  children: ReactNode;
-  onReload?: () => void;
-}): ReactNode {
-  return (
-    <section className="panel">
-      <div className="panel-head">
-        <h2>{title}</h2>
-        {onReload && (
-          <button type="button" onClick={onReload}>
-            Reload
-          </button>
-        )}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Msg({ error, loading }: { error: string; loading: boolean }): ReactNode {
-  if (loading) return <p className="muted">Loading…</p>;
-  if (error) return <p className="error">{error}</p>;
-  return null;
 }
 
 // ─── Overview（status 汇总 + metrics tokens）─────────────────────────────
@@ -251,7 +214,7 @@ function Cron(): ReactNode {
       setId('');
       cron.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
+      setErr(formatError(e));
     } finally {
       setBusy('');
     }
@@ -264,7 +227,7 @@ function Cron(): ReactNode {
       await api.deleteCron(jobId);
       cron.reload();
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : String(e));
+      setErr(formatError(e));
     } finally {
       setBusy('');
     }
@@ -415,31 +378,5 @@ function Settings({ onSaved }: { onSaved: () => void }): ReactNode {
         {saved && <span className="muted">{saved}</span>}
       </div>
     </Panel>
-  );
-}
-
-// ─── 通用表格 ────────────────────────────────────────────────────────────
-function Table({ head, rows }: { head: string[]; rows: string[][] }): ReactNode {
-  if (!rows.length) return <p className="muted">(none)</p>;
-  return (
-    <table>
-      <thead>
-        <tr>
-          {head.map((h) => (
-            <th key={h}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.join('|')}>
-            {r.map((cell, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: 表格单元格顺序稳定，index 作 key 安全。
-              <td key={i}>{cell}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
