@@ -16,6 +16,10 @@
   "routes": [
     { "pattern": "watt.pdjjq.org", "custom_domain": true }
   ],
+  "vars": {
+    // lurker scratch TTL（秒）：生产 1h；代码缺省 120 保 E2E 分钟级过期断言（lurker.ts scratchTtlSec）。
+    "LURKER_SCRATCH_TTL_SEC": "3600"
+  },
 
   // ---------------------------------------------------------------------------
   // 资源绑定占位计划（本轮不加：资源尚未创建，留给 DoD 项 5 那一轮由

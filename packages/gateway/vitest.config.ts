@@ -212,6 +212,8 @@ export default defineConfig({
         bindings: {
           WATT_JWT_PRIVATE_JWK: JSON.stringify(testKey.privateJwk),
           WATT_ADMIN_PRINCIPAL: testKey.adminPrincipal,
+          // wrangler.jsonc vars 设生产值 3600——测试钉回代码缺省 120（lurker.test.ts 断言 SCRATCH_TTL_SEC）。
+          LURKER_SCRATCH_TTL_SEC: '120',
           TEST_MIGRATIONS: migrations,
           TEST_MIGRATIONS_EVENTS: migrationsEvents,
           TEST_MIGRATIONS_CONTEXT: migrationsContext,

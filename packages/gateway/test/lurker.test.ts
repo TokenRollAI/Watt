@@ -4,8 +4,15 @@ import type { Event } from '@watt/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AgentRegistry } from '../src/agent/agent-registry.ts';
 import { AgentRuntime, defaultRuntimeDeps } from '../src/agent/agent-runtime.ts';
-import { LURKER_SCRIBE_DEF, SCRATCH_TTL_SEC, scratchNamespace } from '../src/agent/lurker.ts';
+import type { ModelCallRequest } from '../src/agent/harness/types.ts';
+import {
+  LURKER_SCRIBE_DEF,
+  runLurkerHarness,
+  SCRATCH_TTL_SEC,
+  scratchNamespace,
+} from '../src/agent/lurker.ts';
 import { StructuredContextProvider } from '../src/context/providers/structured.ts';
+import type { Bindings } from '../src/env.ts';
 import { EventStore } from '../src/event/event-store.ts';
 
 /**
@@ -138,5 +145,82 @@ describe('lurker/scribe (Case 3 / E2E-3)', () => {
     if ('error' in k1 || 'error' in k2) throw new Error('key resolution failed');
     expect(k1.key).toBe(k2.key);
     expect(k1.key).toBe(`agent:lurker/scribe#session:${SESSION}`);
+  });
+
+  // ── R33：@回答接真实模型（llm 注入面）——前缀恒定 + 正文 LLM/模板兜底 + @消息记 scratch ──
+
+  it('llm injected → answer = 「N 条上下文」前缀 + 模型文本; @消息记入 scratch; 上下文进 system', async () => {
+    await deliver(imMessage('c1', '早上好'));
+    let seen: ModelCallRequest | undefined;
+    const outcome = await runLurkerHarness(
+      env as unknown as Bindings,
+      imMessage('q9', '@watt 群里聊了啥'),
+      {
+        caller: {
+          async call(req) {
+            seen = req;
+            return { text: '大家在聊部署排期。' };
+          },
+        },
+        model: 'test-model',
+      },
+    );
+    expect(outcome).toMatchObject({ kind: 'result', output: { answered: true, llm: true } });
+    const store = new EventStore(env.DB_EVENTS);
+    const out = await store.list({ filter: { type: 'outbound.message' } });
+    if ('code' in out) throw new Error(out.message);
+    const text = String(
+      (out.items[0]?.payload as { content?: { text?: string } }).content?.text ?? '',
+    );
+    expect(text).toBe('（基于本群 1 条上下文）大家在聊部署排期。');
+    // 上下文行进了 system（不构成指令的引用块）；模型收到问句与模型名。
+    expect(seen?.system).toContain('早上好');
+    expect(seen?.prompt).toBe('群里聊了啥');
+    expect(seen?.model).toBe('test-model');
+    // @消息本身也记入 scratch（后续提问可引用）。
+    const provider = new StructuredContextProvider(env.DB_CONTEXT, scratchNamespace(SESSION));
+    const entry = await provider.get('q9');
+    expect('code' in entry).toBe(false);
+  });
+
+  it('llm caller throws → 回退模板文案（前缀保持）', async () => {
+    const outcome = await runLurkerHarness(
+      env as unknown as Bindings,
+      imMessage('q10', '@watt 在吗'),
+      {
+        caller: {
+          async call() {
+            throw new Error('model down');
+          },
+        },
+        model: 'test-model',
+      },
+    );
+    expect(outcome).toMatchObject({ kind: 'result', output: { answered: true, llm: false } });
+    const store = new EventStore(env.DB_EVENTS);
+    const out = await store.list({ filter: { type: 'outbound.message' } });
+    if ('code' in out) throw new Error(out.message);
+    const text = String(
+      (out.items[0]?.payload as { content?: { text?: string } }).content?.text ?? '',
+    );
+    expect(text).toContain('条上下文）你问：「在吗」');
+  });
+
+  it('toolScopes 纯路径条目 → 模型收到 htbp 三工具 + system 带使用说明', async () => {
+    let seen: ModelCallRequest | undefined;
+    await runLurkerHarness(env as unknown as Bindings, imMessage('q11', '@watt 有什么工具'), {
+      caller: {
+        async call(req) {
+          seen = req;
+          return { text: 'ok' };
+        },
+      },
+      model: 'test-model',
+      toolScopes: ['test', 'platform://scheduler'],
+    });
+    const names = (seen?.tools ?? []).map((t) => t.name);
+    expect(names).toContain('htbp_call');
+    expect(names).toContain('htbp_help');
+    expect(seen?.system).toContain('test');
   });
 });

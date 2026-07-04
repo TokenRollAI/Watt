@@ -152,7 +152,7 @@ await runE2e('e2e-3', async () => {
   } else {
     log.skip(
       '② TTL expiry wait',
-      'set E2E_WAIT_TTL=1 to wait ~2min for reclaim (mount ttl=120s asserted in unit tests)',
+      'set E2E_WAIT_TTL=1 to wait ~2min for reclaim (mount ttl=120s asserted in unit tests; 注意生产 gateway vars LURKER_SCRATCH_TTL_SEC=3600 时此等待路径不可用)',
     );
   }
 

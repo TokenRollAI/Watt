@@ -217,9 +217,27 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
   /** 按 state.harness 分发 harness（echo 无模型；llm 经 caller；lurker/* 潜伏逻辑，R31）。 */
   private async runHarness(args: DeliverArgs, caller?: ModelCaller): Promise<HarnessOutcome> {
     // lurker/*（Case 3 潜伏群聊）：定义名前缀分派——静默记 scratch / @提及出站回答（lurker.ts）。
+    //   R33：回答接真实模型（default provider 路由 + state.toolScopes HTBP 工具 + state.systemPrompt）；
+    //   模型缺配置（如本地测试无 key）→ llmOpts undefined → lurker 模板兜底（零回归）。
     if (this.state.definition.startsWith('lurker/')) {
       const { runLurkerHarness } = await import('./lurker.ts');
-      return runLurkerHarness(this.env as Bindings, args.event);
+      let llmOpts: import('./lurker.ts').LurkerLlmOptions | undefined;
+      try {
+        const routing = this.state.model === undefined ? await this.resolveModelRouting() : null;
+        const modelCaller = caller ?? (await this.buildDefaultCaller(routing?.secretRef));
+        llmOpts = {
+          caller: modelCaller,
+          model: this.state.model ?? routing?.model ?? 'glm-5.2',
+          ...(this.state.toolScopes !== undefined ? { toolScopes: this.state.toolScopes } : {}),
+          ...(this.state.systemPrompt !== undefined
+            ? { systemPrompt: this.state.systemPrompt }
+            : {}),
+          ...(args.claims !== undefined ? { claims: args.claims } : {}),
+        };
+      } catch {
+        llmOpts = undefined;
+      }
+      return runLurkerHarness(this.env as Bindings, args.event, llmOpts);
     }
     if (this.state.harness === 'llm') {
       // 模型/渠道解析（§9 / Case 5，R28 B7 / R32 修正）：def 显式声明 model.preferred（钉死）时
