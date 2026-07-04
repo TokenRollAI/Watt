@@ -1468,22 +1468,38 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
     .description('Register + wire the feishu channel-adapter plugin (idempotent 5 steps)')
     .requiredOption(
       '--endpoint <url>',
-      'watt-plugin-feishu worker HTTPS base URL (must be deployed & healthy)',
+      'plugin endpoint: HTTPS base URL, or binding:<NAME> for same-account service binding (recommended, e.g. binding:FEISHU_PLUGIN)',
+    )
+    .option(
+      '--webhook-url <url>',
+      'plugin worker public base URL for feishu console guidance (required info when --endpoint is binding:*)',
     )
     .option('--channel <id>', 'channel id to create (default: feishu)', 'feishu')
     .option('--encrypt', 'you plan to use encrypted mode (affects printed guidance only)', false)
-    .action(async (cmdOpts: { endpoint: string; channel: string; encrypt: boolean }) => {
-      const base = requireBaseUrl(env());
-      const token = requireToken(env(), credPath, opts.fs);
-      const result = await setupFeishu(
-        base,
-        token,
-        { endpoint: cmdOpts.endpoint, channelId: cmdOpts.channel, encrypt: cmdOpts.encrypt },
-        { fetch: opts.fetch },
-      );
-      if (asJson()) out(JSON.stringify(result));
-      else out(formatSetupGuidance(result));
-    });
+    .action(
+      async (cmdOpts: {
+        endpoint: string;
+        webhookUrl?: string;
+        channel: string;
+        encrypt: boolean;
+      }) => {
+        const base = requireBaseUrl(env());
+        const token = requireToken(env(), credPath, opts.fs);
+        const result = await setupFeishu(
+          base,
+          token,
+          {
+            endpoint: cmdOpts.endpoint,
+            webhookBaseUrl: cmdOpts.webhookUrl,
+            channelId: cmdOpts.channel,
+            encrypt: cmdOpts.encrypt,
+          },
+          { fetch: opts.fetch },
+        );
+        if (asJson()) out(JSON.stringify(result));
+        else out(formatSetupGuidance(result));
+      },
+    );
 
   let exitCode = 0;
   try {

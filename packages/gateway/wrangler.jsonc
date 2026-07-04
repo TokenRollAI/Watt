@@ -101,8 +101,12 @@
   // Service binding（marker 段外——service binding 不是 provision 管的 storage 资源，手写在此）。
   //   M4 Tool Gateway：/htbp/tools/* 代理到独立 Worker watt-toolbridge（部署次序：先 toolbridge 后
   //   gateway，见 scripts/deploy-all.mjs）。绑定名 TOOLBRIDGE（src/env.ts / src/http/tools-proxy.ts）。
+  //   M11 FEISHU_PLUGIN：watt-plugin-feishu（channel-adapter plugin，平台内 Worker 推荐形态——同账户
+  //   workers.dev 互调被平台拦截（探活/Send 收 404），必须走 service binding；注册 endpoint 用
+  //   `binding:FEISHU_PLUGIN`。部署次序：先 plugin 后 gateway。
   "services": [
-    { "binding": "TOOLBRIDGE", "service": "watt-toolbridge" }
+    { "binding": "TOOLBRIDGE", "service": "watt-toolbridge" },
+    { "binding": "FEISHU_PLUGIN", "service": "watt-plugin-feishu" }
   ],
   // Workflows（marker 段外——Workflows 绑定不是 provision 管的 storage 资源，手写在此）。
   //   M7 WattTaskWorkflow：Task 引擎（Cloudflare Workflows，§8 TaskManager / §3.4 Workflows 适配）。

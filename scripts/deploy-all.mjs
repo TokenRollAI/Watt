@@ -137,23 +137,25 @@ steps.push({
   cmd: ['pnpm', '--filter', 'watt-toolbridge', 'exec', 'wrangler', 'deploy'],
 });
 
-steps.push({
-  name: 'deploy watt-gateway',
-  cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
-});
-
 // watt-plugin-feishu（M11 channel-adapter plugin，P1 飞书 plugin 化）：独立 Worker，自持回调 + §11.4 出站面。
-// 与 gateway 无部署顺序依赖（无 service binding 指向它——gateway 经 HTTPS §11.4 调用，plugin 经 registry
-// 注册）。可选（--skip-plugins 跳过）。其 secrets（FEISHU_* / WATT_PLUGIN_TOKEN / WATT_BASE_URL）由
-// checkPluginSecrets 单独预检；首次注册用 `watt setup feishu --endpoint <plugin-url>`（见报告线上步骤）。
+// **必须先于 gateway 部署**——gateway 的 service binding FEISHU_PLUGIN 指向此 Worker（同账户 workers.dev
+// 互调被平台拦截，HTTPS endpoint 不可用，走平台内 Worker 推荐形态）。--skip-plugins 时若 gateway 保留该
+// binding 且目标 Worker 从未部署过，gateway deploy 会失败（首次拉起勿跳）。其 secrets（FEISHU_* /
+// WATT_PLUGIN_TOKEN / WATT_BASE_URL）由 checkPluginSecrets 单独预检；首次注册用
+// `watt setup feishu --endpoint binding:FEISHU_PLUGIN`。
 if (!skipPlugins) {
   steps.push({
-    name: 'deploy watt-plugin-feishu (channel-adapter plugin; independent Worker)',
+    name: 'deploy watt-plugin-feishu (before gateway; gateway service binding depends on it)',
     cmd: ['pnpm', '--filter', '@watt/plugin-feishu', 'exec', 'wrangler', 'deploy'],
   });
 } else {
   console.log('deploy-all: --skip-plugins set, skipping plugin worker deploys.');
 }
+
+steps.push({
+  name: 'deploy watt-gateway',
+  cmd: ['pnpm', '--filter', '@watt/gateway', 'exec', 'wrangler', 'deploy'],
+});
 
 // watt-dashboard（M10 Management）：静态 React SPA 部署到 Cloudflare Pages。可选（--skip-dashboard 跳过）。
 // 先 `pnpm --filter @watt/dashboard build`（Vite → packages/dashboard/dist）再 `wrangler pages deploy`。

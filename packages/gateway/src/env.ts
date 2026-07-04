@@ -58,6 +58,10 @@ export interface Bindings {
   // Service binding（M4 Tool Gateway）：/htbp/tools/* 代理到独立 Worker watt-toolbridge
   // （集成方案 A；转发 + Check PEP + 错误形状转换在 http/tools-proxy.ts）。
   TOOLBRIDGE: Fetcher;
+  // Service binding（M11 channel-adapter plugin，平台内 Worker 推荐形态）：watt-plugin-feishu。
+  //   同账户 workers.dev 互调被平台拦截（404），故不用 HTTPS endpoint；plugin-sender 按注册 endpoint
+  //   `binding:FEISHU_PLUGIN` 动态查 env 取此 Fetcher。可选绑定（未部署 plugin 的环境可从 wrangler.jsonc 移除）。
+  FEISHU_PLUGIN?: Fetcher;
   // Durable Objects（M2 Agent Runtime，Phase 4）
   //   AGENT_INSTANCE：Agents SDK Agent 实例宿主（每实例一 DO，getAgentByName 恒路由同实例）。
   //   AGENT_CORRELATION：correlation 等待表（§3.4 定向回送/超时/终止代发，单例 idFromName('correlation')）。

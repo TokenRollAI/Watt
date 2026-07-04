@@ -37,8 +37,13 @@ export const LURKER_SCRIBE_DEF = {
 };
 
 export interface SetupFeishuOptions {
-  /** plugin worker HTTPS base URL（如 https://watt-plugin-feishu.<sub>.workers.dev）。 */
+  /**
+   * plugin worker endpoint：HTTPS base URL（外部部署）或 `binding:<NAME>`（平台内 Worker 推荐形态——
+   * 同账户 workers.dev 互调被平台拦截，同账户部署必须走 gateway service binding，如 binding:FEISHU_PLUGIN）。
+   */
   endpoint: string;
+  /** 飞书后台事件订阅回调 URL 基址（仅指引打印用）。endpoint 为 binding: 形态时必须由此提供 plugin 公网 URL。 */
+  webhookBaseUrl?: string;
   /** 渠道 id（缺省 'feishu'；出站分发器按 adapter='feishu' 解析到 channel-feishu plugin）。 */
   channelId?: string;
   /** 推荐加密模式（仅影响打印指引文案，不改行为）。 */
@@ -49,6 +54,7 @@ export interface SetupFeishuResult {
   pluginId: string;
   channelId: string;
   endpoint: string;
+  webhookBaseUrl?: string;
   pluginToken: string;
   jwksUrl: string;
   platformBaseUrl: string;
@@ -124,6 +130,7 @@ export async function setupFeishu(
     pluginId: PLUGIN_ID,
     channelId,
     endpoint: opts.endpoint.replace(/\/+$/, ''),
+    webhookBaseUrl: opts.webhookBaseUrl?.replace(/\/+$/, ''),
     pluginToken: reg.pluginToken,
     jwksUrl: reg.jwksUrl,
     platformBaseUrl: reg.platformBaseUrl,
@@ -133,7 +140,11 @@ export async function setupFeishu(
 
 /** 人类可读的部署/后台指引（不含把 pluginToken 明文写进日志的风险提示——token 单独一行供复制）。 */
 export function formatSetupGuidance(r: SetupFeishuResult): string {
-  const webhookUrl = `${r.endpoint}/webhook/event`;
+  // binding: 形态无公网 URL——回调基址须经 --webhook-url 提供，否则给占位提示。
+  const webhookBase =
+    r.webhookBaseUrl ??
+    (r.endpoint.startsWith('binding:') ? '<plugin worker public URL>' : r.endpoint);
+  const webhookUrl = `${webhookBase}/webhook/event`;
   const lines = [
     `✓ registered plugin ${r.pluginId} (channel-adapter) @ ${r.endpoint}`,
     `✓ channel '${r.channelId}' set (adapter=feishu)`,
