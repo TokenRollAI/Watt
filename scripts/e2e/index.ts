@@ -18,7 +18,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 /** 六条注册表：已实现的指向脚本；未实现的标 TODO（R29~R31 逐轮补齐）。 */
 const SUITE: Record<string, string | null> = {
-  '1': null, // R29: auto-delivery-lite 真实化后接入
+  '1': resolve(here, 'e2e-1.ts'),
   '2': null, // R30: deep-research 真实化后接入
   '3': null, // R31: 潜伏群聊 agent 后接入
   '4': null, // R32: 权限对照

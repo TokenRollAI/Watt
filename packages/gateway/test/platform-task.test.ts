@@ -177,6 +177,10 @@ describe('POST /htbp/platform/task — Update / Cancel / Signal (§8)', () => {
     const taskId = 'rt-sig-ok';
     const store = new TaskStore(env.DB_EVENTS);
     await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    // R29：locate 改 expect fan-in——本地无 consumer 回送，令其超时以推进到 checkpoint。
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-locate' });
+    });
     await call(token, 'Write', { request: { definition: 'auto-delivery-lite', taskId } });
     // 轮询等任务进 waiting_human（以状态表为真源，§8 引擎驱动状态）。
     let waiting = false;

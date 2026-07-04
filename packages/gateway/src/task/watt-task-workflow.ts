@@ -77,6 +77,35 @@ function eventNameOrThrow(v: string | { message: string }): string {
   throw new Error(`invalid workflows event name: ${v.message}`);
 }
 
+/**
+ * checkpoint 通知目标解析（R29 B4）：input.notify {channel,target} 存在则用之（E2E-1/2 发飞书群
+ *   `{channel:'feishu-main', target:<chat_id>}`）；缺省回落 CLI/createdBy（原行为，零回归）。
+ */
+function notifyFromInput(
+  input: unknown,
+  createdBy: string,
+): {
+  channel: string;
+  target: string;
+} {
+  if (typeof input === 'object' && input !== null && 'notify' in input) {
+    const n = (input as { notify?: { channel?: unknown; target?: unknown } }).notify;
+    if (n !== undefined && typeof n.channel === 'string' && typeof n.target === 'string') {
+      return { channel: n.channel, target: n.target };
+    }
+  }
+  return { channel: 'cli', target: createdBy };
+}
+
+/** 从 input 取 bug 标题（{title:string} 形状）；不符 → undefined（调用方回落缺省标题）。 */
+function extractTitle(input: unknown): string | undefined {
+  if (typeof input === 'object' && input !== null && 'title' in input) {
+    const t = (input as { title?: unknown }).title;
+    if (typeof t === 'string' && t.length > 0) return t;
+  }
+  return undefined;
+}
+
 /** waitForEvent<T>/step.do<T> 要求 T extends Rpc.Serializable<T>：bare unknown 不满足、递归 JSON 触发
  *  深实例化（TS2589）。故事件 payload 用一层深的可序列化 record（primitive 值），够本模板顶层判定用；
  *  嵌套结构的完整投影不在 Workflow 侧读（存 TaskStore 的 steps output 用 unknown 承载全量）。 */
@@ -254,8 +283,12 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
   }
 
   /**
-   * auto-delivery-lite（E2E-1 精简）：登记 bug（DB 直写桩）→ agent 定位（echo 桩）→ 上线确认
-   * checkpoint → 完成。DoD 只要求 run→waiting_human→signal→恢复→done 与 cancel 链路，桩从简。
+   * auto-delivery-lite（E2E-1）：登记 bug（**真实写 context://feedback/bugs**，status:open）→ agent
+   * 定位（echo，**expect fan-in——接力链 agent.result 留痕**）→ 上线确认 checkpoint（notify 可参数化
+   * 发飞书群）→ approve 后 bug 置 fixed → 完成。R29 B2/B4 真实化（原桩注释声明的收口）。
+   *
+   * feedback/bugs namespace：惰性挂载（不存在则 mount structured）——E2E 免手工前置；结构化条目
+   * {title, status: open→fixed, taskId}，路径 = taskId（每任务一条，重放幂等：write 是 upsert）。
    */
   private async runAutoDeliveryLite(
     params: TaskWorkflowParams,
@@ -263,10 +296,17 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
     store: TaskStore,
   ): Promise<unknown> {
     const checkpoint = 'confirm-release';
+    const bugPath = params.taskId;
 
-    // 1) 登记 bug（桩：记一个 step，真实 context:// 写入留 Phase 6/收口）。
+    // 1) 登记 bug：真实写 context://feedback/bugs/<taskId>（status:open，判据①前半）。
     await step.do('register-bug', async () => {
       const now = new Date().toISOString();
+      await this.writeBugEntry(bugPath, {
+        title: extractTitle(params.input) ?? `bug via task ${params.taskId}`,
+        status: 'open',
+        taskId: params.taskId,
+        reportedAt: now,
+      });
       await store.appendStep(
         params.taskId,
         { name: 'register-bug', state: 'done', startedAt: now, output: params.input },
@@ -274,20 +314,49 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
       );
     });
 
-    // 2) agent 定位（echo 桩：即发即忘，不 fan-in——桩从简）。
-    await step.do('locate', async () => {
+    // 2) agent 定位（echo + expect fan-in）：接力链上这一跳产真实 agent.result 留痕（判据②）。
+    const locateCid = await step.do('locate', async () => {
       const runtime = new AgentRuntime(defaultRuntimeDeps(this.env));
-      const spawn = await runtime.spawn({
-        definition: 'echo',
-        instanceKey: `task:${params.taskId}#locate`,
-        input: { taskId: params.taskId, phase: 'locate' },
-      });
+      const cid = genCorrelationId(() => crypto.randomUUID());
+      const spawn = await runtime.spawn(
+        {
+          definition: 'echo',
+          instanceKey: `task:${params.taskId}#locate`,
+          input: { taskId: params.taskId, phase: 'locate' },
+          expect: { correlationId: cid, timeoutMs: 5 * 60_000 },
+        },
+        { taskWaiter: params.taskId },
+      );
       if ('code' in spawn) throw new Error(`locate agent spawn failed: ${spawn.message}`);
-      const now = new Date().toISOString();
-      await store.appendStep(params.taskId, { name: 'locate', state: 'done', startedAt: now }, now);
+      return cid;
     });
+    try {
+      const located = await step.waitForEvent<AgentResultEventPayload>('await-locate', {
+        type: eventNameOrThrow(agentResultEventName(locateCid)),
+        timeout: AGENT_RESULT_TIMEOUT,
+      });
+      await step.do('record-locate', async () => {
+        const now = new Date().toISOString();
+        const state = located.payload.status === 'result' ? 'done' : 'failed';
+        await store.appendStep(
+          params.taskId,
+          { name: 'locate', state, startedAt: now, output: located.payload.output },
+          now,
+        );
+      });
+    } catch (_err) {
+      // 定位超时：记 failed step，流程继续（人确认时可拒绝）——不因单跳失败卡死任务。
+      await step.do('record-locate', async () => {
+        const now = new Date().toISOString();
+        await store.appendStep(
+          params.taskId,
+          { name: 'locate', state: 'failed', startedAt: now, output: { reason: 'timeout' } },
+          now,
+        );
+      });
+    }
 
-    // 3) 上线确认 checkpoint（§1.1）。
+    // 3) 上线确认 checkpoint（§1.1）。notify 可由 input.notify 参数化（发飞书群，B4）。
     await step.do('request-release-confirmation', async () => {
       const now = new Date().toISOString();
       await store.setCheckpoint(
@@ -300,7 +369,7 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
         checkpoint,
         prompt: '确认上线修复？',
         options: ['approve', 'reject'],
-        notify: { channel: 'cli', target: params.createdBy },
+        notify: notifyFromInput(params.input, params.createdBy),
       });
     });
 
@@ -331,16 +400,45 @@ export class WattTaskWorkflow extends WorkflowEntrypoint<Bindings, TaskWorkflowP
       return { released: false };
     }
 
-    // 5) 完成。
+    // 5) 完成：bug status open→fixed（判据①后半）+ 任务 done。
     return await step.do('complete-release', async () => {
       const now = new Date().toISOString();
+      await this.writeBugEntry(bugPath, {
+        title: extractTitle(params.input) ?? `bug via task ${params.taskId}`,
+        status: 'fixed',
+        taskId: params.taskId,
+        fixedAt: now,
+      });
       await store.appendStep(
         params.taskId,
         { name: 'release', state: 'done', startedAt: now },
         now,
       );
       await store.setState(params.taskId, 'done', now, 'release');
-      return { released: true };
+      return { released: true, bug: `context://feedback/bugs/${bugPath}` };
     });
+  }
+
+  /**
+   * 写 feedback/bugs 条目（structured provider 直写，namespace 惰性挂载）。
+   * 动态 import 避免 Workflow 模块顶层耦合 DO/provider 链（对齐 task-events 模式）。
+   */
+  private async writeBugEntry(path: string, bug: Record<string, string>): Promise<void> {
+    const registry = this.env.CONTEXT_REGISTRY.get(
+      this.env.CONTEXT_REGISTRY.idFromName('registry'),
+    );
+    const mount = await registry.get('feedback/bugs');
+    if ('code' in mount) {
+      // not_found → 惰性挂载（其它错误也走一次 write：幂等 upsert，失败由下方 provider 写暴露）。
+      await registry.write({ namespace: 'feedback/bugs', provider: 'structured' });
+    }
+    const { StructuredContextProvider } = await import('../context/providers/structured.ts');
+    const provider = new StructuredContextProvider(this.env.DB_CONTEXT, 'feedback/bugs');
+    const res = await provider.write(path, {
+      content: JSON.stringify(bug),
+      contentType: 'application/json',
+      metadata: { status: bug.status ?? '' },
+    });
+    if ('code' in res) throw new Error(`feedback/bugs write failed: ${res.message}`);
   }
 }

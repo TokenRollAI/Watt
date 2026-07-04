@@ -82,6 +82,14 @@ describe('auto-delivery-lite: run → waiting_human → signal → resume → do
     );
     if ('code' in info) throw new Error(`write failed: ${info.message}`);
 
+    // R29：locate 改 expect fan-in（接力链留痕）——本地无 consumer 回送，mock locate 结果推进。
+    const locateCid = (await instance.waitForStepResult({ name: 'locate' })) as string;
+    await instance.modify(async (m) => {
+      const type = agentResultEventName(locateCid);
+      if (typeof type !== 'string') throw new Error('bad event name');
+      await m.mockEvent({ type, payload: { status: 'result', output: { located: true } } });
+    });
+
     // 等实例进 waiting_human（waitForEvent confirm-release，以状态表为真源）。
     await waitForCheckpoint(store, taskId, 'confirm-release');
 
@@ -97,6 +105,20 @@ describe('auto-delivery-lite: run → waiting_human → signal → resume → do
     expect(output.released).toBe(true);
     const done = await store.getInfo(taskId);
     expect(done?.state).toBe('done');
+
+    // R29 判据①：feedback/bugs 条目 status 走完 open→fixed（approve 后为 fixed，版本 >1 证明重写过）。
+    const { StructuredContextProvider } = await import('../src/context/providers/structured.ts');
+    const bug = await new StructuredContextProvider(env.DB_CONTEXT, 'feedback/bugs').get(taskId);
+    if ('code' in bug) throw new Error(`bug entry missing: ${bug.message}`);
+    const bugBody = JSON.parse(String(bug.content)) as { status: string };
+    expect(bugBody.status).toBe('fixed');
+    expect(Number(bug.version)).toBeGreaterThan(1); // open 先写、fixed 后写。
+    // 判据②：locate 这一跳有真实 agent.result 留痕（steps 里 locate=done 且带 output）。
+    const detail = await store.getDetail(taskId);
+    if ('code' in detail) throw new Error('detail not_found');
+    const locate = detail.steps.find((st) => st.name === 'locate');
+    expect(locate?.state).toBe('done');
+    expect(locate?.output).toEqual({ located: true });
   }, 15000);
 
   it('Signal outside waiting → conflict (DoD §7)', async () => {
@@ -124,6 +146,10 @@ describe('auto-delivery-lite: run → waiting_human → signal → resume → do
     const store = new TaskStore(env.DB_EVENTS);
 
     await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    // locate（expect fan-in）本地无 consumer 回送——直接令其超时以推进到 checkpoint。
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-locate' });
+    });
     await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'user:alice');
     await waitForCheckpoint(store, taskId, 'confirm-release');
 
@@ -149,8 +175,9 @@ describe('checkpoint timeout: waitForEvent 超时 → catch 落 failed（§3.4 c
     const store = new TaskStore(env.DB_EVENTS);
 
     await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
-    // create 前预设：强制 await-release-confirmation 的 waitForEvent 立即超时。
+    // create 前预设：locate 与 release-confirmation 两个 waitForEvent 都立即超时。
     await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-locate' });
       await m.forceEventTimeout({ name: 'await-release-confirmation' });
     });
     await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'user:alice');
@@ -257,6 +284,9 @@ describe('Cancel: run → waiting → cancel → terminated (§8 / §3.4 规则 
     const store = new TaskStore(env.DB_EVENTS);
 
     await using instance = await introspectWorkflowInstance(env.WATT_TASK, taskId);
+    await instance.modify(async (m) => {
+      await m.forceEventTimeout({ name: 'await-locate' });
+    });
     await manager.write({ definition: 'auto-delivery-lite', input: {}, taskId }, 'user:alice');
     await waitForCheckpoint(store, taskId, 'confirm-release');
 
