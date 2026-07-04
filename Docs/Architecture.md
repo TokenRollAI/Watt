@@ -322,6 +322,11 @@ Case 6 中 Manage Agent 正是先 `ContextProvider.Write` 存脚本、再调用 
 - Manage Agent 本身受 Auth 约束：它替 admin 操作时才有 admin 权限（委托链，见 M5）——不会成为提权后门。
 - Case 6 的流程：admin 对话 → `manage/cron` Agent 生成任务脚本 → 调用 `Scheduler.Write` → 完成。
 
+**工具注入的两条路径**（通用机制 vs manage 直调捷径）：
+
+- **通用机制（任意 def）**：`AgentDefinition.toolScopes` 的**纯路径条目**声明该 Agent 可见的工具树前缀，运行时据此注入三个通用 HTBP 工具（`htbp_help`/`htbp_skill`/`htbp_call`，见 Proto §3.1），经与 `/htbp/tools` 消费面**同一套 Check PEP + 委托链**调用 Tool Layer——这是所有 Agent 获得工具能力的规范路径，权限不旁路。
+- **manage 直调捷径（`manage/*` 特例）**：`manage/*` Agent 把该层平台接口（如 `Scheduler.Write/List`）经 `builtin` Provider 暴露为进程内直调工具（`toolScopes` 用 `platform://<层>` 这类含 `://` 的条目标记，**不参与**上述 HTBP 三工具生成）。这是为降低"对话式管理"门槛的性能捷径（省一次 HTBP 往返），语义仍受同一 Authorizer.Check + 委托链约束（`createdBy = 委托链 principal`），不构成提权后门。二者在 Auth 面完全等价，仅调用传输不同。
+
 ### Dashboard
 
 - 落地：Cloudflare Pages（React）+ Platform API。

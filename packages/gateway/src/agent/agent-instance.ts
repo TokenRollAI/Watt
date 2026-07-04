@@ -45,6 +45,10 @@ export interface AgentInstanceState {
   harness: string;
   /** 模型名（llm harness 用；ModelProvider 解析或 env 缺省）。 */
   model?: string;
+  /** 工具树前缀（§3.1 toolScopes）——纯路径条目注入 HTBP 三工具。缺省容 undefined 走旧行为（零迁移）。 */
+  toolScopes?: string[];
+  /** 系统提示（§3.1 systemPrompt）——onEvent 拼装 system 提示第①段。缺省容 undefined。 */
+  systemPrompt?: string;
   /** 父实例 id（派生自，§3.2 parent）。 */
   parent?: string;
   /** 子实例 id 列表（§3.2 children）。 */
@@ -95,6 +99,8 @@ export interface AgentInstanceRpc {
     definition: string;
     harness: string;
     model?: string;
+    toolScopes?: string[];
+    systemPrompt?: string;
     input?: unknown;
     parent?: string;
     nowIso: string;
@@ -126,6 +132,8 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
     definition: string;
     harness: string;
     model?: string;
+    toolScopes?: string[];
+    systemPrompt?: string;
     input?: unknown;
     parent?: string;
     nowIso: string;
@@ -139,6 +147,8 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       status: 'idle',
       harness: args.harness,
       model: args.model,
+      toolScopes: args.toolScopes,
+      systemPrompt: args.systemPrompt,
       input: args.input,
       parent: args.parent,
       children: [],
@@ -221,16 +231,43 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       const model = this.state.model ?? routing?.model ?? 'glm-5.2';
       const usages: { inputTokens: number; outputTokens: number }[] = [];
 
-      // manage/* Agent：解出该层 ~skill system prompt + 工具（execute 过 Check + 调 Manager，
-      //   claims = 委托链）。工具仅在 claims 存在时构造（无 claims 无法过 Check）——非 manage 层
-      //   或缺 claims 时 tools/systemOverride 为空，走原有单次调用行为（零回归）。
-      const binding = resolveManageBinding(this.state.definition);
+      // 工具注入（两条路径，Proto §3.1 / Architecture M10）+ system prompt 拼装：
+      //   ① toolScopes 纯路径条目（无 `://`）→ HTBP 三工具（htbp_help/skill/call，经 tool-invoker）。
+      //   ② manage/* 层 → scheduler 等 builtin 直调工具 + ~skill prompt（捷径特例）。
+      // 工具仅在 claims 存在时构造（无 claims 无法过 Check）；两者皆无时 tools/systemOverride 为空，
+      //   走原有单次调用行为（零回归）。system 拼装顺序：def.systemPrompt → HTBP 说明段 → manage prompt。
       const env = this.env as Bindings;
-      const tools =
-        binding !== undefined && args.claims !== undefined
-          ? binding.buildTools(env, args.claims, args.event.traceId)
-          : undefined;
-      const systemOverride = binding?.systemPrompt;
+      const claims = args.claims;
+      const pureScopes = (this.state.toolScopes ?? []).filter((s) => !s.includes('://'));
+      const binding = resolveManageBinding(this.state.definition);
+
+      const tools: import('./harness/types.ts').HarnessTool[] = [];
+      if (pureScopes.length > 0 && claims !== undefined) {
+        const { createHtbpTools } = await import('./harness/htbp-tools.ts');
+        const { newAuthorizer } = await import('../audit/audit-sink.ts');
+        tools.push(
+          ...createHtbpTools({
+            env,
+            claims,
+            authorizer: newAuthorizer(env, args.event.traceId),
+            toolScopes: pureScopes,
+          }),
+        );
+      }
+      if (binding !== undefined && claims !== undefined) {
+        tools.push(...binding.buildTools(env, claims, args.event.traceId));
+      }
+
+      const promptParts: string[] = [];
+      if (this.state.systemPrompt !== undefined && this.state.systemPrompt.length > 0) {
+        promptParts.push(this.state.systemPrompt);
+      }
+      if (pureScopes.length > 0) {
+        const { buildHtbpSystemSection } = await import('./harness/htbp-tools.ts');
+        promptParts.push(buildHtbpSystemSection(pureScopes));
+      }
+      if (binding?.systemPrompt !== undefined) promptParts.push(binding.systemPrompt);
+      const systemOverride = promptParts.length > 0 ? promptParts.join('\n\n') : undefined;
 
       const outcome = await llmHarness(
         {
@@ -238,7 +275,7 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
           schema: args.schema,
           model,
           maxAttempts: args.maxAttempts,
-          ...(tools !== undefined && tools.length > 0 ? { tools } : {}),
+          ...(tools.length > 0 ? { tools } : {}),
         },
         modelCaller,
         // Metrics 打点（§10）：每次模型调用产一条 usage，收集后统一写（重试多次则多行）。
