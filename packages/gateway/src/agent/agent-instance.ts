@@ -204,8 +204,13 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
     return { accepted: true };
   }
 
-  /** 按 state.harness 分发 harness（echo 无模型；llm 经 caller）。 */
+  /** 按 state.harness 分发 harness（echo 无模型；llm 经 caller；lurker/* 潜伏逻辑，R31）。 */
   private async runHarness(args: DeliverArgs, caller?: ModelCaller): Promise<HarnessOutcome> {
+    // lurker/*（Case 3 潜伏群聊）：定义名前缀分派——静默记 scratch / @提及出站回答（lurker.ts）。
+    if (this.state.definition.startsWith('lurker/')) {
+      const { runLurkerHarness } = await import('./lurker.ts');
+      return runLurkerHarness(this.env as Bindings, args.event);
+    }
     if (this.state.harness === 'llm') {
       // 模型/渠道解析（§9 / Case 5，R28 B7 接线）：def 显式声明 model.preferred 优先；缺省时
       //   查 ModelProviderRegistry 的 default 渠道（set-default 切换后下一次调用即走新渠道——

@@ -20,7 +20,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SUITE: Record<string, string | null> = {
   '1': resolve(here, 'e2e-1.ts'),
   '2': resolve(here, 'e2e-2.ts'),
-  '3': null, // R31: 潜伏群聊 agent 后接入
+  '3': resolve(here, 'e2e-3.ts'),
   '4': null, // R32: 权限对照
   '5': resolve(here, 'e2e-5.ts'),
   '6': resolve(here, 'e2e-6.ts'),
