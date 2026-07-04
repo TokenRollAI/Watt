@@ -39,6 +39,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 统一错误文案：403（权限失败）显示"当前 token 无权限"而非把 WattError 原文抛出；网络错误（status 0）
+ * 提示可重试；其余用后端 message。视图层 catch 一律经此，避免 permission_denied 崩溃/裸码泄露。
+ */
+export function formatError(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 403) return '当前 token 无权限（permission denied）';
+    if (e.status === 0) return `${e.message}（网络错误，可重试）`;
+    return e.message;
+  }
+  return String(e);
+}
+
 /** POST 一个 HTBP 方法到 /htbp/platform/<module>，携带 Bearer token。非 2xx → ApiError（裸 WattError）。 */
 export async function htbp<T>(
   module: string,
@@ -126,6 +139,48 @@ export interface MetricSeries {
   points: { t: string; v: number }[];
 }
 
+// ─── P6 配置面类型（SecretStore / ChannelRegistry / PluginRegistry / ModelProviderRegistry）────
+
+/** SecretStore.List/Get 元数据（§6.6，永不含明文）。updatedAt env-only 影子名为 null。 */
+export interface SecretMeta {
+  name: string;
+  updatedAt: string | null;
+  shadowedByEnv: boolean;
+}
+/** ChannelConfig（§2.2）——settings 不透明对象。 */
+export interface ChannelConfig {
+  id: string;
+  adapter: string;
+  enabled: boolean;
+  settings: Record<string, unknown>;
+  defaultAgent?: string;
+}
+/** PluginManifest（§11.1）——List/Get 投影（无 built_in/pluginToken）。 */
+export interface PluginManifest {
+  id: string;
+  kind: string;
+  interfaceVersion: string;
+  endpoint: string;
+  auth: { kind: string; secretRef?: string };
+  requiredGrants: { resources: string[]; actions: string[] }[];
+  healthPath: string;
+  enabled: boolean;
+}
+/** PluginLifecycle.Health（§11.2）。 */
+export interface PluginHealth {
+  healthy: boolean;
+  detail?: string;
+}
+/** ModelProviderPublic（§9）——List/Get 脱敏投影**不含 secretRef**（永不回显）。 */
+export interface ModelProviderPublic {
+  id: string;
+  vendor: string;
+  models: string[];
+  priority: number;
+  default: boolean;
+  enabled: boolean;
+}
+
 export const api = {
   // Agents（AgentRegistry.List + AgentRuntime.ListInstances）
   listAgentDefs: () => htbp<Page<AgentDefinition>>('agent', 'List', { opts: {} }),
@@ -147,6 +202,31 @@ export const api = {
     htbp<{ series: MetricSeries[] }>('metrics', 'Query', {
       query: { metric, range: { from, to } },
     }),
+  // ── SecretStore（§6.6）——List/Write/Delete。**args 直取 name/value（非 opts 信封）**，
+  //   响应永不含明文：List → items[{name,updatedAt,shadowedByEnv}]；Write → {secret:{name,updatedAt}}；
+  //   Delete → {deleted}。value 提交后视图层立即清空 state（不入日志/不回显）。
+  listSecrets: () => htbp<Page<SecretMeta>>('secret', 'List', {}),
+  writeSecret: (name: string, value: string) =>
+    htbp<{ secret: { name: string; updatedAt: string } }>('secret', 'Write', { name, value }),
+  deleteSecret: (name: string) => htbp<{ deleted: boolean }>('secret', 'Delete', { name }),
+  // ── ChannelRegistry（§2.2）——List → 裸 Page{items}；Update → {channel}（patch=局部字段）。
+  listChannels: () => htbp<Page<ChannelConfig>>('channel', 'List', { opts: {} }),
+  updateChannel: (channelId: string, patch: Record<string, unknown>) =>
+    htbp<{ channel: ChannelConfig }>('channel', 'Update', { channelId, patch }),
+  // ── PluginRegistry（§11.1/§11.2）——List → {items}；Get → {plugin}；Health → {health}。
+  listPlugins: () => htbp<Page<PluginManifest>>('plugin', 'List', { opts: {} }),
+  getPlugin: (pluginId: string) => htbp<{ plugin: PluginManifest }>('plugin', 'Get', { pluginId }),
+  pluginHealth: (pluginId: string) =>
+    htbp<{ health: PluginHealth }>('plugin', 'Health', { pluginId }),
+  // ── ModelProviderRegistry（§9）——List → 裸 Page{items}（脱敏，无 secretRef）；
+  //   Write/Update/SetDefault → {provider}。Write 需完整 provider（含 secretRef）。
+  listProviders: () => htbp<Page<ModelProviderPublic>>('provider', 'List', { opts: {} }),
+  writeProvider: (provider: Record<string, unknown>) =>
+    htbp<{ provider: ModelProviderPublic }>('provider', 'Write', { provider }),
+  updateProvider: (providerId: string, patch: Record<string, unknown>) =>
+    htbp<{ provider: ModelProviderPublic }>('provider', 'Update', { providerId, patch }),
+  setDefaultProvider: (providerId: string) =>
+    htbp<{ provider: ModelProviderPublic }>('provider', 'SetDefault', { providerId }),
   // whoami（GET /htbp/platform/whoami，token 校验 + principal 展示）
   whoami: () => whoamiGet(),
 };
