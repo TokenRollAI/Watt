@@ -156,7 +156,25 @@ describe('POST /htbp/platform/event (§2.3)', () => {
     });
     expect(pol.status).toBe(200);
 
-    // channel-feishu 是内置种子 plugin（enabled）；以其 pluginToken Publish 一条 im 规约事件。
+    // channel-feishu 不再内置种子（P1）——注册一个 enabled channel-adapter plugin（binding: 端点跳过探活）。
+    const reg = await post('/htbp/platform/plugin', admin, {
+      tool: 'Write',
+      arguments: {
+        manifest: {
+          id: 'channel-feishu',
+          kind: 'channel-adapter',
+          interfaceVersion: 'channel-adapter/v1',
+          endpoint: 'binding:feishu-test',
+          auth: { kind: 'platform-token' },
+          requiredGrants: [{ resources: ['event://'], actions: ['write'] }],
+          healthPath: '/healthz',
+          enabled: true,
+        },
+      },
+    });
+    expect(reg.status).toBe(200);
+
+    // 以其 pluginToken Publish 一条 im 规约事件（§2.1 push 豁免保留 kind='im'）。
     const token = await signPlugin('channel-feishu');
     const res = await post('/htbp/platform/event', token, {
       tool: 'Publish',

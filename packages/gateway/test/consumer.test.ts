@@ -6,7 +6,7 @@ import {
   getQueueResult,
   runInDurableObject,
 } from 'cloudflare:test';
-import type { Event, OutboundMessage, Subscription } from '@watt/core';
+import type { ChannelConfig, Event, OutboundMessage, Subscription } from '@watt/core';
 import { getAgentByName } from 'agents';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInstance, AgentInstanceRpc } from '../src/agent/agent-instance.ts';
@@ -25,7 +25,7 @@ import {
 import type { EventQueueSender } from '../src/event/event-bus.ts';
 import type { EventRouter } from '../src/event/event-router.ts';
 import { EventStore } from '../src/event/event-store.ts';
-import type { FeishuSender, FeishuSendResult } from '../src/event/feishu-sender.ts';
+import type { OutboundDispatchResult, PluginSender } from '../src/event/plugin-sender.ts';
 import { TaskStore } from '../src/task/task-store.ts';
 
 // DurableObjectStub 用 ambient global（与 env.EVENT_ROUTER.get 返回同源）。
@@ -91,7 +91,7 @@ function makeDeps(over: {
   channels?: ChannelStore;
   signaler?: TaskSignaler;
   agent?: AgentDeliverer;
-  feishu?: FeishuSender;
+  sender?: PluginSender;
 }): ConsumerDeps {
   return {
     deliverer: over.deliverer,
@@ -101,21 +101,27 @@ function makeDeps(over: {
     channels: over.channels ?? new ChannelStore(env.DB_EVENTS),
     signaler: over.signaler ?? recordingSignaler(),
     agent: over.agent ?? noopAgentDeliverer,
-    feishu: over.feishu ?? recordingFeishu(),
+    sender: over.sender ?? recordingSender(),
     genId: () => 'gen-id',
     now: () => '2026-07-03T00:00:00.000Z',
     genTraceId: () => 'gen-trace',
   };
 }
 
-/** 内存飞书 sender：记录送出的 OutboundMessage；可配置为失败。 */
-function recordingFeishu(
-  result: FeishuSendResult = { ok: true, messageId: 'om-1' },
-): FeishuSender & { sent: OutboundMessage[] } {
+/** 内存出站分发器：记录 (channel,message,opts)；可配置返回结果。 */
+function recordingSender(
+  result: OutboundDispatchResult = { ok: true, channelMessageId: 'om-1' },
+): PluginSender & {
+  sent: Array<{
+    channel: ChannelConfig;
+    message: OutboundMessage;
+    opts: { requestId: string; traceId?: string };
+  }>;
+} {
   return {
     sent: [],
-    async send(message: OutboundMessage) {
-      this.sent.push(message);
+    async send(channel, message, opts) {
+      this.sent.push({ channel, message, opts });
       return result;
     },
   };
@@ -766,7 +772,7 @@ describe('defaultTaskSignaler production wiring (§1.1 规则 2, four branches)'
   });
 });
 
-describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', () => {
+describe('Queue consumer outbound.message → 通用出站分发器 (§2.1/§11.4 P1)', () => {
   async function seedFeishuChannel(id: string, adapter = 'feishu'): Promise<void> {
     const channels = new ChannelStore(env.DB_EVENTS);
     await channels.write({ id, adapter, enabled: true, settings: {} });
@@ -780,12 +786,12 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
       payload: { channel, target: 'oc_room', content } satisfies OutboundMessage,
     });
 
-  it('adapter=feishu 时调飞书 sender 投递 OutboundMessage', async () => {
+  it('配置渠道时调出站分发器投递（传 ChannelConfig + requestId=event.id）', async () => {
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     await seedFeishuChannel('feishu');
     const stub = freshRouterStub();
-    const feishu = recordingFeishu();
-    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+    const sender = recordingSender();
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
 
     const batch = createMessageBatch(QUEUE, [
       {
@@ -799,34 +805,36 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
     await handleQueue(batch, deps);
     const result = await getQueueResult(batch, ctx);
 
-    expect(feishu.sent).toHaveLength(1);
-    expect(feishu.sent[0]?.target).toBe('oc_room');
-    expect(feishu.sent[0]?.content.text).toBe('hello');
+    expect(sender.sent).toHaveLength(1);
+    expect(sender.sent[0]?.channel.adapter).toBe('feishu');
+    expect(sender.sent[0]?.message.target).toBe('oc_room');
+    expect(sender.sent[0]?.message.content.text).toBe('hello');
+    expect(sender.sent[0]?.opts.requestId).toBe('e1'); // = event.id（plugin 幂等键）
     // 出站是内置 system 规则，成功投递后消息 ack（无用户订阅命中）。
     expect(result.explicitAcks).toContain('o1');
   });
 
-  it('渠道 adapter!=feishu → 跳过（不调 sender）', async () => {
+  it('分发器返回 skipped（渠道未接 enabled channel-adapter plugin）→ ack', async () => {
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     await seedFeishuChannel('hook', 'webhook');
     const stub = freshRouterStub();
-    const feishu = recordingFeishu();
-    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+    const sender = recordingSender({ ok: false, skipped: true });
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
 
     const batch = createMessageBatch(QUEUE, [
       { id: 'o2', timestamp: new Date(), body: outboundEvent('hook', { text: 'x' }), attempts: 1 },
     ]);
     const ctx = createExecutionContext();
     await handleQueue(batch, deps);
-    await getQueueResult(batch, ctx);
-    expect(feishu.sent).toHaveLength(0);
+    const result = await getQueueResult(batch, ctx);
+    expect(result.explicitAcks).toContain('o2');
   });
 
-  it('渠道未配置 → 跳过（不调 sender）', async () => {
+  it('渠道未配置 → 跳过（不调分发器）', async () => {
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     const stub = freshRouterStub();
-    const feishu = recordingFeishu();
-    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+    const sender = recordingSender();
+    const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
 
     const batch = createMessageBatch(QUEUE, [
       {
@@ -839,17 +847,17 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
     const ctx = createExecutionContext();
     await handleQueue(batch, deps);
     await getQueueResult(batch, ctx);
-    expect(feishu.sent).toHaveLength(0);
+    expect(sender.sent).toHaveLength(0);
   });
 
-  it('sender 失败 → 留痕（不阻塞 ack；内置规则失败不触发 retry）', async () => {
+  it('分发器非 retryable 失败 → 留痕（不阻塞 ack；内置规则失败不触发 retry）', async () => {
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     await seedFeishuChannel('feishu');
     const stub = freshRouterStub();
-    const feishu = recordingFeishu({ ok: false, error: 'feishu 5xx' });
+    const sender = recordingSender({ ok: false, error: 'business reject' });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
       const batch = createMessageBatch(QUEUE, [
         {
           id: 'o4',
@@ -861,8 +869,8 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
       const ctx = createExecutionContext();
       await handleQueue(batch, deps);
       const result = await getQueueResult(batch, ctx);
-      expect(feishu.sent).toHaveLength(1);
-      expect(result.explicitAcks).toContain('o4'); // 失败仅留痕，消息仍 ack
+      expect(sender.sent).toHaveLength(1);
+      expect(result.explicitAcks).toContain('o4'); // 非 retryable 失败仅留痕，消息仍 ack
       expect(errSpy).toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
@@ -873,10 +881,10 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     await seedFeishuChannel('feishu');
     const stub = freshRouterStub();
-    const feishu = recordingFeishu();
+    const sender = recordingSender();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
       const bad = E({
         type: 'outbound.message',
         source: { kind: 'system' },
@@ -888,7 +896,7 @@ describe('Queue consumer outbound.message → 飞书出站接线 (§2.1 R24)', (
       const ctx = createExecutionContext();
       await handleQueue(batch, deps);
       await getQueueResult(batch, ctx);
-      expect(feishu.sent).toHaveLength(0);
+      expect(sender.sent).toHaveLength(0);
       expect(errSpy).toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
@@ -902,20 +910,20 @@ describe('Queue consumer 出站可靠性 + system 规则重投幂等 (R27 关门
     await channels.write({ id, adapter: 'feishu', enabled: true, settings: {} });
   }
 
-  it('飞书投递 retryable 失败 → 消息 retry（不静默 ack 丢消息）；uuid=event.id 传给 sender', async () => {
+  it('出站 retryable 失败 → 消息 retry（不静默 ack 丢消息）；requestId=event.id 传给分发器', async () => {
     await env.DB_EVENTS.prepare('DELETE FROM channels').run();
     await seedFeishuChannel2('feishu');
     const stub = freshRouterStub();
-    const sentOpts: Array<{ dedupeId?: string } | undefined> = [];
-    const feishu: FeishuSender = {
-      async send(_message: OutboundMessage, opts?: { dedupeId?: string }) {
-        sentOpts.push(opts);
+    const sentOpts: Array<{ requestId: string }> = [];
+    const sender: PluginSender = {
+      async send(_channel, _message, opts) {
+        sentOpts.push({ requestId: opts.requestId });
         return { ok: false, retryable: true, error: 'network blip' };
       },
     };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, feishu });
+      const deps = makeDeps({ deliverer: memDeliverer(), router: () => stub, sender });
       const ev = E({
         id: 'ob-retry-1',
         type: 'outbound.message',
@@ -934,8 +942,8 @@ describe('Queue consumer 出站可靠性 + system 规则重投幂等 (R27 关门
       const result = await getQueueResult(batch, ctx);
       expect(result.retryMessages.map((r: { msgId: string }) => r.msgId)).toContain('or1');
       expect(result.explicitAcks).not.toContain('or1');
-      // 幂等键 = 事件 id（飞书 uuid 服务端去重，重投不重复发消息）。
-      expect(sentOpts[0]?.dedupeId).toBe('ob-retry-1');
+      // 幂等键 = 事件 id（X-Watt-Request-Id → plugin 侧 uuid 服务端去重，重投不重复发消息）。
+      expect(sentOpts[0]?.requestId).toBe('ob-retry-1');
     } finally {
       errSpy.mockRestore();
     }

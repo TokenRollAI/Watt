@@ -2,9 +2,10 @@
  * 潜伏群聊 agent（Case 3 / E2E-3，R31 B5）——lurker/* 定义的专用 harness 逻辑。
  *
  * 行为（Vision Case 3）：
- *  - 静默：收到 im.message（无 @ 提及）→ 写入会话级 TTL scratch namespace（context://scratch/<session>），
+ *  - 静默：收到 im.message（未触发）→ 写入会话级 TTL scratch namespace（context://scratch/<session>），
  *    **不产生任何出站**（deliverToAgent 无 correlationId → 无 result 事件；本 harness 不 publish）。
- *  - 触发：文本含 '@watt'（提及检测=字面量，实现声明——飞书 decode 层的 mentions 展开留后续）→
+ *  - 触发：**渠道无关判定**（P1）——payload.mentionedBot===true（飞书 decode 展开 @机器人）/
+ *    payload.chatType==='p2p'（单聊）/ 文本含 '@watt'（字面量兜底，无 decode 结构时用）→
  *    读 scratch 上下文 → 出站回答（outbound.message 经 system 管道，含上下文条数=协议事实）。
  *  - session 粘性由声明式订阅 instanceBy:'session' 保证（同 session 恒同实例）。
  *
@@ -19,7 +20,7 @@ import type { HarnessOutcome } from './harness/types.ts';
 /** scratch namespace TTL（秒）——短 TTL 使 E2E 能在分钟级断言过期回收（实现声明）。 */
 export const SCRATCH_TTL_SEC = 120;
 
-/** 提及标记（实现声明：字面量检测；飞书 mentions 字段展开留 decode 层后续）。 */
+/** 提及标记（字面量兜底：无 decode 结构（如 API 直投）时的触发判定）。 */
 export const MENTION_MARKER = '@watt';
 
 /** 潜伏 agent 内置定义（E2E-3 由脚本注册——不入全局种子：订阅全量 im.message 是部署级决策）。 */
@@ -52,6 +53,19 @@ function extractText(payload: unknown): string {
 }
 
 /**
+ * 触发判定（P1，渠道无关）：飞书 decode 产出 payload.mentionedBot（@机器人）/ chatType==='p2p'（单聊）；
+ * 二者皆无（如 API 直投的裸事件）时退化为文本含 '@watt' 字面量兜底。
+ */
+function isTriggered(payload: unknown, text: string): boolean {
+  if (typeof payload === 'object' && payload !== null) {
+    const p = payload as { mentionedBot?: unknown; chatType?: unknown };
+    if (p.mentionedBot === true) return true;
+    if (p.chatType === 'p2p') return true;
+  }
+  return text.includes(MENTION_MARKER);
+}
+
+/**
  * lurker harness（AgentInstance.runHarness 按 definition 前缀分派）。
  * 非 im.message / 无 session → 忽略（result 但无 correlationId 不外发）。
  */
@@ -66,7 +80,7 @@ export async function runLurkerHarness(env: Bindings, event: Event): Promise<Har
   const { StructuredContextProvider } = await import('../context/providers/structured.ts');
   const provider = new StructuredContextProvider(env.DB_CONTEXT, ns);
 
-  if (!text.includes(MENTION_MARKER)) {
+  if (!isTriggered(event.payload, text)) {
     // 静默记录：path=event.id（天然幂等），零出站。
     const res = await provider.write(event.id, {
       content: JSON.stringify({ text, at: event.occurredAt, from: event.channelUser?.userId }),

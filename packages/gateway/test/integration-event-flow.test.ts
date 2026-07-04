@@ -71,10 +71,10 @@ function makeConsumerDeps(deliverer: WebhookDeliverer): ConsumerDeps {
     channels: new ChannelStore(env.DB_EVENTS),
     signaler: noopSignaler,
     agent: noopAgentDeliverer,
-    // 出站接线（R24）：集成链路不驱动飞书出站；no-op sender。
-    feishu: {
+    // 出站分发器（§2.1/§11.4，P1）：集成链路不驱动出站投递；no-op（返回 skipped）。
+    sender: {
       async send() {
-        return { ok: true };
+        return { ok: true, skipped: true };
       },
     },
     genId: () => crypto.randomUUID(),

@@ -1,11 +1,14 @@
 /**
  * 内置 Plugin 种子（Proto §11 / Architecture M11）——把平台内置的 ChannelAdapter 作 PluginRegistry 条目注册。
  *
- * M11：Channel Adapter 是四类 Plugin 之一（ChannelAdapter 接口）。平台内置两个 channel-adapter：
+ * M11：Channel Adapter 是四类 Plugin 之一（ChannelAdapter 接口）。平台内置一个 channel-adapter：
  *   - webhook：通用 webhook 入站 adapter（gateway src/event/adapters/webhook.ts，§2.1 verify/decode 型）。
- *   - feishu：飞书 WS push 型 adapter（规约纯逻辑在 core channel/feishu.ts，CLI connect 承载连接，§2.1 push 型）。
- * 二者能力在平台内（endpoint="binding:<name>" 引用，非外部 HTTPS 服务）——注册为 built_in Plugin，使
+ * 其能力在平台内（endpoint="binding:<name>" 引用，非外部 HTTPS 服务）——注册为 built_in Plugin，使
  *   `watt plugin list` 能枚举内置 channel adapter、`watt plugin health` 对其返回 ok（M10 完备性 + PluginLifecycle）。
+ *
+ * 飞书（channel-feishu）**不再内置种子**（P1 飞书 plugin 化）：飞书是首个独立发行的 channel-adapter
+ *   plugin（watt-plugin-feishu 独立 Worker，自持回调，Proto §2.1 自持回调型），经真实 `watt plugin register`
+ *   （`watt setup feishu` 编排）注册，endpoint = plugin worker HTTPS URL——不再是 `binding:feishu` 占位。
  *
  * 幂等种子（仿 authz/seed.ts 的「get 不存在才 write」语义 + once-guard）：挂 platform/* 种子中间件，
  *   isolate 级短路，首次成功后不再打 D1。**只在条目不存在时写入**——已存在（含管理员经 Update 修改过
@@ -28,21 +31,8 @@ export const BUILTIN_WEBHOOK_PLUGIN: PluginManifest = {
   enabled: true,
 };
 
-/** 内置 feishu ChannelAdapter（§2.1 push 型；WS 长连接由 CLI connect 承载）。 */
-export const BUILTIN_FEISHU_PLUGIN: PluginManifest = {
-  id: 'channel-feishu',
-  kind: 'channel-adapter',
-  interfaceVersion: 'channel-adapter/v1',
-  endpoint: 'binding:feishu',
-  auth: { kind: 'platform-token' },
-  // push 型：Encode/Send 出站（event://outbound.message write）+ 入站规约后 Publish（event:// write）。
-  requiredGrants: [{ resources: ['event://'], actions: ['write'] }],
-  healthPath: '/healthz',
-  enabled: true,
-};
-
-/** 全部内置 Plugin 种子源。 */
-export const BUILTIN_PLUGINS: PluginManifest[] = [BUILTIN_WEBHOOK_PLUGIN, BUILTIN_FEISHU_PLUGIN];
+/** 全部内置 Plugin 种子源（飞书不在此列——经 watt setup feishu 真实注册）。 */
+export const BUILTIN_PLUGINS: PluginManifest[] = [BUILTIN_WEBHOOK_PLUGIN];
 
 /**
  * 幂等种子内置 Plugin（引导时调）。**get 不存在才 write**（对齐 authz/seed.ts doSeed 语义）：

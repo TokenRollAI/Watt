@@ -95,11 +95,8 @@ export interface Bindings {
   ANTHROPIC_API_KEY?: string;
   /** 模型中转基址（缺省 https://llm.fantacy.live）。 */
   ANTHROPIC_BASE_URL?: string;
-  /** 飞书应用凭据（§2.1 出站接线 R24）——tenant_access_token 换取用。 */
-  FEISHU_APP_ID?: string;
-  FEISHU_APP_SECRET?: string;
-  /** 飞书开放平台基址（缺省 https://open.feishu.cn；国际版 open.larksuite.com）。 */
-  FEISHU_BASE_URL?: string;
+  // 飞书凭据（FEISHU_APP_ID/SECRET/BASE_URL）已随 P1 飞书 plugin 化迁往 watt-plugin-feishu Worker 自持——
+  //   gateway 出站经通用分发器（event/plugin-sender.ts）§11.4 调 channel-adapter plugin，不再持有渠道凭据。
 }
 
 /** token iss/aud 缺省值（与 core TokenMeta 对齐）。 */

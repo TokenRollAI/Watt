@@ -40,7 +40,7 @@ import { ChannelStore } from './channel-store.ts';
 import type { EventQueueSender } from './event-bus.ts';
 import type { EventRouter } from './event-router.ts';
 import { EventStore } from './event-store.ts';
-import { type FeishuSender, feishuSenderFromEnv } from './feishu-sender.ts';
+import { defaultPluginSender, type PluginSender } from './plugin-sender.ts';
 
 // DurableObjectStub / MessageBatch 用 @cloudflare/workers-types ambient global（tsconfig types），
 // 与 vitest-pool-workers 期望同源（见 env.ts 注释）。
@@ -131,8 +131,11 @@ export interface ConsumerDeps {
   signaler: TaskSignaler;
   /** agent sink 真实投递 + §3.4 结果路由（Phase 4）。 */
   agent: AgentDeliverer;
-  /** 飞书出站投递（§2.1 出站接线 R24）——outbound.message 且渠道 adapter=feishu 时调飞书 REST。 */
-  feishu: FeishuSender;
+  /**
+   * 通用出站分发器（§2.1/§11.4，P1）——outbound.message 按 ChannelConfig.adapter 查 channel-adapter
+   *   plugin 并经 §11.4 Send 投递（原飞书硬编码 sender 已替换；gateway 不含具体渠道代码）。
+   */
+  sender: PluginSender;
   /** 补齐 outbound.message 的 Omit 三字段（可注入以便测试）。 */
   genId: () => string;
   now: () => string;
@@ -153,7 +156,7 @@ export function defaultConsumerDeps(env: Bindings): ConsumerDeps {
     channels: new ChannelStore(env.DB_EVENTS),
     signaler: defaultTaskSignaler(env),
     agent: defaultAgentDeliverer(env),
-    feishu: feishuSenderFromEnv(env),
+    sender: defaultPluginSender(env),
     genId: () => crypto.randomUUID(),
     now: () => new Date().toISOString(),
     genTraceId: () => crypto.randomUUID(),
@@ -329,12 +332,13 @@ async function handleBotJoined(event: Event, deps: ConsumerDeps): Promise<void> 
 }
 
 /**
- * §2.1 出站接线（R24）：outbound.message → 若目标渠道 adapter=feishu，调飞书 REST 投递。
- * payload 经 outboundMessageSchema 校验（畸形 → console.error 后返回 true，毒丸不重投）。
- * 渠道解析：ChannelStore.get(payload.channel) 拿 ChannelConfig；adapter!=feishu / channel 不存在
- *   → 跳过（本轮只接飞书；其他渠道出站留后续轮）。
- * 投递失败（R27 关门 C2 修正）：retryable（网络/token）→ 返回 false 触发队列重投（uuid=event.id
- *   服务端去重，重投不重复发消息）；非 retryable（业务拒绝）→ 留痕后 true（重投必然同败）。
+ * §2.1/§11.4 出站接线（P1 通用出站分发器）：outbound.message → 按 ChannelConfig.adapter 查
+ *   channel-adapter plugin 并经 §11.4 Send 投递（原飞书硬编码已替换为渠道无关分发）。
+ * payload 经 outboundMessageSchema 校验（畸形 → console.error 后 true，毒丸不重投）。
+ * 渠道解析：ChannelStore.get(payload.channel)；channel 不存在 → 跳过（无投递目标）。
+ * 分发器 skipped（渠道未接 enabled channel-adapter plugin）→ 跳过（ack）。
+ * 投递失败：retryable（网络/token/plugin 5xx）→ 返回 false 触发队列重投（plugin 以 X-Watt-Request-Id
+ *   幂等，重投不重复发）；非 retryable（业务拒绝）→ 留痕后 true。
  * HITL 链路依赖此可靠性：checkpoint 确认卡片丢失 = 人永远看不到确认请求、任务挂到超时。
  */
 async function handleOutboundMessage(event: Event, deps: ConsumerDeps): Promise<boolean> {
@@ -348,14 +352,18 @@ async function handleOutboundMessage(event: Event, deps: ConsumerDeps): Promise<
   const outbound = parsed.data;
   const config = await deps.channels.get(outbound.channel);
   if ('code' in config) return true; // 渠道未配置 → 跳过（无投递目标）
-  if (config.adapter !== 'feishu') return true; // 本轮只接飞书出站
 
-  const result = await deps.feishu.send(outbound, { dedupeId: event.id });
+  const result = await deps.sender.send(config, outbound, {
+    requestId: event.id,
+    traceId: event.traceId,
+  });
+  if (result.skipped === true) return true; // 渠道未接 enabled channel-adapter plugin → 跳过
   if (!result.ok) {
-    console.error('event consumer: feishu outbound delivery failed', {
+    console.error('event consumer: outbound delivery failed', {
       eventId: event.id,
       channel: outbound.channel,
       target: outbound.target,
+      adapter: config.adapter,
       error: result.error,
       retryable: result.retryable ?? false,
     });
