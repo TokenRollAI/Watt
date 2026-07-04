@@ -81,7 +81,11 @@ const adminPrincipal =
 const issuer = process.env.WATT_JWT_ISSUER || dotenv.WATT_JWT_ISSUER || 'watt-platform';
 const audience = process.env.WATT_JWT_AUDIENCE || dotenv.WATT_JWT_AUDIENCE || 'watt-api';
 const kid = 'watt-platform-1';
-const ttlSec = 60 * 60;
+// TTL：--ttl <seconds> 覆盖（如 604800=7d，管理员日常用；短命 token 每次过期都要轮换、
+// 且轮换连坐 pluginToken——运维摩擦见 PROGRESS R33 遗留）。缺省 1h（验收/临时用途）。
+const ttlArgIdx = process.argv.indexOf('--ttl');
+const ttlArg = ttlArgIdx >= 0 ? Number.parseInt(process.argv[ttlArgIdx + 1] ?? '', 10) : Number.NaN;
+const ttlSec = Number.isFinite(ttlArg) && ttlArg > 0 ? ttlArg : 60 * 60;
 
 // jwks 轮询 base：--jwks-base <url> 优先，其次 WATT_JWKS_BASE_URL env——**缺省即报错**
 // （不再硬编码作者域名；本机对 watt.pdjjq.org 有 DNS 污染，勿复用 .env 的 WATT_BASE_URL，见 toolchain §11）。
