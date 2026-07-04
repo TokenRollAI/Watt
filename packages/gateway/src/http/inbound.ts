@@ -27,16 +27,11 @@ import { createWebhookAdapter } from '../event/adapters/webhook.ts';
 import { ChannelStore } from '../event/channel-store.ts';
 import { publish } from '../event/event-bus.ts';
 import { EventStore } from '../event/event-store.ts';
+import { resolveSecret } from '../secrets/resolve.ts';
 import { wattErrorResponse } from './errors.ts';
 
 /** 入站规约事件的匿名系统身份（通用 webhook 无标准触发者；principal 走匿名，对齐 E2E-4 降级）。 */
 const ANONYMOUS_CLAIMS: TokenClaims = { sub: 'service:anonymous', roles: [] };
-
-/** 从 env 按引用名取 secret 值（settings.verifySecretRef → wrangler secret / miniflare binding）。 */
-function resolveSecret(env: Bindings, ref: string): string | undefined {
-  const value = (env as unknown as Record<string, unknown>)[ref];
-  return typeof value === 'string' ? value : undefined;
-}
 
 /** 请求头 → 普通 Record（RawInbound.headers；大小写由 adapter 归一）。 */
 function collectHeaders(req: Request): Record<string, string> {
@@ -84,7 +79,7 @@ export function inboundRoutes(): Hono<{ Bindings: Bindings }> {
         wattError('internal', 'channel is missing settings.verifySecretRef', false),
       );
     }
-    const secret = resolveSecret(c.env, secretRef);
+    const secret = await resolveSecret(c.env, secretRef);
     if (secret === undefined) {
       return wattErrorResponse(
         c,

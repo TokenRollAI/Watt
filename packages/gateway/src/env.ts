@@ -83,6 +83,12 @@ export interface Bindings {
   WATT_ADMIN_PRINCIPAL?: string;
   WATT_JWT_ISSUER?: string;
   WATT_JWT_AUDIENCE?: string;
+  /**
+   * SecretStore 主密钥（§6.6）——32 字节 base64url，AES-256-GCM 加密运行时密钥。部署期 secret。
+   * 缺失 → /htbp/platform/secret 返回 unavailable、resolveSecret 静默跳过 KV 分支（env-only 零回归）。
+   * **不从 JWT 私钥派生**（JWT 轮换会静默毁掉全部密文）；与 WATT_JWT_PRIVATE_JWK 同为信任根、env-only。
+   */
+  WATT_SECRET_ENCRYPTION_KEY?: string;
   /** 平台对外基址（device flow 的 verification_uri 组装用）；缺省取请求 origin。 */
   WATT_BASE_URL?: string;
   /**

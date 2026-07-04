@@ -69,6 +69,7 @@ import {
 } from '../plugin/plugin-registry.ts';
 import { ensureBuiltinPluginsSeeded } from '../plugin/plugin-seed.ts';
 import { RES_SCHEDULER, SchedulerManager } from '../scheduler/scheduler-manager.ts';
+import { SecretStore } from '../secrets/secret-store.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
 import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
@@ -86,6 +87,7 @@ const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
 const RES_METRICS = 'platform://metrics';
 const RES_PLUGIN = 'platform://plugin';
+const RES_SECRET = 'platform://secret';
 
 function isWattError(v: unknown): v is WattError {
   return typeof v === 'object' && v !== null && 'code' in v && 'message' in v && 'retryable' in v;
@@ -1459,6 +1461,114 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         if (isWattError(plugin)) return wattErrorResponse(c, plugin);
         const health = await pluginHealth(plugin);
         return c.json({ health });
+      }
+    }
+  });
+
+  // ── POST /htbp/platform/secret → SecretStore 四动词（§6.6）─────────────────
+  // Write/Delete=manage、List/Get=read（种子 admin policy 天然覆盖）。**永不回显明文**：
+  //   Write 回 {name,updatedAt}；List/Get 只回元数据 + shadowedByEnv（env 同名会先命中、KV 值不生效）。
+  // 主密钥 WATT_SECRET_ENCRYPTION_KEY 缺失 → unavailable（部署未配主密钥，端点不可用）。
+  const SECRET_TOOL_ACTIONS: Record<string, string> = {
+    List: 'read',
+    Get: 'read',
+    Write: 'manage',
+    Delete: 'manage',
+  };
+  app.post('/htbp/platform/secret', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? SECRET_TOOL_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_SECRET, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://secret');
+    }
+
+    // 主密钥缺失 → 端点不可用（§6.6：resolveSecret 静默降级，但写端点必须显式报 unavailable）。
+    const encKey = c.env.WATT_SECRET_ENCRYPTION_KEY;
+    if (encKey === undefined || encKey.length === 0) {
+      return wattErrorResponse(
+        c,
+        wattError(
+          'unavailable',
+          'secret store is not configured (WATT_SECRET_ENCRYPTION_KEY missing)',
+          false,
+        ),
+      );
+    }
+    const store = new SecretStore(c.env.KV_TENANTS, encKey);
+    // env 同名命中检测（shadowedByEnv）——env secret 会在 resolveSecret 里先命中，KV 值不生效。
+    const envRecord = c.env as unknown as Record<string, unknown>;
+    const shadowed = (name: string): boolean => typeof envRecord[name] === 'string';
+
+    switch (tool) {
+      case 'List': {
+        const metas = await store.list();
+        return c.json({
+          items: metas.map((m) => ({
+            name: m.name,
+            updatedAt: m.updatedAt,
+            shadowedByEnv: shadowed(m.name),
+          })),
+        });
+      }
+      case 'Get': {
+        const name = args.name;
+        if (typeof name !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'name is required', false));
+        }
+        const meta = await store.getMeta(name);
+        if (meta === null) {
+          // KV 无此 secret：若 env 有同名影子仍如实反映（值永不回显，仅元数据）。
+          if (shadowed(name)) {
+            return c.json({ secret: { name, updatedAt: null, shadowedByEnv: true } });
+          }
+          return wattErrorResponse(c, wattError('not_found', `secret not found: ${name}`, false));
+        }
+        return c.json({
+          secret: { name: meta.name, updatedAt: meta.updatedAt, shadowedByEnv: shadowed(name) },
+        });
+      }
+      case 'Write': {
+        const { name, value } = args;
+        if (typeof name !== 'string' || typeof value !== 'string') {
+          return wattErrorResponse(
+            c,
+            wattError('invalid_argument', 'name and value are required strings', false),
+          );
+        }
+        const result = await store.write(name, value);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        // 永不回显 value——只回元数据（§6.6）。
+        return c.json({ secret: { name: result.name, updatedAt: result.updatedAt } });
+      }
+      case 'Delete': {
+        const name = args.name;
+        if (typeof name !== 'string') {
+          return wattErrorResponse(c, wattError('invalid_argument', 'name is required', false));
+        }
+        const result = await store.delete(name);
+        if (isWattError(result)) return wattErrorResponse(c, result);
+        return c.json(result);
       }
     }
   });

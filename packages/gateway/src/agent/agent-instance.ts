@@ -227,7 +227,7 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
       //   渠道的 key 套到钉死模型上（key/模型错配）。只有缺省 model（含 'default' 哨兵，spawn 时
       //   归一为 undefined）才跟随 default 渠道（model+secretRef 成对取用）。
       const routing = this.state.model === undefined ? await this.resolveModelRouting() : null;
-      const modelCaller = caller ?? this.buildDefaultCaller(routing?.secretRef);
+      const modelCaller = caller ?? (await this.buildDefaultCaller(routing?.secretRef));
       const model = this.state.model ?? routing?.model ?? 'glm-5.2';
       const usages: { inputTokens: number; outputTokens: number }[] = [];
 
@@ -347,15 +347,16 @@ export class AgentInstance extends Agent<Cloudflare.Env, AgentInstanceState> {
   }
 
   /**
-   * 从 env 构造真实 Anthropic caller。key 解析：secretRef（default 渠道声明的 env secret 引用名，
-   *   §9 永不存明文）→ 缺省 ANTHROPIC_API_KEY。base 恒 ANTHROPIC_BASE_URL（中转直连最小版；
-   *   per-provider base 留 M8 AI Gateway 规范路径）。
+   * 从 env 构造真实 Anthropic caller。key 解析：secretRef（default 渠道声明的引用名，§9 永不存明文）
+   *   经 §6.6 回退链（env.<secretRef> 优先 → SecretStore KV 解密）→ 缺省 ANTHROPIC_API_KEY。
+   *   base 恒 ANTHROPIC_BASE_URL（中转直连最小版；per-provider base 留 M8 AI Gateway 规范路径）。
    */
-  private buildDefaultCaller(secretRef?: string): ModelCaller {
+  private async buildDefaultCaller(secretRef?: string): Promise<ModelCaller> {
     const env = this.env as Bindings;
-    const envRecord = env as unknown as Record<string, string | undefined>;
+    const { resolveSecret } = await import('../secrets/resolve.ts');
     const apiKey =
-      (secretRef !== undefined ? envRecord[secretRef] : undefined) ?? env.ANTHROPIC_API_KEY;
+      (secretRef !== undefined ? await resolveSecret(env, secretRef) : undefined) ??
+      env.ANTHROPIC_API_KEY;
     if (apiKey === undefined || apiKey.length === 0) {
       // 无 key：产 error outcome（buildDefaultCaller 只在无注入 caller 时走，@llm tag 才有 key）。
       return {

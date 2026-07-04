@@ -180,6 +180,8 @@ export default defineConfig({
           TEST_MIGRATIONS_AUDIT: migrationsAudit,
           // webhook adapter 验签 secret（inbound 集成测试；channel settings.verifySecretRef 指向此名）。
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
+          // SecretStore 主密钥（§6.6，platform-secret 集成测试）——固定测试值（32B base64url）。
+          WATT_SECRET_ENCRYPTION_KEY: 'XOL8MO7eCWDeaTn27cjz6KkV2u3o0d1KnpKzVQxUebQ',
           // @llm 门控透传：workerd 内读不到宿主 process.env，经 binding 注入（缺省空 → 测试 skip）。
           LLM_TESTS: process.env.LLM_TESTS ?? '',
           ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',

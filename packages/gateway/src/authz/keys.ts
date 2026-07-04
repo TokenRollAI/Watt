@@ -6,6 +6,11 @@
  * 缺失/畸形 secret → 抛错（认证与 JWKS 路由会转 unavailable/500）。
  *
  * 纯签发/验签逻辑在 core；此处只负责"从环境读密钥"这一 I/O（LOOP 目标分工）。
+ *
+ * **信任根排除（§6.6）**：本密钥**只从 env 读，绝不走 SecretStore KV 回退链**（resolveSecret）。
+ *   JWT 私钥是验证 `platform://secret` 写权限所依赖的信任根——若它可来自 KV，就形成"用 KV 里的密钥
+ *   去验证写 KV 的权限"的循环（攻击者写一把自己的 key 进 KV 即可自签 admin token）。故与 SecretStore
+ *   主密钥 WATT_SECRET_ENCRYPTION_KEY 同列，恒为部署期 secret（wrangler secret / .dev.vars）。
  */
 
 import {
