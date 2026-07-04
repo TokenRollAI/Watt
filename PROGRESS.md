@@ -4,10 +4,10 @@
 
 ## 当前状态
 
-- **当前 Phase**：**Phase 6（飞书 + Observability + Management）R27 关门轮基本完成**——质量关口 12 MAJOR 全修 + DoD ①③④⑤ 已勾；仅 DoD ②「@feishu 入站真实群消息」等人工配合
-- **已勾选**：Phase 0~5 全部（关门证据 Round 3/7/10/13/18/22）+ Phase 6 的 ①③④⑤（Round 27）
-- **Blocker**：**DoD ② @feishu 入站需人工**——`watt channel connect feishu-main`（plugin 主体，本机已长驻）就绪，测试群里已发请求配合消息；任意成员回一条消息即可采证（平台收到 im.message、kind='im'、未映射 principal=user:anonymous 即 §6.3 正确语义）。另：watt.pdjjq.org 本机 DNS 污染持续；本机验证走 `https_proxy=http://127.0.0.1:7890` + workers.dev
-- **下一目标**：**唯一剩余 = @feishu 入站人工采证**（勾 DoD Phase 6 ② → Phase 6 正式关门 → 项目全部 Done）。Phase 7 六条 E2E 已全绿并关门（R32）；`watt channel connect`（plugin 主体）本机长驻等待群里任意成员回一条消息
+- **当前 Phase**：**Phase 0~7 全部关门 + R33 可用性冲刺完成**（飞书 plugin 化 / HTBP 工具注入 / SecretStore / CLI npm 化 / watt init 向导 / dashboard 配置页 / lurker LLM 化）
+- **已勾选**：Phase 0~7 全部；**Phase 6 ② @feishu 入站真实群消息已采证**（R33：webhook plugin 主路径，真实群 @watt 收到回复，用户截图 + events/audit 双留痕）
+- **Blocker**：无。飞书后台需保持"事件发送至开发者服务器"=`https://watt-feishu.pdjjq.org/webhook/event`（workers.dev 境内被干扰不可用）；群上下文累积需飞书应用加 `接收群聊中所有消息` 权限（当前仅 @ 消息可达）
+- **下一目标**：npm 真实发布（`pnpm release:cli`，需 @tokenroll org 权限人工确认）；`watt init` 真实账户全程验证（交互式 TUI，建议前缀 watt-init-test）；R33 MINOR backlog（httpbin 上游不稳→换可靠桩工具、admin token 1h 短命 + 轮换连坐 pluginToken 的运维摩擦）
 
 ## 上游改动记录（tool-bridge 等）
 
@@ -16,6 +16,22 @@
 ---
 
 # 轮次记录
+
+## Round 33 — 2026-07-04（可用性冲刺：六期并行全落地 + 飞书真实闭环 + lurker LLM 化）
+- 目标：用户四痛点（部署重 / 飞书不回复 / agent 无工具 / CLI 发 npm）→ 六期计划（P1 飞书 plugin 化、P2 HTBP 工具注入、P3 SecretStore、P4 CLI 打包、P5 init 向导、P6 dashboard 配置页）全做。
+- 动作（4 个 worker worktree 并行 + 主 assistant 合并/部署/线上验证）：
+  - **P1**：新包 `packages/plugin-feishu`（第一个 watt-plugins/* 实例；自持 webhook 回调=验签/AES 解密/decode/mentions 展开/Publish + §11.4 Encode/Send 面 + 凭据自持）；gateway 通用出站分发器 `event/plugin-sender.ts`（adapter→`channel-<adapter>` 约定 + binding:/HTTPS 双形态 + platform-token + X-Watt-Request-Id 幂等）替换 feishu-sender 硬编码（已删）；`watt setup feishu` 幂等五步。
+  - **P2**：tools-proxy 抽取 `tools/tool-invoker.ts`（纯重构回归门）→ `harness/htbp-tools.ts` 三工具（htbp_help/skill/call，scope 前缀约束 + Check PEP + deny 回喂）；AgentDefinition 增 `systemPrompt`（Proto §3.1 先行）；spawn 落 toolScopes/systemPrompt 进 state。
+  - **P3**：SecretStore（AES-256-GCM + WATT_SECRET_ENCRYPTION_KEY + AAD=名字 + KV_TENANTS `secret:` 前缀）+ `POST /htbp/platform/secret` 四动词永不回显 + resolveSecret env→KV 回退链（keys.ts 明确排除）+ `watt secret` 三命令（值走 stdin）。
+  - **P4**：CLI 改名 `@tokenroll/watt` + tsup bundle（core/shared/plugin-feishu inline；lark SDK optionalDependencies + import 容错）+ files/publishConfig + `release:cli` + pack-smoke（tarball 24K→684K 含 deploy/）。
+  - **P5**：`watt init` TUI（@clack/prompts 九步：auth→问答→provision(TS 移植)→模板渲染(占位符+飞书开关控 FEISHU_PLUGIN binding)→migrations→信任根三 secret→**同进程本地签首 admin token（零轮换解鸡生蛋）**→deploy→SecretStore 写可选密钥）+ `--resume`/`--resign-admin`；部署产物随包（build:deploy esbuild 3 worker + 模板 + migrations + dashboard dist）；`.env.example`；sign-admin-token jwksBase 参数化。
+  - **P6**：dashboard SecretsView/ChannelsView（feishu plugin 状态卡）/ProvidersView（secretRef 下拉）。
+  - **R33 增补**（线上实测逼出）：① lurker 接真实 LLM（default provider caller + state.toolScopes 工具 + scratch 上下文进 system；「N 条上下文」前缀保留兼容 E2E-3；@消息也记 scratch；TTL env 覆盖生产 3600s）；② **re-Spawn 复活 terminated 实例**（Proto §3.2 补充语义；重置态 + 按当前 def 重新快照——顺带解决实例快照永不追随 def 更新）；③ **Authorizer 接 AgentDefLoader**（历史恒传空 agentDefs 致一切 agent 主体在步骤 2 误拒——§51 同类坑系统性收口，lurker 出站的绕道保留）。
+- 部署事实（两条硬约束实测）：**同账户 workers.dev 互调被平台拦截**（探活/Send 404）→ 同账户 plugin 走 service binding（`binding:FEISHU_PLUGIN`，Plugin.md 平台内推荐形态）；**workers.dev 境内被干扰**（飞书回调 3s 握手超时）→ plugin 挂单级自定义域名 `watt-feishu.pdjjq.org`（Universal SSL 只盖一级）。
+- 验证：`pnpm verify` 全绿 **1233 passed / 1 skipped**（shared 6 + dashboard 18 + core 411 + plugin-feishu 47 + cli 175 + gateway 576+1skip）；线上：challenge 握手/伪 token 401/入站 kind='im'/lurker LLM 回答（「（基于本群 2 条上下文）…」真实模型文本）/audit `tool://test/echo/get-uuid` read+invoke allow（lurker 主体全链过 PEP）/SecretStore 回退链（LLM_RELAY_KEY 仅存 KV → 模型调用成功）/**用户截图证实群内 @watt 收到回复 = Phase 6 ② 采证闭环**。
+- 勾选：**DOD Phase 6 ②（@feishu 入站真实群消息）**——项目全部 Done。
+- 沉淀：llmdoc 收录 R33（current-state 翻页 + decisions ×4 + pitfalls 增补 + reflections）；`.env` 内 FEISHU_ENCRYPT_KEY 实为空（值位是注释——".env 存在≠有值"再现）。
+- 遗留：npm publish 未真执行（org 权限待人工）；`watt init` 真实账户全程未跑（交互式 TUI）；飞书 app 缺"接收群聊中所有消息"权限（群上下文只累积 @ 消息）；未配 ENCRYPT_KEY（明文+token 校验模式，建议后台生成后 secret put 到 plugin）；admin token 1h 短命且轮换连坐 pluginToken（运维摩擦，可考虑 init 的 7d token 或独立 plugin 签名面）；httpbin.org 桩工具不稳（E2E/演示建议换 postman-echo）。
 
 ## Round 32 — 2026-07-04（Phase 7 关门轮：E2E-4 + 质量关口 22 MAJOR 全修 + 六条全绿）
 - 目标：E2E-4 权限对照 + `pnpm e2e` 六条复跑 + Phase 7 关门（质量关口 + 确认项全修 + 沉淀）
