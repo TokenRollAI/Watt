@@ -420,14 +420,25 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
             wattError('invalid_argument', `invalid event: ${parsedEvent.error.message}`, false),
           );
         }
-        // §2.3 规约（规范性）：外部系统经 Platform API（Bearer/OAuth）直接 Publish 时，
-        // 事件被规约为 source.kind='webhook'，与入站 webhook 同权处理——调用方自报的
-        // system/agent/cron 等 kind 不得命中 sourceKind 订阅。Phase 2 只有 user/admin token，
-        // 无豁免面，故一律覆写。Phase 4 引入 agent token（claims.agent 字段）后，由 claims
-        // 区分 agent 出站（type=outbound.message，走出站鉴权而非 webhook 规约）的豁免。
+        // §2.3 规约（规范性）+ §2.1 push 型豁免（R27 关门 C5）：
+        //   默认：外部系统经 Platform API（Bearer/OAuth）直接 Publish 时，事件规约为
+        //   source.kind='webhook'，与入站 webhook 同权处理——调用方自报的 system/agent/cron
+        //   等 kind 不得命中 sourceKind 订阅。
+        //   豁免：调用主体是已注册且 enabled 的 channel-adapter plugin（claims.sub=
+        //   'plugin:<id>'，pluginToken 由 PluginRegistry.Write 签发）时——push 型 adapter
+        //   （飞书 WS 经 CLI connect）自行规约后 Publish，字段义务同 Decode（§2.1），保留其
+        //   自报 source.kind；白名单仅 'im'（IM 渠道规约产物），防冒用 system/cron 等特权 kind。
+        let publishKind: 'webhook' | 'im' = 'webhook';
+        if (parsedEvent.data.source.kind === 'im' && claims.sub.startsWith('plugin:')) {
+          const pluginId = claims.sub.slice('plugin:'.length);
+          const plugin = await new PluginRegistry(c.env.DB_PROVIDERS).get(pluginId);
+          if (!isWattError(plugin) && plugin.kind === 'channel-adapter' && plugin.enabled) {
+            publishKind = 'im';
+          }
+        }
         const eventInput: EventInput = {
           ...(parsedEvent.data as EventInput),
-          source: { ...parsedEvent.data.source, kind: 'webhook' },
+          source: { ...parsedEvent.data.source, kind: publishKind },
         };
         // IdentityMapper.Resolve 接线（§1 L115-116，与 inbound.ts webhook 路径同）：channelUser
         //   存在且 principal 缺省时补齐 principal（channel_identities 命中 → 绑定 principal；未命中

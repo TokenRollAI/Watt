@@ -205,6 +205,8 @@ describe('AuditStore unit (traceId propagation + limit)', () => {
       detail: { obligations: ['require_confirm'] },
     });
     const page = await store.list({ filter: { agent: 'inst-1' } });
+    // fail-loud：list 返回 WattError 时用例必须红。
+    if ('code' in page) throw new Error(`list returned WattError: ${page.message}`);
     expect(page.items.length).toBe(1);
     const rec = page.items[0];
     expect(rec?.context.traceId).toBe('trace-xyz');
@@ -221,6 +223,7 @@ describe('AuditStore unit (traceId propagation + limit)', () => {
       });
     }
     const limited = await store.list({ filter: { principal: 'user:z' }, limit: 2 });
+    if ('code' in limited) throw new Error(`list returned WattError: ${limited.message}`);
     expect(limited.items.length).toBe(2);
   });
 });

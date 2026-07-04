@@ -23,11 +23,15 @@ const META: TokenMeta = { issuer: TEST_JWT_ISSUER, audience: TEST_JWT_AUDIENCE }
 const BASE = 'https://gateway.test';
 
 let signAdmin: () => Promise<string>;
+let signPlugin: (pluginId: string) => Promise<string>;
 
 beforeAll(async () => {
   const { priv } = await importPrivateJwk(TEST_PRIVATE_JWK, PLATFORM_KID);
   signAdmin = () =>
     signUserToken({ principal: TEST_ADMIN_PRINCIPAL, roles: ['admin'], trace: 'tr-a' }, priv, META);
+  // pluginToken 形状同 PluginRegistry.Write 签发（principal=plugin:<id>、roles=[]）。
+  signPlugin = (pluginId: string) =>
+    signUserToken({ principal: `plugin:${pluginId}`, roles: [], trace: 'tr-p' }, priv, META);
 });
 
 /** 单例 router stub（与生产 consumer/routes 的 idFromName('router') 同源）。 */
@@ -133,6 +137,70 @@ describe('POST /htbp/platform/event (§2.3)', () => {
     const found = listBody.items.find((e) => e.id === body.eventId);
     expect(found).toBeDefined();
     expect(found?.source.kind).toBe('webhook');
+  });
+
+  it('Publish from an enabled channel-adapter plugin token keeps source.kind=im (§2.1 push 豁免, C5)', async () => {
+    const admin = await signAdmin();
+    // 授权 plugin 主体 Publish（platform://event manage）——pluginToken roles=[] 需显式策略。
+    const pol = await post('/htbp/platform/policy', admin, {
+      tool: 'Write',
+      arguments: {
+        policy: {
+          id: 'pol-plugin-feishu-event',
+          subject: 'plugin:channel-feishu',
+          resource: 'platform://event',
+          actions: ['manage'],
+          effect: 'allow',
+        },
+      },
+    });
+    expect(pol.status).toBe(200);
+
+    // channel-feishu 是内置种子 plugin（enabled）；以其 pluginToken Publish 一条 im 规约事件。
+    const token = await signPlugin('channel-feishu');
+    const res = await post('/htbp/platform/event', token, {
+      tool: 'Publish',
+      arguments: {
+        event: {
+          source: { kind: 'im', channel: 'feishu' },
+          type: 'im.message',
+          session: 'feishu:chat:oc_1',
+          channelUser: { channel: 'feishu', userId: 'ou_x' },
+          payload: { text: 'hi' },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const { eventId } = (await res.json()) as { eventId: string };
+    const got = await post('/htbp/platform/event', admin, {
+      tool: 'Get',
+      arguments: { eventId },
+    });
+    const gotBody = (await got.json()) as { event: { source: { kind: string } } };
+    // push 型 adapter 自行规约（字段义务同 Decode）→ 保留 kind='im'，sourceKind:'im' 订阅可命中。
+    expect(gotBody.event.source.kind).toBe('im');
+  });
+
+  it('Publish self-reporting kind=im from a non-plugin token is still coerced to webhook (§2.3)', async () => {
+    const token = await signAdmin();
+    const res = await post('/htbp/platform/event', token, {
+      tool: 'Publish',
+      arguments: {
+        event: {
+          source: { kind: 'im', channel: 'feishu' },
+          type: 'im.message',
+          payload: { text: 'spoof' },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const { eventId } = (await res.json()) as { eventId: string };
+    const got = await post('/htbp/platform/event', token, {
+      tool: 'Get',
+      arguments: { eventId },
+    });
+    const gotBody = (await got.json()) as { event: { source: { kind: string } } };
+    expect(gotBody.event.source.kind).toBe('webhook');
   });
 
   it('Publish resolves channelUser to the mapped principal when principal is absent (§1 IdentityMapper.Resolve)', async () => {

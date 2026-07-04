@@ -595,8 +595,13 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
     )
     .action(async (channelId: string) => {
       const base = requireBaseUrl(env());
-      const token = requireToken(env(), credPath, opts.fs);
       const procEnv = opts.env ?? process.env;
+      // push 型 adapter 以 plugin 主体 Publish（§2.1/§2.3 豁免面）：优先 WATT_PLUGIN_TOKEN
+      // （PluginRegistry.Write 签发的 pluginToken，principal=plugin:channel-feishu——平台据此
+      // 保留 source.kind='im' 不规约为 webhook）；缺省回落 user token（kind 会被规约，
+      // sourceKind:'im' 订阅不可命中——仅调试用）。
+      const pluginToken = procEnv.WATT_PLUGIN_TOKEN?.trim();
+      const token = pluginToken || requireToken(env(), credPath, opts.fs);
       const appId = procEnv.FEISHU_APP_ID?.trim();
       const appSecret = procEnv.FEISHU_APP_SECRET?.trim();
       if (!appId || !appSecret) {
