@@ -1,6 +1,15 @@
 {
   "name": "@tokenroll/watt",
   "version": "0.1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TokenRollAI/Watt.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/TokenRollAI/Watt#readme",
+  "bugs": {
+    "url": "https://github.com/TokenRollAI/Watt/issues"
+  },
   "type": "module",
   "bin": {
     "watt": "./dist/bin.js"
