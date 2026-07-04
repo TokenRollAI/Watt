@@ -1,9 +1,10 @@
 /**
  * Authorizer（Proto §6.1/§6.4c）——接线：从 PolicyStore 取候选 Policy → core.authorize() 四步判定。
  *
- * Phase 1 范围：Agent Registry / Scheduler 尚未落地（Phase 4/5），故 agentDefs/cronJobs/instances
- * 传空。user token（无 agent 段）只走判定步骤 1；agent token 因无 def 数据会在步骤 2 deny——
- * 这是正确的衰减语义（本 Phase 无 Agent 定义即无授权面）。
+ * agentDefs 索引（R33 修正）：历史上恒传空（Phase 1 注释残留），导致任何带 agent_def 的主体在
+ * 步骤 2 被「agent definition not found」误拒（§51 同类坑；lurker 出站曾因此绕道直调 core）。
+ * 现经可选注入的 defLoader 惰性取 claims.agent_def 对应定义播种；loader 缺省/查无 → 传空（保持
+ * 原衰减语义：无定义即无授权面）。cronJobs/instances 仍传空（cron 链段由 script 侧自足播种）。
  *
  * KV 判定缓存本轮跳过（先正确后快，见 policy-store.ts 注释）。
  *
@@ -14,8 +15,17 @@
  *   注入 sink（见 audit/audit-sink.ts）。
  */
 
-import { type AccessDecision, authorize, type CallContext, type TokenClaims } from '@watt/core';
+import {
+  type AccessDecision,
+  type AgentDefinition,
+  authorize,
+  type CallContext,
+  type TokenClaims,
+} from '@watt/core';
 import type { PolicyStore } from './policy-store.ts';
+
+/** agent_def → 定义 惰性加载（注入以解耦 AgentRegistry/D1；查无/出错返回 null）。 */
+export type AgentDefLoader = (name: string) => Promise<AgentDefinition | null>;
 
 /** 审计写出抽象（注入以解耦 D1 依赖 + 便于测试）。写一条判定留痕；实现负责 best-effort 容错。 */
 export interface AuditSink {
@@ -47,18 +57,24 @@ export class Authorizer {
   constructor(
     private readonly policies: PolicyStore,
     private readonly audit?: AuditSink,
+    private readonly defLoader?: AgentDefLoader,
   ) {}
 
   /** Check（§6.1）——(claims, resource, action) → AccessDecision。判定后写审计（有 sink 时）。 */
   async check(claims: TokenClaims, resource: string, action: string): Promise<AccessDecision> {
     const candidates = await this.policies.resolveCandidatePolicies(claims);
+    // agent 主体（claims.agent_def）：惰性播种其定义供步骤 2 衰减（R33 修正，见文件头）。
+    let agentDefs: Record<string, AgentDefinition> = {};
+    if (claims.agent_def !== undefined && this.defLoader !== undefined) {
+      const def = await this.defLoader(claims.agent_def);
+      if (def !== null) agentDefs = { [claims.agent_def]: def };
+    }
     const decision = authorize({
       claims,
       resource,
       action,
       policies: candidates,
-      // Phase 1：Agent 定义/cron/实例数据面未就绪，传空（user token 只走步骤 1）。
-      agentDefs: {},
+      agentDefs,
       cronJobs: {},
       instances: {},
     });

@@ -204,3 +204,42 @@ describe('ensureSeedPolicy (§6.5c)', () => {
     expect((await im.resolvePrincipal('user:test-admin')).roles).toEqual(['admin', 'auditor']);
   });
 });
+
+describe('Authorizer agentDefs 播种（R33：defLoader 修复 agent 主体步骤 2 误拒）', () => {
+  it('agent claims + defLoader 查到定义 → 步骤 2 衰减按 def grants 放行', async () => {
+    const { Authorizer } = await import('../src/authz/authorizer.ts');
+    const store = new PolicyStore(env.DB_POLICIES);
+    await store.write(
+      P({ id: 'a1', subject: 'agent:demo/agent', resource: 'tool://test', actions: ['read'] }),
+    );
+    const def = {
+      name: 'demo/agent',
+      description: 'd',
+      runtime: 'light' as const,
+      entry: { kind: 'do-class' as const, className: 'AgentInstance' },
+      grants: [{ resources: ['tool://*'], actions: ['read' as const] }],
+      contextNamespaces: [],
+      toolScopes: [],
+      subscriptions: [],
+    };
+    const claims = {
+      sub: 'agent:demo/agent',
+      roles: [],
+      agent_def: 'demo/agent',
+      agent_inst: 'agent:demo/agent#k',
+    };
+    // 无 defLoader（旧行为）：步骤 2 因 agentDefs 空索引误拒。
+    const bare = new Authorizer(store);
+    expect((await bare.check(claims, 'tool://test', 'read')).allow).toBe(false);
+    // 有 defLoader：播种定义 → allow。
+    const wired = new Authorizer(store, undefined, async (name) =>
+      name === 'demo/agent' ? def : null,
+    );
+    expect((await wired.check(claims, 'tool://test', 'read')).allow).toBe(true);
+    // def grants 上限仍生效：action 超出 grants（invoke）→ deny。
+    await store.write(
+      P({ id: 'a2', subject: 'agent:demo/agent', resource: 'tool://test', actions: ['invoke'] }),
+    );
+    expect((await wired.check(claims, 'tool://test', 'invoke')).allow).toBe(false);
+  });
+});

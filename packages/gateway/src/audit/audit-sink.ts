@@ -32,7 +32,12 @@ export function auditSink(env: Bindings, traceId?: string): AuditSink {
   };
 }
 
-/** 统一 PEP 入口：构造带审计 sink 的 Authorizer（policies=DB_POLICIES，audit=DB_AUDIT）。 */
+/** 统一 PEP 入口：构造带审计 sink 的 Authorizer（policies=DB_POLICIES，audit=DB_AUDIT）。
+ *  defLoader（R33）：agent 主体（claims.agent_def）经 AgentRegistry 惰性播种定义供步骤 2 衰减。 */
 export function newAuthorizer(env: Bindings, traceId?: string): Authorizer {
-  return new Authorizer(new PolicyStore(env.DB_POLICIES), auditSink(env, traceId));
+  return new Authorizer(new PolicyStore(env.DB_POLICIES), auditSink(env, traceId), async (name) => {
+    const { AgentRegistry } = await import('../agent/agent-registry.ts');
+    const def = await new AgentRegistry(env.DB_PROVIDERS).get(name);
+    return 'code' in def ? null : def;
+  });
 }
