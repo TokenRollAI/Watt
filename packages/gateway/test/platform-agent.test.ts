@@ -203,6 +203,18 @@ describe('AgentRuntime verbs via route (§3.2)', () => {
     expect(sendBody.correlationId).toBe('cid-route-send');
   });
 
+  it('Send to a never-spawned instanceId → 404 not_found (no ghost echo DO)', async () => {
+    const token = await signAdmin();
+    // idFromName 对任意名字会隐式创建 INITIAL_STATE 幽灵 DO（harness=echo）——Send 必须先查
+    // 实例索引拒掉，否则拼错 id 得到静默回显（R27 关门轮线上实测）。
+    const res = await call(token, 'Send', {
+      instanceId: 'no-such/instance#typo',
+      event: { type: 'agent.message', source: { kind: 'system' }, payload: { ping: 1 } },
+    });
+    expect(res.status).toBe(404);
+    expect((await body(res)).code).toBe('not_found');
+  });
+
   it('Spawn with parent → child registered under parent (ListInstances tree shows派生)', async () => {
     const token = await signAdmin();
     const name = uniq('par');

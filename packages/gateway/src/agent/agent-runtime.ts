@@ -189,6 +189,9 @@ export class AgentRuntime {
   /**
    * Send（§3.2）——向实例投递事件；expect 存在 → correlation register（waiter=Send 调用者，
    *   规则 1 定向回送）+ 返 correlationId。caller（Send 发起方实例 id）用于 correlation waiter。
+   * 实例必须存在于索引（未 Spawn → not_found）：idFromName 对任意名字都会**隐式创建**一个
+   *   INITIAL_STATE 的幽灵 DO（harness 缺省 echo、不入索引），直接投递会静默回显而非报错
+   *   （R27 关门轮 DoD 复验实测：send 到拼错的 instanceId 得到 echo 输出，极难排查）。
    */
   async send(
     instanceId: string,
@@ -197,6 +200,11 @@ export class AgentRuntime {
     caller?: Waiter,
     claims?: TokenClaims,
   ): Promise<SendResult | WattError> {
+    const corr = correlationStub(this.deps.env);
+    const row = await corr.getInstance(instanceId);
+    if (row === null) {
+      return wattError('not_found', `agent instance not found: ${instanceId}`, false);
+    }
     const stub = await instanceStub(this.deps.env, instanceId);
     let correlationId: string | undefined;
     if (expect !== undefined) {
