@@ -1,13 +1,15 @@
-import react from '@vitejs/plugin-react';
+import { reactRouter } from '@react-router/dev/vite';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-// Watt Dashboard（M10）：静态 React SPA，构建产物 dist/ 部署到 Cloudflare Pages（watt-dashboard）。
-// base '/' 同源部署；API base URL 运行时可配（默认同源 /htbp，见 src/api.ts）。
+// 构建产物为纯静态 SPA（react-router.config.ts ssr:false），经 package.json build 落 dist/，
+// 由 gateway assets 同域托管（run_worker_first 优先 API 路径）。测试配置独立见 vitest.config.ts。
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tailwindcss(), reactRouter()],
+  resolve: {
+    tsconfigPaths: true,
+  },
   build: {
-    outDir: 'dist',
-    // 单页 SPA，无需 legacy chunking 调优（最小面）。
     target: 'es2022',
   },
 });

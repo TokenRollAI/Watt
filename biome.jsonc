@@ -12,10 +12,15 @@
       "!**/coverage",
       "!**/node_modules",
       "!**/.wrangler",
+      // RR7 dashboard 的构建产物与 typegen 输出（packages/dashboard）。
+      "!**/build",
+      "!**/.react-router",
       // agent worktree（.claude/worktrees/*）内含独立 biome.jsonc，嵌套配置会让根扫描报错。
       "!**/.claude",
       // vendored 上游 tool-bridge worker 源码：保持与上游一致，不做本仓库风格 lint（见 packages/toolbridge/README.md）。
       "!**/vendor",
+      // shadcn/ui CLI 生成的组件（packages/dashboard/app/components/ui）：视为 vendored，保持与上游生成器一致。
+      "!**/app/components/ui",
       "!**/worker-configuration.d.ts",
       "!**/*.jsonc"
     ]
@@ -41,6 +46,12 @@
   "json": {
     "formatter": {
       "enabled": true
+    }
+  },
+  "css": {
+    // dashboard 的 app.css 用 Tailwind v4 指令（@custom-variant/@theme/@apply）。
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }

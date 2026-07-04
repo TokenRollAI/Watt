@@ -17,8 +17,10 @@
 | M7 | Task | 跨小时/跨天长任务 + 人类检查点 | Cloudflare Workflows | Workflows 引擎持久化（step.do / sleep ≤365 天 / waitForEvent） | TaskManager |
 | M8 | Model Provider | 模型渠道注册/默认路由/fallback/计量 | AI Gateway（统一 LLM 流量入口） | D1（Provider 配置）；密钥经 Secrets | ModelProviderRegistry / ModelRouter |
 | M9 | Observability | 用量/费用/缓存/性能/审计 | AI Gateway analytics + Workers Analytics Engine | Analytics Engine（时序）+ D1（审计明细） | Metrics / AuditLog |
-| M10 | Management | Dashboard + Manage Agent + Watt CLI 三对等入口 | Pages（React）+ 内置 Agent（manage/*）+ npm `watt-cli` | 无自有存储（纯 Platform API 客户端） | 复用各模块接口（HTBP 绑定），无管理旁路 |
+| M10 | Management | Dashboard + Manage Agent + Watt CLI 三对等入口 | gateway Static Assets 同域托管的 React Router 7 SPA（`ssr:false`，Tailwind v4 + shadcn/ui，16 视图全 CRUD + manage 对话，R36）+ 内置 Agent（manage/*）+ npm `@tokenroll/watt` | 无自有存储（纯 Platform API 客户端） | 复用各模块接口（HTBP 绑定），无管理旁路 |
 | M11 | Plugin System | 一切扩展的注册与生命周期 | Registry DO + Worker 部署（或外部 HTTP 服务） | PluginRegistry DO | PluginRegistry / PluginLifecycle |
+
+M10 Dashboard 的 manage 对话链路（R36）：Spawn 建会话（**不带 expect**，避免 harness 空跑一次 LLM）→ 每轮 `Send{expect}` → 1.5s 轮询 `EventStore.List{correlationId}` 取 `agent.result`/`agent.failed` → 渲染 `payload.output`（70s 兜底超时；选型见 [../memory/decisions/dashboard-rr7-stack.md](../memory/decisions/dashboard-rr7-stack.md)）。
 
 ## 两个全局模式
 

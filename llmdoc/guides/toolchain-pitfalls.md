@@ -1,6 +1,6 @@
 # 工具链安装与测试配置的坑
 
-> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）、§46~53 为 Round 23~32（Phase 6/7 + E2E）、§54~61 为 Round 33（可用性冲刺：plugin 化 + worktree 并行）、§62~64 为 Round 34（维护轮：飞书 agent 工具授权修复）实测踩坑与已验证解法。
+> 适用场景：在本机安装依赖、配置 vitest-pool-workers 测试、调整 TS 工程、跑 wrangler provision/deploy 时。§1~5 为 Round 1（Phase 0 骨架）、§6~11 为 Round 2（资源 provision + 部署）、§12~14 为 Round 3（Phase 0 关门）、§15~20 为 Round 4~6（Phase 1 Auth）、§21~25 为 Round 7（Phase 1 关门）、§26~29 为 Round 9/10（Phase 2 Event Gateway + 关门）、§30~34 为 Round 12/13（Phase 3 Context Layer + 关门）、§36~40 为 Round 14~18（Phase 4 Tool+Agent + 关门）、§41~45 为 Round 19~21（Phase 5 Task+Scheduler）、§46~53 为 Round 23~32（Phase 6/7 + E2E）、§54~61 为 Round 33（可用性冲刺：plugin 化 + worktree 并行）、§62~64 为 Round 34（维护轮：飞书 agent 工具授权修复）、§65 为 R35 后信任根轮换断链修复、§66~68 为 Round 36（Dashboard RR7 重构）实测踩坑与已验证解法。
 
 ## 1. 大二进制下载超时（npm registry）
 
@@ -336,3 +336,33 @@ zsh 对 `${!var}` 报 bad substitution，但**管道右侧的 `wrangler secret p
 
 - `watt event tail ... --json` 尾部的 `--json` 被**静默忽略**（正确：`watt --json event tail ...`）——轮询解析不到 JSON，R34 曾空转 60s 误判「无出站」。
 - 轮询类验证首轮就零输出时，先怀疑命令形状再怀疑系统。（与 §7 的 banner 污染是不同坑：那是 wrangler，这是 watt CLI 的选项位置语义。）
+
+## 65. 信任根轮换后 pluginToken 静默失效——标准诊断与修复流程
+
+信任根轮换（admin `--rotate` 或 R35 Root Key 改造这类换根动作）会连坐吊销 pluginToken，症状是**入站消息静默消失**（plugin 收到飞书回调但 Publish 401 被丢弃，飞书侧收 502；平台无任何入站留痕）。标准流程（R35 后实测跑通）：
+
+1. 查 `watt-events` 最近入站时间戳——判定"消息没进来"而非"进来了没回"。
+2. 打 plugin `/healthz`——排除 worker 本身挂掉。
+3. challenge 握手探测——排除验签/路由层问题。
+4. 用 `FEISHU_VERIFICATION_TOKEN` 构造**假 `im.message.receive_v1`**（用假 chat_id 防打扰真实群）打 `/webhook/event`，看 Publish 环节状态——**401 即 pluginToken 死**。
+5. 单跑 `watt plugin register channel-feishu` 重签 + `wrangler secret put` 到 plugin worker（stdin 直 put）——**勿跑完整 setup feishu**（其 def Write 会冲掉部署侧 toolScopes/grants，§63）。
+6. 假事件重放收 `{"ok":true}` + D1 落库确认，再以真人群消息双向验证收口。
+
+通用教训：**分段假事件探测能把"静默断链"精确定位到具体环节**（握手/验签/Publish 各自独立可测）；凡换信任根，主动核查全部派生凭据（pluginToken 等）而非等线上断链。
+
+## 66. gitignore 的 Python 模板 `lib/` 规则静默吞掉 `packages/*/app/lib/`
+
+- 根 `.gitignore` 沿用的 Python 模板含裸 `lib/` 规则——匹配**任意层级**的 lib 目录，R36 曾把 dashboard 的 `app/lib/`（整个 api 层）静默排除在版本控制外，本地全绿但文件从未入库。
+- 解法：收窄为 `/lib/`（仅根目录）；用 `git check-ignore -v <path>` 验证具体文件命中哪条规则。
+- 通用教训：新增深层目录后 `git status` 看不到预期新文件时，先怀疑 gitignore 模板遗产规则。
+
+## 67. RR7 SPA 模式（`ssr:false`）构建仍需 `@react-router/node` + `isbot` 在 dependencies
+
+- React Router 7 framework mode 即使 `ssr: false`，`react-router build` 仍会解析 server runtime——dependencies 缺 `@react-router/node` 与 `isbot` 时报 **"Could not determine server runtime"** 构建失败（devDependencies 不够）。
+- `react-router typegen` 同理依赖这两个包。
+
+## 68. biome 对 Tailwind v4 指令与 RR7 产物目录的配置要求
+
+- Tailwind v4 的 CSS 指令（`@theme`/`@utility` 等）会被 biome CSS 解析器报错——需配 `css.parser.tailwindDirectives: true`。
+- RR7 的构建产物 `build/` 与类型生成目录 `.react-router/` 必须加进 biome `files` 排除，否则 check 扫产物噪声爆炸。
+- shadcn 的 `app/components/ui/` 按 vendored 代码排除不 lint（与 toolbridge vendor 同一纪律）。

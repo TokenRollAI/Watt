@@ -17,6 +17,19 @@
 
 # 轮次记录
 
+## Round 36 — 2026-07-04（Dashboard 全量重构：RR7 + shadcn 控制台 + CLI 全功能对齐 + Manage 对话）
+
+- 目标：重构 dashboard 为 Cloudflare 友好的现代前端——界面美观 + 功能与 CLI 对齐（含 manage 对话）。
+- 动作：
+  - **骨架（主 assistant）**：packages/dashboard 原地重建为 React Router 7 framework mode SPA（`ssr:false`，产物仍落 dist/ → gateway assets 同域托管管道零改动）+ Tailwind v4 + shadcn/ui（23 组件，`app/components/ui` 视为 vendored 不 lint）；「电力控制台」主题（暗色优先/炭黑+琥珀/IBM Plex）；16 路由 + Sidebar 五组导航 + 登录页（Root Key 换发/token 粘贴，whoami 验证后放行）+ clientLoader 认证门卫；api 层拆 core/types/platform + domain 文件（barrel export *）。
+  - **五视图族并行（5 worker，文件集互斥）**：A=Overview 4 stat 卡+Audit/Events 摘要、Metrics 查询（8 指标+范围+CSS 条形）、Audit 过滤、Events tail 轮询+详情+subs；B=Agents 定义/实例双 Tab+Spawn/Send/Terminate+派生树、**Manage 对话页**（Spawn 建会话→Send{expect}→1.5s 轮询 event List{correlationId} 取 agent.result/failed，70s 兜底，sessionStorage 会话恢复）；C=Tasks 七态+Run/Signal/Cancel、Cron 三型 action（publish/agent/script）+Trigger、Policies+MapIdentity；D=Context/Tools 双栏浏览器（管理面+消费面，call=end-path+{arguments} 信封）；E=Secrets/Channels/Providers/Plugins（通用注册，pluginToken 仅展示一次）/Settings。
+  - **gateway 唯一后端改动**：EventStore.List filter 增 `correlationId`（json_extract payload）——Proto §2.4 先行增补（写明动机），+2 测试。manage 对话「零后端改动可跑通但前端筛会漏」由此收口为一等查询路径。
+  - **团队级修复（主 assistant）**：.gitignore Python 模板 `lib/` 收窄为 `/lib/`（曾静默吞掉 app/lib 整个 api 层）；platform.ts registerPlugin 形状错误删除（真源 {registration:{...,pluginToken}}，E 在 config.ts 以双证重实现）；biome 配 tailwindDirectives + build/.react-router 排除。
+- 验证（主 assistant 亲自跑）：`pnpm verify` exit 0（**1292 tests**：shared 6 + dashboard 71 + core 411 + plugin-feishu 47 + gateway 582+1skip + cli 175）；`pnpm build:deploy` RR7 产物正确落 packages/cli/deploy/dashboard/（模板改写逻辑零调整）；`pnpm deploy:all` exit 0；**线上浏览器实测**（chrome-devtools MCP，workers.dev）：14 视图逐页导航全部渲染无 ErrorBoundary、console 零 error；Manage 对话真实跑通（@llm：spawn manage/cron → 「列出当前所有定时任务」→ 模型经 scheduler_list 工具回复「列表为空」，轮询链路+气泡渲染全 OK）；截图证据 .llmdoc-tmp/screens/{overview,agents,manage-chat}.png。
+- 勾选：无新增 DoD（维护/可用性迭代轮）；M10 Dashboard 从「5 只读视图+3 配置视图」升级为「16 视图全 CRUD + manage 对话」，与 CLI 十六命令族对齐（init/login/channel connect 三个纯本地命令除外，属预期）。
+- 沉淀：llmdoc 更新（current-state dashboard 段 + modules-and-flows M10 + 新决策 dashboard-rr7-stack + pitfalls 增补）；旧 src/ 已删（api 契约测试 18 个迁移并扩展至 71 个）。
+- 遗留：`/oauth/root/token` 不在 CORS 白名单（同域托管无碍，跨源 vite dev 时 Root 登录会被拦——开发期用 token 粘贴路径即可）；agent waiter 无 'none' 类（manage 对话每轮 self-waiter 回投多跑一次 LLM，投资回报低暂不做）;Spawn 带 expect 会触发 harness 空跑（view-b 实测发现，建会话已改为不带 expect 规避）。
+
 ## Round 35 — 2026-07-04（Root Key 持久引导凭据 + npm 发布/CI/CD + dashboard 单域化）
 - 目标：用户三连需求——npm 真实发布 + GitHub CI/CD、dashboard 挂到"一个 domain"、Root Key（仅展示一次）解决登录引导。
 - 动作：

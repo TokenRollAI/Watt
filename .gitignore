@@ -9,13 +9,16 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# RR7 typegen 输出（packages/dashboard，pnpm typecheck 时再生）。
+.react-router/
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Python 模板遗留的 lib/ 会静默吞掉 packages/dashboard/app/lib/——锚定到仓库根只忽略顶层。
+/lib/
+/lib64/
 parts/
 sdist/
 var/

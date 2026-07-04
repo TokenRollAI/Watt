@@ -1,6 +1,6 @@
 # 当前项目状态快照
 
-> 本文档随轮次更新。最后更新：2026-07-04（Round 34 维护轮：飞书群 agent 工具链路线上配置修复，**Phase 0~7 全关门 + Phase 6 ② 已采证——项目全部 Done**）。
+> 本文档随轮次更新。最后更新：2026-07-04（R36 Dashboard 全量重构：RR7 + shadcn 16 视图全 CRUD + manage 对话；**Phase 0~7 全关门 + Phase 6 ② 已采证——项目全部 Done**）。
 
 ## 阶段
 
@@ -11,17 +11,17 @@
   - gateway `src/event/plugin-sender.ts` — **通用出站分发器**（adapter→`channel-<adapter>`（settings.pluginId 可覆盖）→PluginRegistry→`binding:` service binding / HTTPS §11.4 Send）；**feishu-sender 已删，FEISHU_* 移出 gateway**。决策见 [../memory/decisions/plugin-outbound-dispatcher.md](../memory/decisions/plugin-outbound-dispatcher.md)。
   - htbp 三工具（`harness/htbp-tools.ts`：htbp_help/skill/call，scope 前缀约束 + Check PEP + deny 回喂；tools-proxy 抽取 `tools/tool-invoker.ts`）+ `AgentDefinition.systemPrompt`（Proto §3.1 先行）；spawn 落 toolScopes/systemPrompt 进 state。
   - **SecretStore** — `platform://secret` 四动词永不回显；AES-256-GCM + `WATT_SECRET_ENCRYPTION_KEY`；resolveSecret env 优先→KV 回退链。决策见 [../memory/decisions/secretstore-runtime-keys.md](../memory/decisions/secretstore-runtime-keys.md)。
-  - CLI 改名 **`@tokenroll/watt`**（tsup bundle dist/bin.js + `release:cli`；**npm 未真发布**）+ 新命令族 `watt init`（TUI 九步向导）/ `watt setup feishu`（幂等五步）/ `watt secret`（三命令，值走 stdin）。
+  - CLI 改名 **`@tokenroll/watt`**（tsup bundle dist/bin.js + `release:cli`；**npm 已真实发布 v0.1.1，`npx -y @tokenroll/watt` 可直接运行**）+ 新命令族 `watt init`（TUI 九步向导）/ `watt setup feishu`（幂等五步）/ `watt secret`（三命令，值走 stdin）。
   - dashboard 三配置视图（SecretsView / ChannelsView（feishu plugin 状态卡）/ ProvidersView（secretRef 下拉））。
   - lurker 接真实 LLM（default provider caller + state.toolScopes 工具 + scratch 上下文进 system）；**re-Spawn 复活 terminated 实例**（Proto §3.2 已补，Send 不复活）；**Authorizer 接 AgentDefLoader**（agent 主体 PEP 误拒系统性收口）。决策见 [../memory/decisions/agent-spawn-revive-and-defloader.md](../memory/decisions/agent-spawn-revive-and-defloader.md)。
-- **R33 遗留清单**：npm publish 未真执行（`pnpm release:cli`，@tokenroll org 权限待人工）；`watt init` 真实账户全程未跑（交互式 TUI，建议前缀 watt-init-test）；飞书 app 缺「接收群聊中所有消息」权限（群上下文只累积 @ 消息）；未配 ENCRYPT_KEY（明文+token 校验模式，建议后台生成后 secret put 到 plugin）；admin token 1h 短命且轮换连坐 pluginToken（运维摩擦，可考虑 init 的 7d token 或独立 plugin 签名面）；~~httpbin.org 桩工具不稳~~（**R34 已收口**：test/echo get-uuid 已 remount 到 httpbingo.org/uuid）。
+- **R33 遗留清单**：~~npm publish 未真执行~~（**已收口**：`@tokenroll/watt` v0.1.1 已真实发布，`npx -y @tokenroll/watt` 可直接运行）；`watt init` 真实账户全程未跑（交互式 TUI，建议前缀 watt-init-test）；飞书 app 缺「接收群聊中所有消息」权限（群上下文只累积 @ 消息）；未配 ENCRYPT_KEY（明文+token 校验模式，建议后台生成后 secret put 到 plugin）；~~admin token 1h 短命且轮换连坐 pluginToken~~（**R35 已缓解**：Root Key 换发 7d admin token；pluginToken 连坐仍在，标准修复流程见 pitfalls §65）；~~httpbin.org 桩工具不稳~~（**R34 已收口**：test/echo get-uuid 已 remount 到 httpbingo.org/uuid）。
 - 历史 backlog：Phase 5（script 能力表已扩 watt.queryMetric，模板 def 已种子化——基本收口，见 doc-gaps #29）；Phase 4 的 13 MINOR + Phase 3 的 14 MINOR + Phase 2 的 17 MINOR + R27 的 19 MINOR + R32 的 16 MINOR，维护态顺手修；实现声明簇见 doc-gaps #25~#28/#31。
 - Phase 路线：0 骨架/部署管道 → 1 Auth+Event 信封 → 2 Event Gateway → 3 Context Layer → 4 Tool+Agent Runtime → 5 Task+Scheduler → 6 飞书+Observability+Management → 7 六条 E2E 验收（详见 [../overview/project-overview.md](../overview/project-overview.md)）。
 - 上游 tool-bridge：分支 `feat/watt-builtin-and-tool-semantics`（56ab13b，已 push 未开 PR/未合 main）——ToolSpec effect/scope/confirm 语义字段 + builtin 节点类型。Watt 侧以 vendored 方式消费（见下）。
 
-## 源码现状（Round 33 后，测试共 **1233 passed / 1 skipped**：shared 6 + dashboard 18 + core 411 + plugin-feishu 47 + cli 175 + gateway 576+1skip；core 覆盖率 100%，门禁挂 verify）
+## 源码现状（Round 36 后，测试共 **1292 passed / 1 skipped**：shared 6 + dashboard 71 + core 411 + plugin-feishu 47 + cli 175 + gateway 582+1skip；core 覆盖率 100%，门禁挂 verify）
 
-Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/audit/`（AuditStore + Authorizer wrapper 单点 writeAudit，watt-audit 0001）、`src/metrics/`（usage 表 D1+AE 双写 + Metrics.Query + /htbp/platform/metrics）、`src/plugin/`（PluginRegistry watt-providers 0004 + 内置 webhook/feishu 种子 + Write 注册探活）、`src/agent/manage/`（manage/cron·platform 种子 def + scheduler 工具绑定）、CORS 中间件；core `src/channel/feishu.ts`（WS 事件 decode / 卡片 encode）；cli `channel connect`（WSClient + supervisor 重连，**R33 起降为 dev-only 备用**）、`metrics query`、`plugin register|list|health`、`status` 汇总；**packages/dashboard**（Vite+React Pages SPA：Overview/Agents/Tasks/Cron/Audit + **R33 Secrets/Channels/Providers 配置视图**）。Phase 7 新增面：`scripts/e2e/{lib,index,e2e-1..6}.ts`（`pnpm e2e`；E2E_LLM/E2E_FEISHU 门控）；echo def 种子化；harness 接 default provider（'default' 哨兵）；script watt.queryMetric；模板真实化；lurker/scribe 潜伏 agent；sign-admin-token --extra 多身份。
+Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/audit/`（AuditStore + Authorizer wrapper 单点 writeAudit，watt-audit 0001）、`src/metrics/`（usage 表 D1+AE 双写 + Metrics.Query + /htbp/platform/metrics）、`src/plugin/`（PluginRegistry watt-providers 0004 + 内置 webhook/feishu 种子 + Write 注册探活）、`src/agent/manage/`（manage/cron·platform 种子 def + scheduler 工具绑定）、CORS 中间件；core `src/channel/feishu.ts`（WS 事件 decode / 卡片 encode）；cli `channel connect`（WSClient + supervisor 重连，**R33 起降为 dev-only 备用**）、`metrics query`、`plugin register|list|health`、`status` 汇总；**packages/dashboard**（R36 全量重构，见下条目）。Phase 7 新增面：`scripts/e2e/{lib,index,e2e-1..6}.ts`（`pnpm e2e`；E2E_LLM/E2E_FEISHU 门控）；echo def 种子化；harness 接 default provider（'default' 哨兵）；script watt.queryMetric；模板真实化；lurker/scribe 潜伏 agent；sign-admin-token --extra 多身份。
 
 - `packages/shared` — `WattError`（规范 7 码，裸 body 契约见 [../memory/decisions/bare-watterror-body.md](../memory/decisions/bare-watterror-body.md)）。
 - `packages/core`（@watt/core，平台核心纯逻辑，零 Cloudflare 依赖）：
@@ -36,8 +36,9 @@ Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/aud
   - `src/channel/feishu.ts` — 飞书事件 decode / 卡片 encode 纯逻辑（webhook 与 WS 共用）。
 - `packages/toolbridge` — **vendored** 上游 `TokenRollAI/tool-bridge` worker 源码 **@56ab13b**（vendor src/worker + ASSETS patch + patch 守卫脚本；升级流程见该包 README.md）。部署为独立 Worker `watt-toolbridge`。
 - **`packages/plugin-feishu`（R33 新增）** — 独立 Worker `watt-plugin-feishu`，第一个 watt-plugins/* 实例：`/webhook/event` 自持回调（challenge 握手 + 验签（纯 sha256 拼接非 HMAC，pitfalls §61）+ AES 解密 + decode + mentions 展开 + 以 pluginToken 调平台 Publish）+ §11.4 Encode/Send 面（gateway 经 service binding 调入）+ FEISHU_* 凭据自持。
+- **`packages/dashboard`（R36 全量重构）** — React Router 7 framework mode SPA（`ssr:false`）+ Tailwind v4 + shadcn/ui（23 组件，`app/components/ui` 视为 vendored 不 lint）：**16 视图**（Overview/Metrics/Events/Audit/Agents/Manage Chat/Tasks/Cron/Context/Tools/Policies/Providers/Channels/Plugins/Secrets/Settings）**全 CRUD + manage 对话**，与 CLI 十六命令族对齐（init/login/channel connect 三个纯本地命令除外）。`app/` 结构 = `routes/` + `lib/api/{core,types,platform,+各 domain 文件}`（barrel export *）+ `components/ui`；测试 71 个纯 api 契约测试；产物 `build/client` → dist/，gateway assets 同域托管管道零改动。选型与 manage 对话轮询方案见 [../memory/decisions/dashboard-rr7-stack.md](../memory/decisions/dashboard-rr7-stack.md)。
 - `packages/gateway`（Hono Worker，入口 export fetch/queue + 四个 DO 类）：
-  - `src/authz/` `src/event/` `src/context/` `src/http/{auth,errors,oauth,routes,context-routes,inbound}` — Phase 1~3 面（详见 doc-gaps #25/#26/#27 与 PROGRESS Round 5~13）。
+  - `src/authz/` `src/event/` `src/context/` `src/http/{auth,errors,oauth,routes,context-routes,inbound}` — Phase 1~3 面（详见 doc-gaps #25/#26/#27 与 PROGRESS Round 5~13）。**R36：EventStore.List filter 增 `correlationId`**（json_extract payload；Proto §2.4 先行增补，dashboard manage 对话轮询 agent.result 用）。
   - `src/agent/` — `agent-instance.ts`（AgentInstance = Agents SDK Agent 类，DO；**R33：spawn 落 toolScopes/systemPrompt 进 state；re-Spawn 复活 terminated 并按当前 def 重新快照**）、`harness/`（echo + llm；模型调用经 Vercel AI SDK ai@6 + @ai-sdk/anthropic@3，AbortSignal.timeout(60s)；**htbp-tools.ts 三工具 R33**；`lurker.ts` 潜伏 harness R31/**R33 LLM 化**）、`agent-correlation.ts`（直投 waiter + 三态 settle + 超时 alarm 代发）、`agent-registry.ts`、`agent-runtime.ts`（Spawn 幂等 / Send 先查索引防幽灵 / Terminate cascade / ListInstances tree）、`model-provider.ts`（0003，set-default）。**Authorizer 经 AgentDefLoader 惰性播种 claims.agent_def（R33）**。
   - `src/tools/` — `tool-registry.ts`（watt-providers 0001）+ `tool-invoker.ts`（R33 从 tools-proxy 抽取，htbp 工具与代理共用）。
   - `src/task/` — `watt-task-workflow.ts`（WattTaskWorkflow = Workflows WorkflowEntrypoint，deep-research N=3 fan-in + auto-delivery-lite 两模板真实化 R29/30；taskId 即 instanceId 免映射；checkpoint waitForEvent 超时 human 10min/agent 5min）、`task-store.ts`、`task-manager.ts`（七动词）、`task-events.ts`。HITL 闭环：consumer 真实 TaskSignaler + Check(task://,'signal')。
@@ -75,7 +76,12 @@ Phase 6 新增面（R23~R27，详表见 PROGRESS 对应轮）：gateway `src/aud
   - test/echo 树 `get-uuid` 已换 **`https://httpbingo.org/uuid`**（httpbin.org 不稳，R33 遗留收口）；test/watt 与 finance/e2e4 仍是 postman-echo 不动。
   - 线上 lurker/scribe def 现为 `toolScopes:["test"]` + grants 含 `tool://test`/`tool://test/*`（read,invoke）——**与代码字面（lurker.ts/setup.ts 默认值）不同步**，重跑 setup feishu/e2e-3 会整体冲掉（pitfalls §63）。
   - 两条策略已入库：`lurker-tool-test-root`（agent:lurker/scribe → tool://test）+ `lurker-tool-test-sub`（→ tool://test/*），均 read,invoke allow（两关授权修复，pitfalls §62）。
-  - pluginToken 已于 R34 随 admin token `--rotate` 轮换重签并重 put 到 watt-plugin-feishu；**入站 webhook 的新 pluginToken 尚未经真人群消息验证**（R34 遗留，本轮注入走 admin Publish 旁路）。
+  - pluginToken 已于 R34 随 admin token `--rotate` 轮换重签并重 put 到 watt-plugin-feishu；~~入站 webhook 的新 pluginToken 尚未经真人群消息验证~~（**已收口**：R34 的 pluginToken 又被 R35 信任根轮换连坐吊销，本轮重签后已经假事件探测 + 真人群消息双向验证，见下）。
+- **运维事实（2026-07-04 深夜，飞书入站断链修复，零代码改动）**：
+  - **断链根因**：R34 重签的 pluginToken 被 R35 Root Key 改造的信任根轮换**连坐吊销**——用户群消息全部在 plugin Publish 步骤 **401 静默丢弃**（飞书侧回调收 502），入站彻底断链。
+  - **修复**：单跑 `npx @tokenroll/watt plugin register channel-feishu` 重签 pluginToken（manifest 与线上一致：kind=channel-adapter、interface-version=channel-adapter/v1、endpoint=binding:FEISHU_PLUGIN、health-path=/healthz、grants=[{resources:["event://"],actions:["write"]}]）+ stdin 直 put 到 watt-plugin-feishu；**勿跑完整 setup feishu**（pitfalls §63）。
+  - **验证**：假事件探测（FEISHU_VERIFICATION_TOKEN 构造 im.message.receive_v1 + 假 chat_id）`{"ok":true}` + 真人群消息双向验证通过（两条 @watt 入站均有出站回复）。标准诊断流程沉淀为 **pitfalls §65**。
+  - **admin token 现状**：`~/.watt/credentials.json` 存有 **7d admin token**（R35 Root Key `POST /oauth/root/token` 换发产物），日常运维直接可用，无需每次重签。
 - **`pnpm deploy:all` 内置五库 migrations**：`d1 migrations apply {watt-policies,watt-events,watt-context,watt-providers,watt-audit} --remote`（幂等）。
 - Queue `watt-events` consumer 已绑；DLQ `watt-events-dlq` 已建。
 - `scripts/smoke.ts` 内置 5 次重试（toolchain-pitfalls §9）。

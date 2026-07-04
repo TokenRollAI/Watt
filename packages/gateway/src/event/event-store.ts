@@ -49,16 +49,25 @@ export interface Page<T> {
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 200;
 
-/** EventStore.List 合法 filter 键集合（§2.4：type/channel/session/时间范围）。 */
-const ALLOWED_LIST_FILTER_KEYS = new Set(['type', 'channel', 'session', 'since', 'until']);
+/** EventStore.List 合法 filter 键集合（§2.4：type/channel/session/correlationId/时间范围）。 */
+const ALLOWED_LIST_FILTER_KEYS = new Set([
+  'type',
+  'channel',
+  'session',
+  'correlationId',
+  'since',
+  'until',
+]);
 
 export class EventStore {
   constructor(private readonly db: D1Database) {}
 
   /**
-   * List（§2.4 / §0.2）——filter=type/channel/session/since/until，返回 Page<Event>。
+   * List（§2.4 / §0.2）——filter=type/channel/session/correlationId/since/until，返回 Page<Event>。
    * limit 默认 50、上限 200（超限静默钳制）；未声明的 filter 键 → invalid_argument。
    * since 含端（>=）、until 不含端（<），按 occurred_at 倒序。
+   * correlationId 匹配 payload.correlationId（agent.result/agent.failed 的定向回送载荷）——
+   * 非索引列走 json_extract 全扫，配合 type/since 收窄使用（留痕库 30 天量级可接受）。
    */
   async list(opts: ListOptions = {}): Promise<Page<Event> | WattError> {
     const filter = opts.filter ?? {};
@@ -84,6 +93,10 @@ export class EventStore {
     if (filter.session !== undefined) {
       clauses.push('session = ?');
       binds.push(filter.session);
+    }
+    if (filter.correlationId !== undefined) {
+      clauses.push(`json_extract(envelope, '$.payload.correlationId') = ?`);
+      binds.push(filter.correlationId);
     }
     if (filter.since !== undefined) {
       clauses.push('occurred_at >= ?');

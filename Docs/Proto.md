@@ -303,10 +303,12 @@ interface Subscription {
 
 ```ts
 interface EventStore {
-  List(opts?: ListOptions): Page<Event>   // filter: type/channel/session/时间范围
+  List(opts?: ListOptions): Page<Event>   // filter: type/channel/session/correlationId/时间范围
   Get(eventId: string): Event
 }
 ```
+
+> `correlationId` filter（2026-07-04 增补）：匹配 `payload.correlationId`（`agent.result`/`agent.failed` 的定向回送载荷，§3.4）。动机：HTTP 客户端（Dashboard/CLI）对 agent 的 `Send(expect)` 只拿到 `{accepted, correlationId}` 回执，而结果事件的 session 为空、既有 filter 无法隔离一次对话——补此键使「send → 按 correlationId 轮询 List」成为一等查询路径，免于客户端拉全量 type 再前端过滤（高并发下会漏）。
 
 ---
 

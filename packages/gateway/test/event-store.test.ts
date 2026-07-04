@@ -138,6 +138,38 @@ describe('EventStore.list (§2.4 / §0.2)', () => {
     expect(page.items).toHaveLength(200);
   });
 
+  it('filters by correlationId via payload.correlationId (§2.4 增补)', async () => {
+    const store = new EventStore(env.DB_EVENTS);
+    await store.put(
+      E({
+        id: 'r1',
+        type: 'agent.result',
+        session: undefined,
+        payload: { correlationId: 'corr-1', instanceId: 'i1', output: { text: 'hi' } },
+      }),
+    );
+    await store.put(
+      E({
+        id: 'r2',
+        type: 'agent.failed',
+        session: undefined,
+        payload: { correlationId: 'corr-2', instanceId: 'i1', reason: 'timeout' },
+      }),
+    );
+    await store.put(E({ id: 'x', type: 'im.message' }));
+
+    const byCorr = await store.list({ filter: { correlationId: 'corr-1' } });
+    if ('code' in byCorr) throw new Error('expected Page');
+    expect(byCorr.items.map((e) => e.id)).toEqual(['r1']);
+
+    // 与 type 组合收窄（推荐用法：轮询一次对话的 result/failed）。
+    const corrAndType = await store.list({
+      filter: { correlationId: 'corr-2', type: 'agent.failed' },
+    });
+    if ('code' in corrAndType) throw new Error('expected Page');
+    expect(corrAndType.items.map((e) => e.id)).toEqual(['r2']);
+  });
+
   it('rejects an unknown filter key with invalid_argument (§0.2)', async () => {
     const store = new EventStore(env.DB_EVENTS);
     const res = await store.list({ filter: { bogus: 'x' } });

@@ -15,7 +15,19 @@
     "noEmit": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "rootDirs": [".", "./.react-router/types"],
+    "paths": {
+      "~/*": ["./app/*"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    ".react-router/types/**/*",
+    "react-router.config.ts",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
 }
