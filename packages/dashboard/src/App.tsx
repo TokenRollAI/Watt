@@ -9,6 +9,7 @@ import {
   getBase,
   getToken,
   healthz,
+  rootExchange,
   setBase,
   setToken,
   type TaskInfo,
@@ -339,11 +340,13 @@ function Audit(): ReactNode {
   );
 }
 
-// ─── Settings（token + base url 手填持久化）───────────────────────────────
+// ─── Settings（token + base url 手填持久化 / Root Key 登录 §6.5e）──────────
 function Settings({ onSaved }: { onSaved: () => void }): ReactNode {
   const [token, setTok] = useState(getToken());
   const [base, setB] = useState(getBase());
+  const [rootKey, setRootKey] = useState('');
   const [saved, setSaved] = useState('');
+  const [rootMsg, setRootMsg] = useState('');
 
   const save = () => {
     setToken(token.trim());
@@ -352,17 +355,47 @@ function Settings({ onSaved }: { onSaved: () => void }): ReactNode {
     onSaved();
   };
 
+  // Root Key 换发：成功即存 JWT 并清空输入（Root Key 明文绝不持久化）。
+  const loginRoot = async () => {
+    setRootMsg('');
+    try {
+      setBase(base.trim()); // 换发用当前填的 base（空=同源）
+      const jwt = await rootExchange(rootKey.trim());
+      setToken(jwt);
+      setTok(jwt);
+      setRootKey('');
+      setRootMsg('Logged in (token valid 7d).');
+      onSaved();
+    } catch (e) {
+      setRootMsg(`Root login failed: ${formatError(e)}`);
+    }
+  };
+
   return (
     <Panel title="Settings">
       <p className="muted">
-        Paste a Watt user token (from <code>watt login</code> or <code>watt --json login</code>).
-        Base URL empty = same origin.
+        Log in with the deployment Root Key (shown once by <code>scripts/set-root-key.mjs</code> /{' '}
+        <code>watt init</code>), or paste a user token from <code>watt login</code>. Base URL empty
+        = same origin.
       </p>
       <div className="form-col">
         <label>
           API base URL
           <input placeholder="(same origin)" value={base} onChange={(e) => setB(e.target.value)} />
         </label>
+        <label>
+          Root Key（换发 7 天 admin token；明文不落存储）
+          <input
+            type="password"
+            placeholder="wrk_..."
+            value={rootKey}
+            onChange={(e) => setRootKey(e.target.value)}
+          />
+        </label>
+        <button type="button" onClick={loginRoot} disabled={rootKey.trim().length === 0}>
+          Login with Root Key
+        </button>
+        {rootMsg && <span className="muted">{rootMsg}</span>}
         <label>
           Token
           <textarea

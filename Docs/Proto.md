@@ -751,6 +751,14 @@ interface IdentityMapper {
 - **device_code 一次性使用（2026-07-02 补充，对齐 RFC 8628 单次授权语义）**：换取成功后 grant 即被消费（存储删除），同一 `device_code` 再次请求 → `{ error: "invalid_grant" }`。`user_code` 匹配对大小写鲁棒（服务端归一化为大写再查）。
 - 非交互环境（CI/loop）不走 device flow：直接以 `WATT_TOKEN` 环境变量提供 token（本地用平台私钥离线签发）。
 
+**e) Root Key（规范性补充，2026-07-04；持久引导凭据）**：解决"admin token 过期 → 只能轮换私钥重签 → 吊销全部存量 token"的引导死角。
+
+- **形态**：一把高熵持久密钥（`wrk_` 前缀 + ≥32 字节随机，base64url），**生成/设置时仅展示一次**；平台侧只存其 **SHA-256 摘要**（部署期 secret `WATT_ROOT_KEY_HASH`，hex），明文永不落盘/落库/回显。
+- **能力面**：Root Key **不能直接作为 Bearer 调用任何平台接口**——唯一用途是经 `POST /oauth/root/token` `{ root_key, ttl_sec? }` **换发**一个 §6.5a 形状的 admin user token（`sub=` 初始 admin principal，`roles` 经 ResolvePrincipal 实时解析；`ttl_sec` 缺省 7d、上限 30d）。成功 → `{ access_token, token_type:"Bearer", expires_in }`（OAuth 形状，随 §6.5d 同享 WattError 豁免）；摘要不匹配 → HTTP 401 `{ error:"invalid_grant" }`；`WATT_ROOT_KEY_HASH` 未配置 → HTTP 400 `{ error:"invalid_request" }`（功能未启用）。
+- **安全义务**：服务端比对必须常数时间（先 SHA-256 再比较摘要天然满足）；每次换发（成功/失败都）写 AuditRecord（resource `platform://auth`，action `root-exchange`）；失败不泄露"未配置 vs 不匹配"以外的信息。
+- **与轮换解耦**：换发用平台当前私钥签名——JWT 私钥轮换**不影响** Root Key 本身；Root Key 泄露/轮换 = 重新生成并覆写 `WATT_ROOT_KEY_HASH`（旧 key 立即失效，已换发的存量 JWT 不受影响、自然过期）。
+- **消费面**：Dashboard 登录页 / `watt login --root`（key 经 stdin/密码框输入，绝不走 argv/URL）。
+
 ### 6.6 SecretStore（运行时密钥，规范性）
 
 平台密钥有两种来源：**部署期** secret（`wrangler secret put` / `.dev.vars`，注入为 Worker 运行时 `env.<NAME>`）与 **运行时** secret（经保护端点写入 KV，无需重新部署）。`ModelProvider.secretRef`（§9）、`ChannelConfig.settings.verifySecretRef`（§2.1）等**引用名**在解析时统一走同一条**回退链**（见下）。

@@ -239,13 +239,17 @@ export async function runInit(
     complete('migrations');
   });
 
+  let rootKeyOnce: string | undefined;
+
   // ── ⑥ secrets + 首 admin token ───────────────────────────────────────────────
   await run('secrets', async () => {
     const tr = await generateTrustRoot(state.adminPrincipal);
+    rootKeyOnce = tr.rootKey; // 收尾仅展示一次（不入 answers 存档，不落盘）。
     const puts: [string, string][] = [
       ['WATT_JWT_PRIVATE_JWK', tr.privateJwkJson],
       ['WATT_SECRET_ENCRYPTION_KEY', tr.encryptionKey],
       ['WATT_ADMIN_PRINCIPAL', state.adminPrincipal],
+      ['WATT_ROOT_KEY_HASH', tr.rootKeyHash],
     ];
     for (const [name, value] of puts) {
       const res = putSecret(spawn, gatewayDir, name, value);
@@ -320,7 +324,7 @@ export async function runInit(
   });
 
   // ── ⑨ 收尾 ─────────────────────────────────────────────────────────────────
-  printSummary(state, gatewayBase, dashboardUrl ?? state.dashboardUrl);
+  printSummary(state, gatewayBase, dashboardUrl ?? state.dashboardUrl, rootKeyOnce);
   p.outro('watt init complete');
   return 0;
 }
@@ -453,10 +457,22 @@ function deployWorkerCapture(spawn: Spawner, cwd: string): SpawnResult {
   return spawn('npx', ['--yes', 'wrangler@4.107.0', 'deploy', '--no-bundle'], { cwd });
 }
 
-function printSummary(state: DeploymentState, gatewayBase?: string, dashboardUrl?: string): void {
+function printSummary(
+  state: DeploymentState,
+  gatewayBase?: string,
+  dashboardUrl?: string,
+  rootKeyOnce?: string,
+): void {
   const lines: string[] = [];
   lines.push(`Gateway:   ${gatewayBase ?? '(see wrangler deploy output above)'}`);
   if (dashboardUrl) lines.push(`Dashboard: ${dashboardUrl}`);
+  if (rootKeyOnce !== undefined) {
+    lines.push('');
+    lines.push('Root Key（§6.5e，仅此一次展示——立即存入密码管理器）:');
+    lines.push(`  ${rootKeyOnce}`);
+    lines.push('  用途：任何时候换发 7 天 admin token（watt login --root / Dashboard Settings），');
+    lines.push('  不受 JWT 私钥轮换影响；泄露时重跑 scripts/set-root-key.mjs 覆写。');
+  }
   lines.push('');
   lines.push('Next steps:');
   lines.push(`  export WATT_BASE_URL=${gatewayBase ?? '<gateway-url>'}`);

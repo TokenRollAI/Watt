@@ -247,47 +247,79 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
     .description('Authenticate via device flow (RFC 8628); admin approves the user code')
     .option('--approve <user_code>', 'admin: approve a pending device user code with your token')
     .option('--principal <principal>', 'admin: bind approval to this principal (default: yourself)')
-    .action(async (cmdOpts: { approve?: string; principal?: string }) => {
-      const base = requireBaseUrl(env());
-      if (cmdOpts.approve) {
-        const token = requireToken(env(), credPath, opts.fs);
-        const result = await approveDevice(base, token, cmdOpts.approve, cmdOpts.principal, {
+    .option(
+      '--root',
+      'exchange the Root Key (read from stdin/TTY, §6.5e) for an admin token',
+      false,
+    )
+    .option('--ttl <seconds>', 'token TTL for --root exchange (default 7d, max 30d)')
+    .action(
+      async (cmdOpts: { approve?: string; principal?: string; root: boolean; ttl?: string }) => {
+        const base = requireBaseUrl(env());
+        if (cmdOpts.root) {
+          // Root Key 只从 stdin/TTY 读（绝不走 argv，防 shell history 泄漏）。
+          const readStdin = opts.readStdin ?? defaultReadStdin;
+          if (opts.readStdin === undefined && process.stdin.isTTY) {
+            err('Enter Root Key (wrk_...), then Ctrl-D:');
+          }
+          const rootKey = (await readStdin()).replace(/\r?\n$/, '').trim();
+          if (rootKey.length === 0) throw new CliError('root key is empty (provide via stdin)', 2);
+          const { loginWithRootKey } = await import('./login.ts');
+          const result = await loginWithRootKey(base, rootKey, {
+            ...(cmdOpts.ttl !== undefined
+              ? { ttlSec: parsePositiveInt(cmdOpts.ttl, '--ttl') }
+              : {}),
+            fetch: opts.fetch,
+            fs: opts.fs,
+            credentialsPath: credPath,
+          });
+          if (asJson()) out(JSON.stringify({ ok: true, expires_in: result.expiresIn }));
+          else
+            out(
+              `Logged in via Root Key (token expires in ${result.expiresIn}s); credentials saved.`,
+            );
+          return;
+        }
+        if (cmdOpts.approve) {
+          const token = requireToken(env(), credPath, opts.fs);
+          const result = await approveDevice(base, token, cmdOpts.approve, cmdOpts.principal, {
+            fetch: opts.fetch,
+          });
+          if (asJson()) out(JSON.stringify(result));
+          else out(`Approved user code ${cmdOpts.approve} → ${result.principal ?? ''}`);
+          return;
+        }
+        const result = await login(base, (line) => (asJson() ? undefined : out(line)), {
           fetch: opts.fetch,
+          sleep: opts.sleep,
+          now: opts.now,
+          fs: opts.fs,
+          credentialsPath: credPath,
+          onDeviceAuthorized: asJson()
+            ? (auth: DeviceAuthorizeResponse) =>
+                out(
+                  JSON.stringify({
+                    user_code: auth.user_code,
+                    verification_uri: auth.verification_uri,
+                    expires_in: auth.expires_in,
+                  }),
+                )
+            : undefined,
         });
-        if (asJson()) out(JSON.stringify(result));
-        else out(`Approved user code ${cmdOpts.approve} → ${result.principal ?? ''}`);
-        return;
-      }
-      const result = await login(base, (line) => (asJson() ? undefined : out(line)), {
-        fetch: opts.fetch,
-        sleep: opts.sleep,
-        now: opts.now,
-        fs: opts.fs,
-        credentialsPath: credPath,
-        onDeviceAuthorized: asJson()
-          ? (auth: DeviceAuthorizeResponse) =>
-              out(
-                JSON.stringify({
-                  user_code: auth.user_code,
-                  verification_uri: auth.verification_uri,
-                  expires_in: auth.expires_in,
-                }),
-              )
-          : undefined,
-      });
-      if (asJson()) {
-        out(
-          JSON.stringify({
-            access_token_prefix: `${result.access_token.slice(0, 8)}...`,
-            token_type: result.token_type,
-            expires_in: result.expires_in,
-            saved_to: credPath,
-          }),
-        );
-      } else {
-        out(`Logged in. Credentials saved to ${credPath}`);
-      }
-    });
+        if (asJson()) {
+          out(
+            JSON.stringify({
+              access_token_prefix: `${result.access_token.slice(0, 8)}...`,
+              token_type: result.token_type,
+              expires_in: result.expires_in,
+              saved_to: credPath,
+            }),
+          );
+        } else {
+          out(`Logged in. Credentials saved to ${credPath}`);
+        }
+      },
+    );
 
   program
     .command('whoami')

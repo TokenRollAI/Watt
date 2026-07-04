@@ -223,6 +223,8 @@ export default defineConfig({
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
           // SecretStore 主密钥（§6.6，platform-secret 集成测试）——固定测试值（32B base64url）。
           WATT_SECRET_ENCRYPTION_KEY: 'XOL8MO7eCWDeaTn27cjz6KkV2u3o0d1KnpKzVQxUebQ',
+          // Root Key 摘要（§6.5e，oauth-root 集成测试）——sha256('wrk_test_root_key_fixture_0001')。
+          WATT_ROOT_KEY_HASH: '9f5c3e27e76bb61a941267e65c0571361ca0debbb77d579f1b32466109a15cdd',
           // @llm 门控透传：workerd 内读不到宿主 process.env，经 binding 注入（缺省空 → 测试 skip）。
           LLM_TESTS: process.env.LLM_TESTS ?? '',
           ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',

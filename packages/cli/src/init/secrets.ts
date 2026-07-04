@@ -32,6 +32,10 @@ export interface GeneratedTrustRoot {
   encryptionKey: string;
   /** 首 admin token（7d；写 ~/.watt/credentials.json，供后续 CLI 调用）。 */
   adminToken: string;
+  /** Root Key 明文（§6.5e；`wrk_`+32B base64url，**收尾仅展示一次**，绝不入 answers 存档）。 */
+  rootKey: string;
+  /** Root Key SHA-256 hex 摘要（喂 WATT_ROOT_KEY_HASH）。 */
+  rootKeyHash: string;
 }
 
 /** 生成信任根三件套 + 首 admin token（同进程内签发后私钥即丢弃）。 */
@@ -47,7 +51,16 @@ export async function generateTrustRoot(adminPrincipal: string): Promise<Generat
   crypto.getRandomValues(raw);
   const encryptionKey = base64url(raw);
 
-  return { privateJwkJson, encryptionKey, adminToken };
+  // Root Key（§6.5e）：`wrk_` + 32B base64url；平台只存 SHA-256 摘要，明文收尾仅展示一次。
+  const rootRaw = new Uint8Array(32);
+  crypto.getRandomValues(rootRaw);
+  const rootKey = `wrk_${base64url(rootRaw)}`;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rootKey));
+  const rootKeyHash = [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  return { privateJwkJson, encryptionKey, adminToken, rootKey, rootKeyHash };
 }
 
 /** 用给定私钥（SigningKey 或私钥 JWK JSON）签一个 admin token（roles=["admin"]，7d）。 */

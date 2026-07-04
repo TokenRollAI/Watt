@@ -191,3 +191,38 @@ async function safeJson(res: Response): Promise<unknown> {
     return {};
   }
 }
+
+/** Root Key 换发 admin token（§6.5e）——POST /oauth/root/token，成功写凭据文件。 */
+export async function loginWithRootKey(
+  base: string,
+  rootKey: string,
+  opts: {
+    ttlSec?: number;
+    fetch?: typeof globalThis.fetch;
+    fs?: FsDeps;
+    credentialsPath?: string;
+  } = {},
+): Promise<{ expiresIn: number }> {
+  const fetchImpl = opts.fetch ?? globalThis.fetch;
+  const res = await fetchImpl(`${base.replace(/\/+$/, '')}/oauth/root/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      root_key: rootKey,
+      ...(opts.ttlSec !== undefined ? { ttl_sec: opts.ttlSec } : {}),
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (!res.ok || typeof body.access_token !== 'string') {
+    const detail = body.error_description ?? body.error ?? `HTTP ${res.status}`;
+    throw new CliError(`root key exchange failed: ${detail}`, res.status === 401 ? 1 : 2);
+  }
+  const creds: Credentials = { access_token: body.access_token };
+  writeCredentials(creds, opts.credentialsPath, opts.fs);
+  return { expiresIn: body.expires_in ?? 0 };
+}

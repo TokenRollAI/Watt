@@ -107,6 +107,9 @@ export interface Bindings {
   ANTHROPIC_BASE_URL?: string;
   /** lurker scratch namespace TTL 秒（正整数串）——缺省 120（保 E2E 分钟级过期断言）；生产设 3600。 */
   LURKER_SCRATCH_TTL_SEC?: string;
+  /** Root Key 的 SHA-256 摘要（hex，§6.5e）——明文永不进平台；缺省则 /oauth/root/token 报未启用。
+   *  设置：scripts/set-root-key.mjs（生成/覆写，明文仅展示一次）或 watt init 向导。 */
+  WATT_ROOT_KEY_HASH?: string;
   // 飞书凭据（FEISHU_APP_ID/SECRET/BASE_URL）已随 P1 飞书 plugin 化迁往 watt-plugin-feishu Worker 自持——
   //   gateway 出站经通用分发器（event/plugin-sender.ts）§11.4 调 channel-adapter plugin，不再持有渠道凭据。
 }

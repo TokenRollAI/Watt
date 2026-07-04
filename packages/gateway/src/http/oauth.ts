@@ -187,5 +187,74 @@ export function oauthRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars }>
     }
   });
 
+  // ── POST /oauth/root/token（无认证；Root Key 换发 admin token，§6.5e）────────
+  // Root Key 明文只在换发请求 body 里出现一次；平台只存 SHA-256 摘要（WATT_ROOT_KEY_HASH）。
+  // 摘要比对天然常数时间（先哈希再等长比较）；成功/失败都写 AuditRecord（resource
+  // platform://auth，action root-exchange）。JWT 私钥轮换不影响 Root Key（§6.5e 解耦语义）。
+  app.post('/oauth/root/token', async (c) => {
+    const configuredHash = c.env.WATT_ROOT_KEY_HASH;
+    let body: { root_key?: unknown; ttl_sec?: unknown };
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return oauthErrorResponse(c, oauthError('invalid_request', 'request body must be JSON'));
+    }
+    const rootKey = typeof body.root_key === 'string' ? body.root_key : '';
+    if (!rootKey) {
+      return oauthErrorResponse(c, oauthError('invalid_request', 'root_key is required'));
+    }
+    if (configuredHash === undefined || configuredHash.length === 0) {
+      // 功能未启用：与"不匹配"用不同错误码（§6.5e 允许区分未启用），但不含更多细节。
+      return oauthErrorResponse(c, oauthError('invalid_request', 'root key is not configured'));
+    }
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rootKey));
+    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const ok = hex === configuredHash.toLowerCase();
+
+    // 审计（成功/失败都写；best-effort 不阻塞）。
+    try {
+      const { AuditStore } = await import('../audit/audit-store.ts');
+      await new AuditStore(c.env.DB_AUDIT).write({
+        context: {
+          principal: ok ? (c.env.WATT_ADMIN_PRINCIPAL ?? 'user:admin') : 'user:unknown',
+          roles: [],
+          traceId: c.req.header('X-Watt-Trace') ?? crypto.randomUUID(),
+        },
+        resource: 'platform://auth',
+        action: 'root-exchange',
+        decision: ok ? 'allow' : 'deny',
+      });
+    } catch (err) {
+      console.error('root-exchange audit write failed', { err: String(err) });
+    }
+    if (!ok) {
+      return c.json(oauthError('invalid_grant', 'root key mismatch'), 401);
+    }
+
+    // 换发：TTL 缺省 7d、上限 30d（§6.5e）；roles 经 ResolvePrincipal 实时解析（§6.3）。
+    const DEFAULT_TTL = 7 * 24 * 3600;
+    const MAX_TTL = 30 * 24 * 3600;
+    const ttlRaw = typeof body.ttl_sec === 'number' ? Math.floor(body.ttl_sec) : DEFAULT_TTL;
+    const ttlSec = Math.min(Math.max(ttlRaw, 60), MAX_TTL);
+    let keys: Awaited<ReturnType<typeof loadPlatformKeys>>;
+    try {
+      keys = await loadPlatformKeys(c.env);
+    } catch {
+      return oauthErrorResponse(c, oauthError('invalid_request', 'signing key unavailable'));
+    }
+    const principal = c.env.WATT_ADMIN_PRINCIPAL ?? 'user:admin';
+    // 种子引导幂等（首次换发时 admin 角色绑定可能尚未建立）。
+    const policies = new PolicyStore(c.env.DB_POLICIES);
+    const identities = new IdentityMapper(c.env.DB_POLICIES);
+    await ensureSeedPolicy(policies, identities, c.env.WATT_ADMIN_PRINCIPAL);
+    const { roles } = await identities.resolvePrincipal(principal);
+    const token = await signUserToken(
+      { principal, roles, trace: crypto.randomUUID(), ttlSeconds: ttlSec },
+      keys.priv,
+      keys.meta,
+    );
+    return c.json({ access_token: token, token_type: 'Bearer', expires_in: ttlSec });
+  });
+
   return app;
 }

@@ -241,3 +241,24 @@ async function whoamiGet(): Promise<{ principal: string; roles: string[] }> {
   if (!res.ok) throw new ApiError(`whoami HTTP ${res.status}`, res.status);
   return (await res.json()) as { principal: string; roles: string[] };
 }
+
+/** Root Key 换发 admin token（§6.5e）——POST /oauth/root/token；成功返回 token（调用方负责 setToken）。 */
+export async function rootExchange(rootKey: string, ttlSec?: number): Promise<string> {
+  const res = await fetch(`${getBase()}/oauth/root/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      root_key: rootKey,
+      ...(ttlSec !== undefined ? { ttl_sec: ttlSec } : {}),
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+  };
+  if (!res.ok || typeof body.access_token !== 'string') {
+    throw new Error(body.error_description ?? body.error ?? `HTTP ${res.status}`);
+  }
+  return body.access_token;
+}
