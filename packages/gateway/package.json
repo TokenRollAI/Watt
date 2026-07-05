@@ -18,7 +18,8 @@
     "agents": "^0.17.3",
     "ai": "^6.0.219",
     "hono": "4.12.27",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "@tokenroll/tool-bridge": "^0.1.0"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.18.0",
