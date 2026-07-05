@@ -195,7 +195,12 @@ function checkGatewaySecrets() {
   }
   // secret list 输出可能是 JSON 数组或 name 行；用 substring 匹配名字（避开 env-token banner，§7）。
   const listed = `${res.stdout ?? ''}`;
-  const REQUIRED = ['WATT_JWT_PRIVATE_JWK', 'WATT_ADMIN_PRINCIPAL', 'WATT_SECRET_ENCRYPTION_KEY'];
+  const REQUIRED = [
+    'WATT_JWT_PRIVATE_JWK',
+    'WATT_ADMIN_PRINCIPAL',
+    'WATT_SECRET_ENCRYPTION_KEY',
+    'WATT_TOOLBRIDGE_KEY',
+  ];
   // 飞书凭据已随 P1 迁往 watt-plugin-feishu（见 checkPluginFeishuSecrets）——gateway 不再需要 FEISHU_*。
   const OPTIONAL = ['ANTHROPIC_API_KEY'];
   const missingReq = REQUIRED.filter((n) => !listed.includes(n));
@@ -206,6 +211,7 @@ function checkGatewaySecrets() {
         ' 认证端点会 500（WATT_JWT_PRIVATE_JWK/WATT_ADMIN_PRINCIPAL）；' +
         'WATT_SECRET_ENCRYPTION_KEY 缺则 /htbp/platform/secret 报 unavailable（32B base64url，' +
         "生成：node -e \"process.stdout.write(require('crypto').randomBytes(32).toString('base64url'))\")。" +
+        'WATT_TOOLBRIDGE_KEY 缺则 Tool Bridge SDK 同步/管理面不可用。' +
         ' 补：wrangler secret put <NAME>（见 scripts/gen-jwt-keys.mjs）。',
     );
   }

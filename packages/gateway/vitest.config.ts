@@ -25,9 +25,10 @@ const migrationsProviders = await readD1Migrations(resolve(here, 'migrations-pro
 const migrationsAudit = await readD1Migrations(resolve(here, 'migrations-audit'));
 
 // Fake watt-toolbridge（service binding TOOLBRIDGE）——真实 watt-toolbridge Worker 是独立部署单元
-// （packages/toolbridge），本地 vitest 无从加载。此 fake **忠实复现** vendored 上游 packages/toolbridge/
-// vendor/ 的调用语义（逐项对齐，注释标源）：读共享 KV（tenant:<id> 树，由 gateway 代理层 syncTenantTree
-// 写入）→ 按 findNode 语义解析节点 + adapter sub 段 → 按节点 type 分派 describe/call。关键忠实点（这些正是
+// （packages/toolbridge），本地 vitest 无从加载。此 fake 复现新 SDK 链路的关键契约：
+// Host SDK 先 POST /api/hosts/:id/mounts:sync，把 Watt ToolMount 映射成 HostMount；随后
+// tree.help/tree.call 走 /htbp/*。fake 记录同步后的 host tree，再按上游 findNode/adapter 语义解析。
+// 关键忠实点（这些正是
 // fake 曾掩盖的契约漂移面）：
 //   - findNode（registry.ts）：directory 逐级下钻，走到非 directory 叶子后剩余段是 adapter sub。
 //   - http adapter（adapters/http.ts）：call 要求 sub.length>0（endpoint 名），否则上游抛
@@ -38,8 +39,7 @@ const migrationsAudit = await readD1Migrations(resolve(here, 'migrations-audit')
 //   - directory adapter（adapters/directory.ts）：call 不可调用 → 上游抛 "not callable" → 500。
 //   - describe：directory/叶子·无 sub → resources[]（列子节点/端点）；叶子·有 sub → endpoint schema。
 //   - 缺省节点 → 上游 NotFoundError → {error:{code:'not_found'}}（HTTP 404）。
-// 这样"树同步 + 路径重写 + body 归一化 + 错误形状转换"被真实穿透（proxy 写 KV，fake 从同一 KV 读回并按
-// 上游语义解析），而非 mock 掉转发。
+// 这样"SDK mounts.sync + tree.help/tree.call + body 归一化 + 错误形状转换"被真实穿透。
 //
 // 上游 tools/call 的 arguments 信封容忍逻辑（adapters/mcp.ts extractArguments，builtin 同）。
 function extractArguments(input: unknown): unknown {
@@ -49,10 +49,39 @@ function extractArguments(input: unknown): unknown {
   return input ?? {};
 }
 
+const hostTrees = new Map<string, TbNode>();
+const hostRecords = new Map<string, Record<string, unknown>>();
+
+function buildTreeFromHostMounts(mounts: HostMountInput[]): TbNode {
+  const root: TbNode = { type: 'directory', id: 'root', title: 'Watt Tools', children: [] };
+  for (const mount of mounts) {
+    const segs = mount.path.split('/').filter((s) => s.length > 0);
+    if (segs.length === 0) continue;
+    let dir = root;
+    for (let i = 0; i < segs.length - 1; i++) {
+      const seg = segs[i] as string;
+      let child = dir.children?.find((c) => c.id === seg && c.type === 'directory');
+      if (!child) {
+        child = { type: 'directory', id: seg, children: [] };
+        dir.children = dir.children ?? [];
+        dir.children.push(child);
+      }
+      dir = child;
+    }
+    const leafId = segs[segs.length - 1] as string;
+    const leaf = { id: leafId, ...mount.binding, type: String(mount.binding.type ?? 'mcp') };
+    dir.children = dir.children ?? [];
+    const existing = dir.children.findIndex((c) => c.id === leafId);
+    if (existing >= 0) dir.children[existing] = leaf;
+    else dir.children.push(leaf);
+  }
+  return root;
+}
+
 async function fakeToolBridge(
   request: Request,
   // biome-ignore lint/suspicious/noExplicitAny: miniflare 实例的窄类型由 pool-workers 提供，此处仅取 KV。
-  mf: any,
+  _mf: any,
 ): Promise<Response> {
   const url = new URL(request.url);
   const err = (status: number, code: string, message: string): Response =>
@@ -61,21 +90,75 @@ async function fakeToolBridge(
       headers: { 'content-type': 'application/json' },
     });
 
+  if (url.pathname === '/api/auth/config' && request.method === 'GET') {
+    return json({ mode: 'bearer' });
+  }
+  if (url.pathname === '/api/hosts' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as { id?: string };
+    const id = body.id ?? 'watt';
+    const host = {
+      id,
+      tenantId: id,
+      providerId: id,
+      confirmDelegated: true,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    };
+    hostRecords.set(id, host);
+    hostTrees.set(id, { type: 'directory', id: 'root', title: id, children: [] });
+    return json({ host });
+  }
+  const hostMatch = /^\/api\/hosts\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
+  if (hostMatch) {
+    const hostId = decodeURIComponent(hostMatch[1] ?? 'watt');
+    const rest = hostMatch[2] ?? '';
+    if (rest === 'mounts:sync' && request.method === 'POST') {
+      const body = (await request.json().catch(() => ({}))) as { mounts?: HostMountInput[] };
+      const mounts = Array.isArray(body.mounts) ? body.mounts : [];
+      hostTrees.set(hostId, buildTreeFromHostMounts(mounts));
+      return json({ ok: true, applied: mounts.length, removed: 0, placements: [] });
+    }
+    if (rest === '' && request.method === 'GET') {
+      return json({
+        host: hostRecords.get(hostId) ?? {
+          id: hostId,
+          tenantId: hostId,
+          providerId: hostId,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        },
+      });
+    }
+    if (rest === 'keys' && request.method === 'POST') {
+      return json({
+        key: 'tbk_test_host',
+        record: { principal: 'host', hostId, tenantId: hostId, providerId: hostId },
+      });
+    }
+  }
+  if (url.pathname === '/api/providers' && request.method === 'GET') return json({ providers: [] });
+  if (/^\/api\/providers\/[^/]+$/.test(url.pathname) && request.method === 'DELETE') {
+    return json({});
+  }
+  if (url.pathname === '/api/placements' && request.method === 'GET')
+    return json({ placements: [] });
+  if (url.pathname === '/api/endpoints' && request.method === 'GET') return json({ endpoints: [] });
+  if (url.pathname === '/api/command-policies' && request.method === 'GET')
+    return json({ policies: [] });
+  if (url.pathname === '/api/audit/events' && request.method === 'GET')
+    return json({ scope: 'test', events: [] });
+  if (url.pathname === '/api/servers' && request.method === 'GET')
+    return json({ servers: [], dynamicEnabled: true });
+  if (url.pathname === '/api/tree' && request.method === 'GET')
+    return json({ tree: hostTrees.get('watt') ?? { type: 'directory', id: 'root', children: [] } });
+
   // 断言路径已被重写为 /htbp/*（非 /htbp/tools/*）——代理契约。
   if (!url.pathname.startsWith('/htbp')) return err(404, 'not_found', 'not a tb path');
   if (url.pathname.startsWith('/htbp/tools'))
     return err(400, 'bad_request', 'path was not rewritten');
 
-  // 从共享 KV 读租户树（proxy 已写入）——fake 与 gateway 共用 KV_TENANTS，故树同步被真实穿透。
-  const token = (request.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  const kv = await mf.getKVNamespace('KV_TENANTS');
-  const mapping = (await kv.get(`apikey:${hash}`, 'json')) as { tenantId?: string } | null;
-  if (!mapping?.tenantId) return err(401, 'unauthorized', 'unknown secret key');
-  const treeRaw = await kv.get(`tenant:${mapping.tenantId}`);
-  if (!treeRaw) return err(404, 'not_found', 'no tenant tree');
-  const tree = JSON.parse(treeRaw) as TbNode;
+  const tree = hostTrees.get('watt');
+  if (!tree) return err(404, 'not_found', 'no synced host tree');
 
   const rest = url.pathname.slice('/htbp'.length).replace(/^\/+/, '');
   const segsAll = rest.split('/').filter((s) => s.length > 0);
@@ -141,6 +224,11 @@ interface TbNode {
   title?: string;
   children?: TbNode[];
   endpoints?: Array<{ name: string }>;
+}
+
+interface HostMountInput {
+  path: string;
+  binding: Record<string, unknown>;
 }
 
 function json(data: unknown): Response {
@@ -223,6 +311,7 @@ export default defineConfig({
           WEBHOOK_SECRET_TEST: 'integration-webhook-secret',
           // SecretStore 主密钥（§6.6，platform-secret 集成测试）——固定测试值（32B base64url）。
           WATT_SECRET_ENCRYPTION_KEY: 'XOL8MO7eCWDeaTn27cjz6KkV2u3o0d1KnpKzVQxUebQ',
+          WATT_TOOLBRIDGE_KEY: 'tbk_test_admin',
           // Root Key 摘要（§6.5e，oauth-root 集成测试）——sha256('wrk_test_root_key_fixture_0001')。
           WATT_ROOT_KEY_HASH: '9f5c3e27e76bb61a941267e65c0571361ca0debbb77d579f1b32466109a15cdd',
           // @llm 门控透传：workerd 内读不到宿主 process.env，经 binding 注入（缺省空 → 测试 skip）。

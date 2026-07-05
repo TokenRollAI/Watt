@@ -79,6 +79,7 @@ import {
   taskSignal,
 } from './task.ts';
 import { formatMountListHuman, toolCall, toolDescribe, toolList, toolMount } from './tool.ts';
+import { parseToolBridgeArgs, toolBridgeAdminCall } from './toolbridge.ts';
 import { formatWhoamiHuman, whoami } from './whoami.ts';
 
 /** commander 的可重复选项收集器（`--metadata k=v` 累积成数组）。 */
@@ -949,6 +950,22 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<number
       const res = await toolCall(base, token, path, toolName, args, { fetch: opts.fetch });
       if (asJson()) out(JSON.stringify(res));
       else out(JSON.stringify(res.result, null, 2));
+    });
+
+  const toolbridge = program
+    .command('toolbridge')
+    .description('Call Tool Bridge Admin SDK capabilities through Watt');
+  toolbridge
+    .command('call')
+    .description('Call a Tool Bridge admin method, e.g. ProvidersList or HostsCreate')
+    .argument('<method>', 'Tool Bridge admin method exposed by /htbp/platform/toolbridge')
+    .option('--args <json>', 'method arguments as a JSON object', '{}')
+    .action(async (method: string, cmdOpts: { args: string }) => {
+      const base = requireBaseUrl(env());
+      const token = requireToken(env(), credPath, opts.fs);
+      const args = parseToolBridgeArgs(cmdOpts.args);
+      const result = await toolBridgeAdminCall(base, token, method, args, { fetch: opts.fetch });
+      out(JSON.stringify(result, null, 2));
     });
 
   // ── watt agent（§3.1 AgentRegistry + §3.2 AgentRuntime）─────────────────────
