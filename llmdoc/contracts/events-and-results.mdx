@@ -1,0 +1,68 @@
+---
+description: Event 信封、入站规约、去重、HITL 事件以及 Agent correlation 结果回传的现行契约。
+kind: reference
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - runtime/agents-and-tools.mdx
+    - runtime/tasks-and-scheduler.mdx
+code:
+  paths:
+    - Docs/Proto.md
+    - packages/core/src/event/**
+    - packages/core/src/eventbus/**
+    - packages/core/src/agent/correlation.ts
+    - packages/core/src/agent/routing.ts
+    - packages/gateway/src/event/**
+    - packages/gateway/src/agent/agent-correlation.ts
+---
+
+# Event 与结果回传契约
+
+## Event 信封
+
+Event 是一切入站、出站和平台内部消息的统一信封。核心字段包括平台生成的 `id` 与 `traceId`、`source`、点分类型名、可选 `session`、可选 `principal` 与 `channelUser`、可选 `dedupeKey`、`payload`、可选截断审计原文 `raw`、`occurredAt`。
+
+- 整个序列化信封不得超过 128 KB。大内容先写 Context 或 artifact，再在 payload 中放引用。
+- ChannelAdapter Decode 必须给出业务发生时刻；Publish 若收到 `occurredAt` 就保留，缺省时才补平台接收时刻。
+- `channelUser` 存在且 `principal` 缺省时，平台调用 IdentityMapper 补齐；调用方已提供的 principal 不被覆盖。未映射渠道身份归到 `user:anonymous`。
+- 支持重投的渠道必须提供 dedupeKey。当前实现的默认幂等窗口是 24 小时，窗口内返回原 eventId，不重复留痕或投递。
+- channel-adapter plugin 以 plugin token 发布 IM 事件时，可以保留自身规约出的 `source.kind='im'`；普通 Platform API 发布不会借此伪造渠道主体。
+
+## 订阅与实例键
+
+EventBus 支持 AgentDefinition 声明、渠道生命周期自动建立和手工建立三类订阅。Agent sink 的 `instanceBy` 决定实例键：
+
+| 模式 | 实例键语义 |
+|---|---|
+| `singleton` | 一个 definition 全局一个实例 |
+| `event` | 每个 event 一个实例 |
+| `session` | 同一 event.session 稳定映射到同一实例 |
+
+`instanceBy='session'` 但事件没有 session 时返回 `invalid_argument`，不得静默退化为 singleton 或 event。类型匹配支持 `*` 全通配；前缀通配必须保留点分边界。
+
+Publish 的持久化与 Queue 投递不是一个跨服务事务。实现先留痕再投递；Queue 失败时 best-effort 删除刚写的事件并返回可重试错误。调用方必须按 WattError 的 retryable 语义重试。
+
+## 出站与 HITL
+
+出站事件类型固定为 `outbound.message`，payload 描述 channel、target、文本/blocks/actions 以及可选 replyTo。Agent 只发布事件；consumer 根据 channel adapter/plugin 完成 Encode 与 Send。
+
+Task 进入 human checkpoint 时发布 `task.checkpoint`，内置 system subscriber 生成带 signal 的出站卡片。渠道点击 Decode 为 `im.action`；只有 `Authorizer.Check(task://<taskId>, 'signal')` 允许时才调用 TaskManager.Signal。系统 subscriber 不占用户订阅表。
+
+## Agent 结果协议
+
+`Send` 或带 expect 的 `Spawn` 建立 correlation。结果事件是 `agent.result` 或 `agent.failed`；correlationId 只允许字母、数字、下划线和连字符，长度上限 80。
+
+六条规则共同构成结果协议：
+
+1. 带 correlationId 的结果定向投递等待方，不走普通订阅匹配。
+2. 派生 Spawn 的结果自动回送父实例。
+3. 超时由平台代发 `agent.failed`，reason 为 `timeout`，不隐式重跑模型。
+4. 等待中的实例被终止时，平台代发 reason 为 `terminated`。
+5. 等待方先消失时，结果丢弃并写审计，EventStore 仍保留事件。
+6. 同一 correlationId 只有首个结果生效；后续结果丢弃并审计。
+
+AgentCorrelation DO 以 `pending → delivering → settled` 三态交付。只有等待方确认接收后才 settle；失败时回滚到 pending 并让 Queue 重试。平台自产的 timeout/terminated 结果直接投递 waiter，避免被公共去重管道误吞。
+
+ExpectSpec 可带 JSON Schema。当前校验支持 `type/properties/required/items/enum` 子集，默认最多尝试三次；每次失败把违规摘要反馈给模型，耗尽后发送 reason 为 `invalid_output` 的失败事件。

@@ -1,0 +1,63 @@
+---
+description: Watt 的整体定位、规范真源、模块边界、核心数据流与部署形态；用于首次进入仓库或判断跨域影响面。
+kind: architecture
+relations:
+  related:
+    - contracts/events-and-results.mdx
+    - contracts/auth-and-errors.mdx
+    - contracts/htbp-and-platform-apis.mdx
+    - operations/topology-and-provisioning.mdx
+code:
+  paths:
+    - Docs/*.md
+    - DOD.md
+    - LOOP.md
+    - pnpm-workspace.yaml
+    - packages/*/package.json
+    - packages/gateway/src/index.ts
+    - packages/gateway/wrangler.jsonc
+---
+
+# Watt 整体架构
+
+## 项目定位与真源
+
+Watt 是运行在 Cloudflare 上的 Agent 基础设施，不是新的 Agent framework。任意 harness 通过开放协议接入组织的事件、上下文、工具、长任务和模型渠道；平台负责身份、路由、持久化、审计与管理入口。
+
+规范优先级是：`Docs/Proto.md` 定接口与横切契约，`Docs/Architecture.md` 定模块和拓扑，`Docs/Plugin.md` 定扩展边界，`Docs/Vision.md` 定产品目标；`DOD.md` 定可重跑验收，`LOOP.md` 定开发纪律。实现与规范冲突时，先澄清或修改规范，再对齐实现。
+
+## 模块与所有权
+
+| 模块 | 责任 | 主要运行位置与持久化 |
+|---|---|---|
+| Event Gateway | 渠道规约、发布、订阅、会话粘性、留痕、出站 | gateway Worker、Queues、Router DO、D1 |
+| Agent Runtime | 定义、实例、派生、生命周期、harness | Agents SDK Durable Object；heavy runtime 预留给 Container/Sandbox |
+| Context Layer | object、structured、vector 上下文与 namespace mount | R2、D1、Vectorize、Context Registry DO |
+| Tool Layer | 工具发现、虚拟化、调用与授权执行点 | tool-bridge Worker；gateway 提供鉴权代理 |
+| Auth | Principal、Policy、委托链衰减、身份映射 | gateway PEP、D1 Policy、Identity Mapper |
+| Scheduler | cron 与 publish、agent、script 三类动作 | Scheduler DO；script 使用一次性 isolate |
+| Task | 跨时长工作与 human checkpoint | Cloudflare Workflows 与 TaskStore |
+| Model Provider | provider 注册、默认路由与模型调用 | Provider D1、AI Gateway 或兼容上游 |
+| Observability | usage、metrics、audit | Analytics Engine 与 D1 |
+| Management | Dashboard、manage agent、Watt CLI 三个对等入口 | 全部复用 Platform API，不设管理旁路 |
+| Plugin System | 扩展注册、认证、探活与生命周期 | Plugin Registry、独立 Worker 或外部 HTTP 服务 |
+
+Registry 类接口遵循 `List/Get/Write/Update` 的共同动词；Provider 类接口按领域定义。Agent 对平台的逻辑消费面是一棵 HTBP 树：tools、context、platform 三个分支。物理上 gateway 自持 platform/context，tool-bridge 承载 tools，gateway 的 tools 代理负责统一身份和 `Authorizer.Check`；物理分治不能变成逻辑旁路。
+
+## 核心数据流
+
+入站渠道先 Verify/Decode 为统一 Event，再经 EventBus、Queues 与 Router DO 路由。带 session 的订阅由稳定 instance key 粘到同一 Agent DO；Agent 访问 Context、Tool 或 Platform API 时携带调用者和派生链身份，每个入口都执行衰减式授权。Agent 不直接向 IM SDK 发送消息，而是发布 `outbound.message`，由 channel adapter/plugin 统一发送。
+
+Agent-to-Agent 仍走 Event Bus。带 correlationId 的 `agent.result` 与 `agent.failed` 定向回送等待方，不进入普通订阅匹配。Task 的 human checkpoint 发布标准事件，渠道把它渲染为交互卡片；用户动作经过 `task://` 的 `signal` 授权后恢复 Workflow。
+
+## 扩展与管理边界
+
+Plugin 分为 context-provider、tool-provider、channel-adapter、agent-harness。模型渠道只是 ModelProviderRegistry 数据，不是 Plugin。Plugin 只能实现声明的接口并以受限 plugin token 回调平台；新增渠道或工具不得要求修改 gateway 的领域硬编码。
+
+Dashboard、manage agent 与 CLI 必须调用同一套 Platform API，并产生相同的授权与审计语义。前端为了体验增加的查询 filter 可以扩展既有接口，但不能引入只有某个管理入口可用的专用后门。
+
+## 部署形态
+
+仓库是 pnpm monorepo。gateway、tool-bridge 和独立 plugin Worker 组成边缘数据面；Durable Objects、Workflows、Queues、D1、KV、R2、Vectorize 和 Analytics Engine 按模块 ownership 绑定。Dashboard 静态产物由 gateway 同域分发；CLI 是远程 Platform API 客户端。
+
+具体契约从 `contracts/` 检索，运行时语义从 `runtime/` 检索，部署与开发流程从 `operations/` 检索，飞书与 Plugin 从 `integrations/` 检索，Dashboard 从 `dashboard/` 检索。V3 不维护手写 index 或 startup 阅读顺序，使用 `llmdoc tree/index/search/context/show` 渐进检索。

@@ -1,0 +1,71 @@
+---
+description: Plugin 类型与认证、通用 outbound dispatcher、飞书 webhook 主路径和 WS dev-only 备用路径的当前架构。
+kind: architecture
+relations:
+  requires:
+    - contracts/events-and-results.mdx
+    - contracts/auth-and-errors.mdx
+    - contracts/htbp-and-platform-apis.mdx
+  related:
+    - operations/topology-and-provisioning.mdx
+    - operations/credentials-and-recovery.mdx
+code:
+  paths:
+    - Docs/Plugin.md
+    - packages/gateway/src/event/plugin-sender.ts
+    - packages/gateway/src/plugin/**
+    - packages/gateway/migrations-providers/0004_plugin_registrations.sql
+    - packages/plugin-feishu/src/**
+    - packages/plugin-feishu/wrangler.jsonc
+    - packages/cli/src/connect.ts
+    - packages/cli/src/setup.ts
+---
+
+# 飞书与 Plugin 集成
+
+## Plugin 边界
+
+Watt Plugin 是实现某一层纯接口的可注册部署单元：
+
+| kind | 接口与用途 |
+|---|---|
+| context-provider | ContextProvider，挂载新的 `context://` namespace |
+| tool-provider | ToolProvider，挂载新的 HTBP tools 子树 |
+| channel-adapter | Verify/Decode/Encode/Send，接入 IM、email 或 webhook |
+| agent-harness | AgentEndpoint，接入新的运行方式 |
+
+平台到 Plugin 使用 platform token 或声明的 bearer；Plugin 回调平台使用 plugin token，其 scope 不得超过 manifest.requiredGrants。Plugin 响应必须忽略未知字段，并在同一个 interface major 内保持向后兼容。
+
+注册时外部 HTTPS endpoint 先过 health probe，`binding:` endpoint 视为平台内部能力。当前注册流程尚未校验 `~help/~describe` 的方法全集与 interfaceVersion，因此 Plugin 的真实兼容性还需要契约测试或注册后的最小调用验证。
+
+## 通用出站分发
+
+consumer 收到 `outbound.message` 后，不按渠道写硬编码 sender。分发器从 ChannelConfig.adapter 推导 plugin id `channel-<adapter>`，允许 settings.pluginId 覆盖，再查 PluginRegistry。
+
+同账户 Plugin 通过 `binding:` service binding 调用；跨账户/第三方走 HTTPS 的 Plugin 传输信封。请求带 platform token、稳定 request id 与超时；网络和可重试服务错误让 Queue 重投，业务拒绝留痕后 ack。Plugin Send 必须把 request id 用作幂等依据，避免 Queue 重投造成重复消息。
+
+gateway 不持有渠道 SDK 或渠道 app secret。每个 channel-adapter Plugin 自持凭据、webhook endpoint 与编码细节；新增渠道只注册 Plugin 与 ChannelConfig，不修改 consumer 的领域分支。
+
+## 飞书主路径
+
+飞书生产入站是独立 channel-adapter Worker 的 webhook：
+
+```text
+Feishu callback
+  → challenge / signature / optional decrypt
+  → Decode + mention expansion
+  → plugin token Publish Event
+  → EventBus / Agent
+```
+
+出站由 gateway 的通用 dispatcher 经 service binding 调 Plugin 的 Encode/Send。FEISHU 凭据只属于 plugin Worker。签名算法是 `sha256(timestamp + nonce + encrypt_key + body)` 的直接拼接，无分隔符且不是 HMAC；加密 key 未配置时仍需 verification token 校验，不能无验证接受回调。
+
+飞书回调有短握手时限，且 workers.dev 从中国境内可能不可达，因此生产 webhook 使用可在回调方网络访问的一级 custom domain。可达性必须从飞书实际回调验证；开发机通过代理访问成功不构成证据。
+
+bot 是否接收未 @ 的群消息由飞书应用的“接收群聊中所有消息”权限决定。缺权限时 lurker 只能积累 @ 消息，属于上游事件不可见，不是 Context 或 Agent bug。
+
+## WS 备用路径
+
+`watt channel connect` 的 WebSocket push 方案只用于开发和诊断。飞书 Node SDK 的 WSClient 不能运行在 Workers isolate，必须由本地 CLI 或完整 Node/Container 宿主维持；它不再是生产主路径。
+
+WS supervisor 以 SDK 的 onError 作为终态失败信号并负责重建；`start()` 在正常自重连期间不会返回。WS Decode 与 webhook Decode 共享 core channel 语义，仍要生成 session、channelUser、dedupeKey，并以 plugin 主体 Publish，不能因 dev-only 身份绕过 EventBus/Auth。

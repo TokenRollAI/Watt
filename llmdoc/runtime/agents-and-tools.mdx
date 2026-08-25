@@ -1,0 +1,61 @@
+---
+description: Agent definition/instance 生命周期、工具注入与授权、correlation 宿主以及模型 harness 的运行时不变量。
+kind: architecture
+relations:
+  requires:
+    - contracts/events-and-results.mdx
+    - contracts/auth-and-errors.mdx
+    - contracts/htbp-and-platform-apis.mdx
+  related:
+    - runtime/tasks-and-scheduler.mdx
+code:
+  paths:
+    - packages/core/src/agent/**
+    - packages/core/src/tools/**
+    - packages/gateway/src/agent/**
+    - packages/gateway/src/tools/**
+    - packages/gateway/src/http/tools-proxy.ts
+    - packages/gateway/migrations-providers/0001_tool_registry.sql
+    - packages/gateway/migrations-providers/0002_agent_registry.sql
+    - packages/gateway/migrations-providers/0003_model_providers.sql
+---
+
+# Agent 与工具运行时
+
+## Definition、Instance 与宿主
+
+AgentRegistry 保存可变的 AgentDefinition；每个 light instance 是 Agents SDK 的一个 Durable Object。definition 描述 harness/model、grants、subscriptions、toolScopes 与 systemPrompt，instance state 保存 Spawn 时的运行快照。修改 definition 不会热改已经运行的实例。
+
+Spawn 的 instanceKey 是幂等键：相同 definition 与 key 返回同一实例。terminated 实例再次 Spawn 会复活、重置运行态并按当前 definition 重新快照；Send 绝不复活或隐式创建实例。对外 Send 在调用 `idFromName` 前必须查实例索引，因为 Durable Objects 会为任意名字生成 stub，直接调用会制造不在索引中的“幽灵实例”。
+
+definition Write 是整体 upsert，不是 merge。任何 setup/e2e/运维脚本重写 definition 前都必须读取并保留线上 grants、toolScopes 与 systemPrompt；否则下一次 re-Spawn 会把覆盖后的定义重新快照进实例。
+
+AgentCorrelation 使用独立 Durable Object 管理 expect、超时与首结果胜出，具体交付状态见 [Event 与结果回传](../contracts/events-and-results.mdx)。AgentInstance 只处理事件与 harness，不自行实现一套等待协议。
+
+## Harness 与模型
+
+内置 harness 包括 echo、LLM、lurker 与 manage 类能力；heavy/external harness 通过 AgentEndpoint/Plugin 契约接入。LLM 调用由供应商中立的 Vercel AI SDK 完成，Workers 环境必须显式传入 apiKey、baseURL 与 fetch，不能依赖 `process.env`。
+
+无工具时模型调用是单步 `generateText`；带工具时由 SDK 的 tools 与 step-count stop condition 承担多步循环，平台不手写 agentic loop。多步计量必须使用 SDK 的全步骤累计 usage，不能只取最后一步。模型网络错误不由平台隐式重试；ExpectSpec.schema 的违规反馈重试由 llm harness 单独控制。
+
+ModelProviderRegistry 保存 provider 配置与默认项，harness 经 resolveDefault/secretRef 解析调用凭据。provider 是配置数据，不是 Plugin。换 provider 应局限在 provider factory/route，不能把供应商 API 细节扩散到 AgentInstance。
+
+## 工具发现与三闸门
+
+AgentDefinition.toolScopes 是可见工具树前缀。运行时按 scopes 注入 `htbp_help`、`htbp_skill`、`htbp_call`：
+
+1. 路径必须落在 toolScopes 前缀内；含 `://` 的历史 platform scope 不生成 HTBP 工具。
+2. principal 的 Policy 必须允许目标 resource/action。
+3. AgentDefinition.grants 必须覆盖同一 resource/action，祖先链上限也必须允许。
+
+help/skill 使用 read，call 使用 ToolSpec.scope 或默认 invoke。任一闸门失败都返回可解释错误给模型，不得用管理员 token 旁路。修工具授权问题时一次核对 toolScopes、Policy、definition grants，并用真实 agent 主体链路验收；源码 seed 只能证明初始默认值，不能代表持久化运行态。
+
+gateway 的 tool-invoker 是 HTBP tools 代理与 Agent 注入工具的共同执行核心，负责 mount 解析、provider 形状归一和授权。新增工具调用路径必须复用它，避免出现一条受 PEP 管理、另一条直连 provider 的双轨语义。
+
+## 运行时边界
+
+- Terminate 可以级联子实例，并为未完成 correlation 发送 terminated 失败；terminated 记录按保留期清理。
+- definition 与 instance 快照允许暂时不一致；排障时必须分别查询，两者不能互相代替。
+- AgentRuntime.Interrupt 是规范预留，当前不能作为已实现的可靠控制面。
+- schema validator 只实现明确子集；需要更完整 JSON Schema 时应扩展 core validator 与契约测试，而不是在调用点临时宽容解析。
+- 所有工具调用与 Agent 派生必须携带原 principal 和完整 chain，权限只能衰减。

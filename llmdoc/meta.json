@@ -1,0 +1,51 @@
+{
+  "schema": "llmdoc.meta/v3",
+  "baseline": {
+    "revision": "476e3cdd2490d725fde174e7c697ebf00899edc6",
+    "verifiedAt": "2026-08-25T08:11:10Z"
+  },
+  "documents": {
+    "architecture.mdx": {
+      "validatedRevision": null
+    },
+    "contracts/auth-and-errors.mdx": {
+      "validatedRevision": null
+    },
+    "contracts/events-and-results.mdx": {
+      "validatedRevision": null
+    },
+    "contracts/htbp-and-platform-apis.mdx": {
+      "validatedRevision": null
+    },
+    "dashboard/architecture.mdx": {
+      "validatedRevision": null
+    },
+    "integrations/feishu-and-plugins.mdx": {
+      "validatedRevision": null
+    },
+    "operations/credentials-and-recovery.mdx": {
+      "validatedRevision": null
+    },
+    "operations/development-workflow.mdx": {
+      "validatedRevision": null
+    },
+    "operations/toolchain.mdx": {
+      "validatedRevision": null
+    },
+    "operations/topology-and-provisioning.mdx": {
+      "validatedRevision": null
+    },
+    "runtime/agents-and-tools.mdx": {
+      "validatedRevision": null
+    },
+    "runtime/tasks-and-scheduler.mdx": {
+      "validatedRevision": null
+    }
+  },
+  "convergence": {
+    "capturedAt": "2026-08-25T08:11:10Z",
+    "source": "init",
+    "documentCount": 12,
+    "totalEstimatedTokens": 6554
+  }
+}

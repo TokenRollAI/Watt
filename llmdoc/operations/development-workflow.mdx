@@ -1,0 +1,63 @@
+---
+description: 本仓库从检索、契约对齐、实现、评审到可重跑验证的工作流，以及并行代理与运行时事实的证据纪律。
+kind: guide
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - operations/toolchain.mdx
+    - operations/topology-and-provisioning.mdx
+code:
+  paths:
+    - LOOP.md
+    - DOD.md
+    - PROGRESS.md
+    - Docs/*.md
+    - package.json
+    - packages/*/package.json
+---
+
+# 开发与验证工作流
+
+## 开始任务
+
+1. 先按 llmdoc Retrieval Gate 用 search、context、tree、index 或 show 之一缩小知识面；进入新子系统时重新过 gate。
+2. 阅读对应的 Docs 规范和 DOD 验收，不从旧 PROGRESS 记录或源码注释反推契约。
+3. 非平凡计划或修改先与用户对齐；每轮只承诺一个清晰目标和可重跑验收。
+4. 不熟悉的当前状态交给 investigator，稳定文档只由 recorder 写；临时报告放 `.llmdoc-tmp/`，复用前验证。
+
+## 实现纪律
+
+- Docs 是契约真源。发现规范矛盾或需要扩接口时先改 Docs，再改实现与测试。
+- DOD 是进度证据。只有能重跑的命令与输出能支撑完成状态；不以 agent 自报、测试数量或历史轮次代替。
+- 优先使用 Cloudflare Agents SDK、Workflows、tool-bridge、jose、Hono、zod 和模型 SDK 等已有抽象。准备手写状态机、协议栈或 agent loop 前先证明现有框架无法承担。
+- 绕过 gateway PEP、registry 或统一 invoker 的 workaround 必须开债务票；代码旁路会消除报警信号，不能只留一条注释。
+- 修改接口 shape、字段名或语义时，先搜索所有生产消费方、CLI、Dashboard、脚本和测试 mock。消费方要么同一任务收口，要么显式留给主代理。
+- 接口解析只接受唯一真源 shape。禁止双形态、fallback 字符串或“尽量解析”，让漂移在第一次集成运行时失败。
+
+## 调查与排障证据
+
+调查报告必须区分：
+
+- 代码路径事实：可以由当前源码、规范和测试证明，给出路径。
+- 运行时数据事实：D1、KV、DO、线上 definition/policy/mount/token 状态，必须标“未验证”并附查询命令。
+
+源码 seed 只证明初始值，不代表当前持久化状态；错误文案只证明请求走到哪个分支，不证明配置现值。动手修复前逐条重新查询运行态。授权类修复必须走真实主体和真实链路验证，管理员 happy path 对 agent/plugin 权限没有证明力。
+
+排查多条 finding 时先按子系统、文件和数据 ownership 聚类，找共同根因，再决定补丁还是重构。注释也可能固化错误假设；测试审阅先确认断言确实执行、fake 忠实模拟真实 provider、失败不会被 guard 或宽容解析吞掉。
+
+## 并行工作
+
+- worktree worker 开工先核对 HEAD 与目标基线；基线落后先更新再写。
+- 文件所有权不仅考虑写冲突，也考虑类型契约耦合。共享工作树中各 worker 对自己的文件集验收，主代理最后跑全包门禁。
+- 跨 worker 复制模式前重新读取当前磁盘态；转发门禁问题标明扫描时间，接收者先复核是否仍存在。
+- worker 遇到授权范围外但必需的连带改动时，最小处理并明确上报；禁改共享契约错误时可在自己的边界内正确实现并报告根因。
+- prompt 给目标、契约章节和验收，不把未经证明的实现细节当命令；验收命令放在末尾，idle 不等于 done。
+
+## 验证与收尾
+
+按风险依次跑：目标测试 → 受影响包 typecheck/lint → 全仓 verify → 必要的部署/smoke/真实主体 E2E。服务端 route tests 是 API shape 真源，CLI 与 Dashboard fixtures 对齐它。
+
+判定命令成败必须读取原命令 exit code。经过 `tail`、`grep` 等管道时启用 pipefail 或单独保存日志，不能把下游命令的 exit 0 当作 verify 成功。Biome 排错先只看 error 级别，避免顺手修历史 warning 扩大范围。
+
+完成后更新 PROGRESS/DOD 所需证据；产生可复用架构或流程知识时运行 llmdoc update。阶段关门要重新跑该阶段全部 DoD，并进行 correctness、contract、ops、test-quality 四维 review；BLOCKER/MAJOR 先按“假设误报”对照规范和代码复核，确认项修完并复验后才关门。

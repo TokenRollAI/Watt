@@ -1,0 +1,70 @@
+---
+description: pnpm、TypeScript、Vitest Workers pool、Wrangler、R2/Vectorize/DO 与共享 worktree 的高价值排障规则。
+kind: guide
+relations:
+  related:
+    - operations/development-workflow.mdx
+    - operations/topology-and-provisioning.mdx
+    - runtime/tasks-and-scheduler.mdx
+code:
+  paths:
+    - package.json
+    - pnpm-workspace.yaml
+    - biome.jsonc
+    - tsconfig.json
+    - packages/*/package.json
+    - packages/*/tsconfig.json
+    - packages/*/vitest.config.ts
+    - packages/*/wrangler.jsonc
+    - scripts/**
+---
+
+# 工具链排障
+
+## pnpm 与构建
+
+- pnpm filter 按 package.json 的 `name`，不是目录名；空匹配也可能 exit 0。派发或写脚本前用 workspace list 核对包名。
+- workerd、esbuild 等 postinstall 必须在 workspace build allowlist 中明确允许或明确跳过；ignored build 会让 Vitest 在真正运行前失败。
+- 仓库采用 `noEmit` 与 `.ts` 扩展名导入，包级 typecheck 用 `tsc --noEmit`。直接由 Node strip-types 执行的脚本不能使用 parameter properties、enum、namespace 等需要代码生成的 TypeScript 语法。
+- `scripts/lib/*.mjs` 不自动进入 TypeScript 检查；新增脚本要么保持小而直接，要么改为 TS 并显式加入 scripts tsconfig。
+- 依赖版本需要满足 Cloudflare Agents SDK 的 peer range；不要在知识文档锁死某个精确版本，以当前 package manifest 和 lockfile 为准。
+
+## Vitest Workers pool
+
+- D1 migration 测试要同时完成读取 migration、注入 miniflare binding、setup 应用和 Env 类型声明；缺一步就会出现 `no such table`。
+- 同一测试文件共享 workerd isolate，模块级 once guard 会跨用例存活。beforeEach 清数据库时也要 reset 对应 guard。
+- Hono matcher 在首次请求后锁定；动态测试路由必须在任何 fetch 前注册。
+- AI binding 可能触发远程代理会话；不需要真实 AI 的单测关闭 remote bindings，并经依赖注入 fake。
+- 当前 Workers pool 不提供可靠的全局 fetchMock；需要拦截出站 fetch 时用明确的 `set...ForTests` 注入钩子，并在 teardown 复原。
+- Workflow 在 waitForEvent hibernate 时 runtime status 可能仍是 running，断言 TaskStore 的业务态。
+
+## Cloudflare 数据原语
+
+- R2 list 默认不一定带 customMetadata，需要显式 include；条件写匹配裸 etag，不用 HTTP ETag。
+- Vectorize 写入最终一致，不能用作 List、version 或 read-after-write 的权威层；使用 D1 sidecar。
+- DO `idFromName` 会为任意名字返回 stub。对外数据面先查权威索引，再取 stub。
+- DO RPC 包装可能破坏联合类型收窄；通过 WattError guard 后必要时显式断言成功分支类型。
+- Dynamic Worker Loader 的 env 必须可 structured-clone，平台能力经 RPC 参数传入；本地没有 Loader binding 时用显式 fake，不能声称验证了真实 isolate。
+
+## Wrangler 与部署脚本
+
+- 有 routes 时若仍需 workers.dev，wrangler 配置必须显式开启；不要依赖默认值。
+- Wrangler 子命令的 `--json` 支持不统一，认证 banner 也可能污染 stdout；自动化优先解析受控格式或按精确资源名判断。
+- 写 secret 的脚本先验证值非空并去掉 `.env` 行内注释。不要在 zsh 使用不支持的间接展开后继续管道写入，否则右侧命令可能收到空串。
+- 被 shell 捕获的脚本只把最终值写 stdout，所有日志和子进程输出写 stderr。
+- deploy、secret 和 DNS/route 传播后有限重试；首击旧 isolate 不足以判失败。
+- Cloudflare Account-scoped token 用 `wrangler whoami` 验证，不用 user-token verify endpoint。
+
+## API 与前端构建
+
+- gateway 源码要直接声明所用依赖，不能依赖 workspace 偶然 hoist；运行时解析失败常被 typecheck 漏掉。
+- Tool call 的 URL/body 形状和 Context response envelope 以 gateway route tests 为真源，fake 必须按 provider 类型模拟真实语义。
+- React Router framework SPA 仍需要 server runtime build 依赖；依赖必须位于 production dependencies。Tailwind 指令需要 Biome 的 Tailwind parser，build 与类型生成目录从 lint 排除，vendored UI 目录按 vendored 代码处理。
+- 新建 `app/lib` 等目录后立即用 git status 与 check-ignore 核验；模板遗留的裸 `lib/` 规则会匹配任意层级。
+
+## 共享工作树
+
+- typecheck 红先用 `git diff`/`git show HEAD:<file>` 判断是否来自自己的在途改动，不修其他 worker 的文件。
+- 不对共享工作树使用 stash；它会卷入其他人的未提交修改。
+- worktree 创建后核对基线，并完整安装 workspace 依赖；只在一个包里 add 依赖可能让其他包的 node_modules 不完整。
+- `git add -A` 前确认目录中没有被当作 embedded repository 的工作树或 vendor checkout。

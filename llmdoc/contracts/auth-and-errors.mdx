@@ -1,0 +1,69 @@
+---
+description: CallContext、Policy 与 Agent 委托链授权、Token 引导、SecretStore 和 WattError 的规范边界。
+kind: reference
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - runtime/agents-and-tools.mdx
+    - operations/credentials-and-recovery.mdx
+code:
+  paths:
+    - Docs/Proto.md
+    - packages/shared/src/error.ts
+    - packages/core/src/auth/**
+    - packages/core/src/authz/**
+    - packages/gateway/src/authz/**
+    - packages/gateway/src/http/auth.ts
+    - packages/gateway/src/http/errors.ts
+    - packages/gateway/src/http/oauth.ts
+    - packages/gateway/src/secrets/**
+---
+
+# 授权、凭据与错误契约
+
+## CallContext 与身份
+
+CallContext 携带最终受益人 principal、roles、可选 AgentChainRef 和 traceId。principal 可以是 user、service 或定义级 agent；实例身份只放在 token claims 的 `agent_inst` 与 CallContext.agent 中，不能拿实例 ID 充当最终受益人。
+
+HTTP 绑定下 CallContext 只通过 `X-Watt-Context` 传输，body 不复制。渠道身份先经 IdentityMapper 解析；纯 user/service token 没有 agent 链时只做 principal Policy 判定。
+
+## 衰减式授权
+
+授权不变量是：
+
+```text
+allow = P(principal) ∩ P(current agent definition) ∩ P(each ancestor/system segment)
+```
+
+Policy 先按 subject、resource 与 action 求 principal 许可，deny 优先。带 agent claims 时再检查当前 AgentDefinition.grants，并沿 chain 检查祖先 definition。`cron:<jobId>` 只有 script action 把 job grants 作为额外上限；publish/agent action 不追加该段上限；job 已删除或禁用时拒绝。
+
+gateway 的 Authorizer 通过 AgentDefLoader 惰性装载 `claims.agent_def`，避免空索引把所有 agent 主体误拒。cron script 则以当前 job 自足播种 cronJobs。任何新的 PEP 只要接收含 agent/cron 链的 claims，就必须确保判定点能解析链上引用的数据，不能把空索引当成正常运行态。
+
+Agent 工具调用还要同时满足 toolScopes 前缀、principal Policy 和 AgentDefinition.grants；管理员直调只能证明工具可用，不能证明 agent 主体有权调用。
+
+## Token 与引导
+
+JWT 使用非对称 Ed25519 签名并通过 JWKS 暴露公钥，签验由 jose 完成。JWT 私钥只来自部署期 secret，不进入 SecretStore。替换 JWT 签名私钥会吊销所有由旧 key 签发的 user、agent 与 plugin token，属于破坏性轮换。
+
+人类登录走 RFC 8628 device flow。RFC 定义的 authorize/token 端点返回 OAuth 错误形状；平台自有的 approve 动作仍返回 WattError。非交互环境通过 `WATT_TOKEN` 提供已签 user token。
+
+Root Key 是只保存 SHA-256 摘要的长期引导凭据，明文只在创建时展示一次，不能作为 Bearer 调平台接口。它只能调用 root exchange 换发 admin user token；换发使用当前 JWT 私钥，不触发签名根轮换。
+
+SecretStore 用专用 AES-256-GCM 根密钥加密运行时 secret，AAD 绑定 secret 名称，密文放 KV。`resolveSecret` 先查 Worker env，再查 SecretStore；JWT 私钥明确排除，避免信任根循环。List/Get 管理面只返回元数据，永不回显明文。
+
+## WattError
+
+WattError 只有七个 code：`not_found`、`permission_denied`、`invalid_argument`、`conflict`、`unavailable`、`rate_limited`、`internal`。body 顶层就是 `{code,message,retryable}`，没有 `{error: ...}` 信封。
+
+| HTTP | code |
+|---|---|
+| 400 | `invalid_argument` |
+| 401、403 | `permission_denied` |
+| 404 | `not_found` |
+| 409 | `conflict` |
+| 429 | `rate_limited` |
+| 500 | `internal` |
+| 501、503 | `unavailable` |
+
+只有 `rate_limited`、`unavailable`、`internal` 可以标 retryable。调用方只对 429 或 5xx 且 retryable 为 true 的响应做指数退避。OAuth RFC 端点是明确例外，不得为了统一外观把 OAuth error 包成 WattError。
