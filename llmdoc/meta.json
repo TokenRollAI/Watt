@@ -1,45 +1,45 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "476e3cdd2490d725fde174e7c697ebf00899edc6",
-    "verifiedAt": "2026-08-25T08:11:10Z"
+    "revision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5",
+    "verifiedAt": "2026-08-25T08:11:36.456Z"
   },
   "documents": {
     "architecture.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "contracts/auth-and-errors.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "contracts/events-and-results.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "contracts/htbp-and-platform-apis.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "dashboard/architecture.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "integrations/feishu-and-plugins.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "operations/credentials-and-recovery.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "operations/development-workflow.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "operations/toolchain.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "operations/topology-and-provisioning.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "runtime/agents-and-tools.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     },
     "runtime/tasks-and-scheduler.mdx": {
-      "validatedRevision": null
+      "validatedRevision": "da1f7050afa1c68209fdcfcf3c21da96289be3b5"
     }
   },
   "convergence": {
