@@ -1,0 +1,67 @@
+---
+description: Cloudflare 资源 ownership、命名、绑定、provision 幂等与部署先后顺序；用于改 wrangler 或部署脚本前评估影响。
+kind: architecture
+relations:
+  requires:
+    - architecture.mdx
+  related:
+    - operations/credentials-and-recovery.mdx
+    - integrations/feishu-and-plugins.mdx
+code:
+  paths:
+    - packages/*/wrangler.jsonc
+    - packages/gateway/migrations*/**
+    - scripts/provision.mjs
+    - scripts/deploy-all.mjs
+    - scripts/build-deploy.mjs
+    - scripts/smoke.ts
+    - pnpm-workspace.yaml
+---
+
+# 拓扑与资源引导
+
+## Worker 与绑定关系
+
+部署数据面由 gateway、tool-bridge 和独立 plugin Worker 组成。gateway 绑定 tool-bridge 与同账户 plugin 的 service binding，承担 Platform API、Event、Context、Auth、Task、Scheduler、Observability 与静态 Dashboard 分发；tool-bridge 承担 HTBP tools；plugin Worker 自持渠道或 provider 凭据。
+
+同账户 Worker 之间优先使用 service binding。把同账户 workers.dev URL 当内部 RPC 可能收到平台级 404，且绕开 binding 的类型与部署依赖。跨账户或第三方 Plugin 才使用 HTTPS endpoint。
+
+部署顺序必须先满足 binding target：tool-bridge → plugin Workers → gateway。D1 migrations 在 gateway 发布前应用，Dashboard 静态产物在 gateway build 前生成。`deploy:all` 是顺序真源，单独 deploy 某包时调用者负责满足同样的前置关系。
+
+## 存储 ownership
+
+| 资源 | 所属数据 |
+|---|---|
+| policies D1 | Policy 与 IdentityMapper |
+| providers D1 | Tool、Agent、Model、Plugin registry |
+| events D1 | EventStore 与 TaskStore 生命周期投影 |
+| context D1 | structured Context、vector sidecar 权威元数据 |
+| audit D1 | 授权与操作审计明细 |
+| tenants KV | device grants、租户树配置、加密 SecretStore 记录 |
+| authz-cache KV | 预留判定缓存；不能假定已启用 |
+| context R2 | object Context 与 artifacts |
+| Vectorize | embedding 与引用，不是权威正文存储 |
+| Queues | Event 分发、重试和 DLQ |
+| Durable Objects | Router、Registry、Agent instance/correlation、Scheduler coordination |
+| Workflows | Task 的持久化执行 |
+| Analytics Engine | 聚合 metrics；审计真源仍是 D1 |
+
+资源名使用统一 `watt-` 前缀，避免与同账户其他项目冲突。D1 按模块 ownership 分库，新增表优先进入负责该生命周期的现有库；跨模块方便不是共享 schema 的理由。
+
+## Context 存储边界
+
+object provider 用 R2；structured provider 用 D1；vector provider 采用 D1 sidecar 保存正文、version 与 metadata，Vectorize 只保存 embedding/引用。Vectorize 最终一致，不能承担 read-after-write、List 或乐观并发的权威语义。R2 条件写使用裸 `etag`，不是带引号的 HTTP ETag。
+
+ContextRegistry 的 unmount 只移除 namespace mount；provider 数据不承诺同步删除。TTL 回收与孤儿对象清理由各 provider 的维护路径完成，跨 R2/D1/Vectorize 不存在单事务。
+
+## Provision 幂等
+
+`scripts/provision.mjs` 先 list 再按资源名判断是否 create，并只改 wrangler JSONC 的 marker 区间。Cloudflare CLI 的 JSON 输出支持不一致，且认证 banner 可能污染 stdout，因此脚本不能假设所有 list 都是纯 JSON。
+
+幂等验收不是“命令显示 exists”，而是连续重跑后 wrangler 配置字节级不变。新增 binding 字段时必须同步修改 marker 生成逻辑，否则下一次 provision 会抹掉手写字段。JSONC 注入逗号必须落在真实 JSON token 后，不能附在行注释后。
+
+## 部署验证
+
+Worker deploy、secret put 和路由更新都有传播窗口；首个请求可能命中旧 isolate。验证脚本使用有限重试并同时检查响应内容与 exit code。配置 custom domain 时显式决定是否保留 workers.dev；面向中国境内回调方的 endpoint 需要从回调方网络验证可达性，开发机代理成功不能替代该证据。
+
+任何真实部署验证都应使用可回收测试资源，失败路径也注册 exit handler 清理 cron、task、mount 或临时配置。不要把实际账号 ID、资源 UUID、域名或当前在线配置写进本知识面；这些由 wrangler 配置、部署输出与运行时 API 查询。

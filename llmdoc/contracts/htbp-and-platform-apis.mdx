@@ -1,0 +1,81 @@
+---
+description: HTBP 三分支、Context/Tool 调用形状、Registry 动词、响应信封与 Plugin 传输的精确查询参考。
+kind: reference
+relations:
+  requires:
+    - architecture.mdx
+    - contracts/auth-and-errors.mdx
+  related:
+    - runtime/agents-and-tools.mdx
+    - integrations/feishu-and-plugins.mdx
+code:
+  paths:
+    - Docs/Proto.md
+    - Docs/Plugin.md
+    - packages/gateway/src/http/context-routes.ts
+    - packages/gateway/src/http/routes.ts
+    - packages/gateway/src/http/tools-proxy.ts
+    - packages/gateway/src/tools/**
+    - packages/toolbridge/vendor/**
+    - packages/cli/src/**
+---
+
+# HTBP 与 Platform API
+
+## 树与绑定
+
+Agent 的逻辑入口是 `/htbp`：
+
+- `/htbp/tools/<mount-path>/...`：工具发现与调用；物理宿主是 tool-bridge，gateway 做租户同步、路径转换与授权。
+- `/htbp/context/<namespace>/...`：Context Provider 四动词与 mount 解析；gateway 自持。
+- `/htbp/platform/<module>`：agent、task、scheduler、event、policy、provider、plugin、metrics、audit、secret 等管理接口；gateway 自持。
+
+所有消费面都用 Bearer token。工具 `~help` 需要认证，并按逐节点 read 授权裁剪；Context namespace 的 `~help` 当前在认证中间件之前开放，这是实现边界，不应外推成所有 `~help` 都公开。tool-bridge 提供 `~help` 与 `~skill`；Platform/Context 并非每个节点都完整实现 `~skill`。
+
+## 调用形状
+
+Platform 与 Context 的方法调用使用节点级 POST：
+
+```json
+{"tool":"Write","arguments":{"name":"example"}}
+```
+
+`opts` 作为一个整体字段传递，不得平铺。Tool 调用不同：工具名位于 URL end-path，body 只有 arguments 信封：
+
+```text
+POST /htbp/tools/<node>/<toolName>
+{"arguments":{...}}
+```
+
+gateway 按 mount 类型归一化：HTTP provider 收裸参数，MCP 与 builtin provider 收协议信封。调用方不得同时兼容多种猜测形状；解析失败应立即报错。
+
+## Registry 与 Provider
+
+Registry 默认四动词是 List、Get、Write（upsert）、Update（patch），Delete 由领域按需提供。Page 的 cursor 是可选能力；多个当前 Registry 只实现 limit/filter 并返回 `{items}`，不能因为接口类型含 cursor 就假定已支持翻页。
+
+ContextProvider 的必需方法是 List、Get、Update、Write，可选 Search、Watch、Delete。namespace mount 负责最长前缀 Resolve、readOnly 与 TTL；unmount 只移除 mount，不保证删除 provider 数据。TTL 以到期时刻含等为过期边界。
+
+Context 成功响应形状由 gateway route tests 锁定：
+
+| 操作 | 响应 |
+|---|---|
+| Provider List | 裸 Page |
+| Provider Get | `{entry}` |
+| Provider Write/Update | `{meta}` |
+| ContextRegistry Write | `{mount}` |
+
+CLI 与 Dashboard 必须精确解包这些形状，禁止 `body.meta ?? body` 一类双形态兜底。
+
+ToolProvider 提供 List/Get/Call。ToolSpec 声明 effect、可选 scope、confirm 与 skill；有 scope 时它就是授权 action，否则 action 为 `invoke`。ToolRegistry 的 mount 可以 prefix、rename、hide 与覆盖描述，但不能绕过 gateway PEP。
+
+## 平台接口族
+
+平台接口按模块分为：ChannelRegistry/EventBus/EventStore、AgentRegistry/AgentRuntime、ContextRegistry、ToolRegistry、Authorizer/PolicyStore/IdentityMapper、Scheduler、TaskManager、ModelProviderRegistry/ModelRouter、Metrics/AuditLog、PluginRegistry/PluginLifecycle、SecretStore。CLI、Dashboard 与 manage agent 都只是这些接口的消费者。
+
+EventStore 的查询 filter 包括类型、渠道、会话、时间以及 correlationId；manage chat 依赖 correlationId 精确轮询结果。AgentRuntime 的 Interrupt 仍是非 MVP 预留，不能把类型中的存在理解为已交付能力。Proto 的动态 Task orchestration 同样是非规范性预留。
+
+## Plugin 传输
+
+Plugin 必须暴露 healthPath 与 `~describe`，接口版本使用 `<kind>/v<major>`，同 major 保持向后兼容，未知字段必须忽略。平台调用 Plugin 使用 platform token；Plugin 回调平台使用 scope 不超过 requiredGrants 的 plugin token。
+
+当前 PluginRegistry.Write 会在落库和签 token 前做 health probe；对 `binding:` endpoint 视为平台内能力而跳过 HTTP 探活。方法集与 interfaceVersion 的 `~help/~describe` 契约校验尚未实现，注册成功目前不能证明 Plugin 的全部方法形状正确，集成验收仍需真实调用覆盖。

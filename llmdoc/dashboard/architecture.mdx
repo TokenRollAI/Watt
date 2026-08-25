@@ -1,0 +1,50 @@
+---
+description: Dashboard 的 React Router SPA、同域静态分发、API client 边界以及 manage chat 的 correlation 轮询协议。
+kind: architecture
+relations:
+  requires:
+    - architecture.mdx
+    - contracts/htbp-and-platform-apis.mdx
+    - contracts/events-and-results.mdx
+  related:
+    - runtime/agents-and-tools.mdx
+code:
+  paths:
+    - packages/dashboard/**
+    - packages/gateway/src/index.ts
+    - packages/gateway/src/http/routes.ts
+    - packages/gateway/src/event/event-store.ts
+    - scripts/build-deploy.mjs
+---
+
+# Dashboard 架构
+
+## 技术与分发
+
+Dashboard 使用 React Router framework mode 的纯 SPA、Tailwind 和 vendored shadcn UI。构建产物写入静态 client 目录，再由 gateway Static Assets 同域托管；前端不拥有服务端状态或独立数据库。
+
+路由覆盖 metrics、events、audit、agents、manage chat、tasks、cron、context、tools、policies、providers、channels、plugins、secrets 与 settings 等管理域。导航数量和具体组件由 routes/nav 源码决定，llmdoc 不保存视图计数快照。
+
+## API client 边界
+
+`app/lib/api` 是 Dashboard 的 Platform API 适配层。domain modules 复用 core request/error 处理并精确解包 gateway route 的唯一响应形状；组件不直接猜 response envelope。共享 wrapper 属于契约代码，修改时同时对照 gateway route 和 CLI 的真实消费方，不能只相信调查报告或旧 mock。
+
+Dashboard、CLI 与 manage agent 是同一管理面的三个入口。新增 Dashboard 操作时必须确认已有 Platform API 和 Auth/Audit 语义；若只有前端能做，或前端通过专用未授权 endpoint 完成，就产生了管理旁路。
+
+认证状态保存在浏览器 session/local UI 所需的最小范围，Bearer token 只用于 API 请求。Root Key 只提交给 root exchange 换 token，不作为一般 Authorization header，也不持久化回显。
+
+## Manage chat
+
+新会话先 Spawn manage definition，但不带 expect；带 expect 的 Spawn 会把空输入送进 harness，造成一次无意义模型调用。每一轮用户消息再 Send 并携带 expect，得到 correlationId。
+
+前端按 correlationId 轮询 EventStore.List，直到出现 `agent.result` 或 `agent.failed`，再渲染 result payload.output 或失败信息。EventStore 的 correlationId filter 是正式查询能力，避免前端拉取宽结果集后自行筛 payload。超时只终止前端等待，不改写平台 correlation 的首结果语义。
+
+当前方案是有界轮询而不是 WebSocket/SSE；选择它是为了复用 EventStore 和同域 HTTP。若未来改推送，仍必须保持 correlationId、首结果胜出和失败事件的协议，不得新增第二套同步结果端点。
+
+## 构建与维护边界
+
+- React Router SPA 构建仍解析 server runtime 依赖，这些包必须在 production dependencies。
+- Tailwind 指令需要 Biome 的 Tailwind parser；build、类型生成和 vendored UI 目录不进入常规 lint。
+- 新增 `app/lib` 路径后用 git status/check-ignore 确认未被模板遗留的 `lib/` 规则吞掉。
+- API contract tests 用 gateway 形状 fixture；宽容 fallback 会让 mock 全绿而真实请求静默错配。
+- 前端 route 可以调整展示，但权限裁剪、resource URI、retryable 与错误 code 只能来自平台合同。

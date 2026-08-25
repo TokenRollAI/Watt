@@ -1,0 +1,51 @@
+---
+description: Cloudflare Workflows Task、TaskStore 权威态、checkpoint 事件映射以及 Scheduler script isolate 的现行设计。
+kind: architecture
+relations:
+  requires:
+    - contracts/events-and-results.mdx
+    - contracts/auth-and-errors.mdx
+  related:
+    - runtime/agents-and-tools.mdx
+    - operations/topology-and-provisioning.mdx
+code:
+  paths:
+    - Docs/Proto.md
+    - packages/core/src/task/**
+    - packages/gateway/src/task/**
+    - packages/gateway/src/scheduler/**
+    - packages/gateway/migrations-events/0002_task_store.sql
+---
+
+# Task 与 Scheduler 运行时
+
+## Task 与 Workflow
+
+TaskManager 把长任务交给 Cloudflare Workflows，使用 step.do、sleep 和 waitForEvent 获得持久化重试与挂起，不自造工作流引擎。TaskDefinition 是部署代码中的模板声明；Proto 的动态 orchestration 是非规范性预留，当前不应作为可用能力。
+
+taskId 同时作为 Workflows instanceId。Write 生成 taskId 后直接 `create({id: taskId})`，Signal/Cancel 用同一个 id 取 Workflow，无额外映射表。TaskStore 保存可查询的七态投影、checkpoint 与输出，是 List/Get 以及本地测试的权威状态；Workflow runtime 的 `instance.status()` 只作为执行态补充，本地 hibernate 时它仍可能报告 running。
+
+平台事件名保持点分；Workflows 适配层把它们净化为允许的字符集。`agent.result` 与 `agent.failed` 都映射到 `agent-result-<correlationId>`，payload 用 status 区分；human signal 映射到 `task-signal-<checkpoint>`。净化不得泄漏回平台事件类型。
+
+waitForEvent 必须显式设置超时并捕获超时异常。当前模板基线是 human checkpoint 十分钟、agent result 五分钟，模板可按业务覆盖；超时转换为平台失败/checkpoint 语义并留痕，不能让 Workflow 无解释地 failed。
+
+## Scheduler
+
+SchedulerHub 是 Agents SDK Durable Object，持久化 cron 定义并用 schedule/alarm 触发。CronJob action 有 publish、agent、script 三种：触发先记录 `cron.fired`，执行结束都记录 `cron.completed`，包括 publish action，以便统一观测。
+
+enabled 控制自动到点触发；手工 Trigger 仍允许执行 disabled job，作为补跑与调试面。删除或禁用的 job 在授权链里不能继续提供 cron grants。
+
+## ScriptRunner 与隔离
+
+script action 通过可注入 ScriptRunner 执行：生产使用 Dynamic Worker Loader 创建一次性 isolate，测试使用 fake runner 但复用同一授权和能力 binding。Loader 不存在时必须明确失败，不能在生产静默退化为同进程执行。
+
+Loader 的 env 走 structured clone，闭包和 RpcTarget 不能直接塞入 env。平台能力以 WorkerEntrypoint RPC 的 `run(watt)` 参数传入，让 RPC 边界把 RpcTarget 转换成 stub。脚本拿不到平台凭据或任意网络，只能调用 watt binding 暴露的能力。
+
+当前 watt binding 包含 publish 与只读 metrics。每次调用都以 `createdBy` 为 principal、实时解析 roles，并把 `cron:<jobId>` 放进 chain；Authorizer 以当前 job.action.grants 作为该链段上限。Scheduler Write 不做“grants 小于等于创建者当前权限”的静态校验，运行时每次 Check 才决定，因此创建者后来被收权时 job 会自然失效。
+
+## 验证边界
+
+- 本地 fake runner 能验证能力表与 Auth，不能证明真实 isolate 禁网、structured-clone 或 Loader 开通状态；部署冒烟必须覆盖真实 Loader。
+- Workflows 测试等待 TaskStore 状态，不轮询 runtime status 猜测 waiting。
+- signal 必须用触发者 principal 做 `task://` 授权；admin CLI 直调不能替代普通主体或渠道动作的验证。
+- `step.do` 与 waitForEvent 的 payload 应使用可序列化的浅层结构；递归 unknown/JSON 泛型会触发 RPC 类型深实例化问题，完整对象留在 TaskStore。
