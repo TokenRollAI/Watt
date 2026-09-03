@@ -138,7 +138,7 @@ export function createHtbpTools(deps: HtbpToolsDeps): HarnessTool[] {
     }
     const result = await executeToolRequest(
       env,
-      { toolPath: path, op, accept: 'text/plain' },
+      { toolPath: path, op, ...(op === 'skill' ? { accept: 'text/plain' } : {}) },
       {
         trim,
       },

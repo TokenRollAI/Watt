@@ -73,6 +73,7 @@ import { SecretStore } from '../secrets/secret-store.ts';
 import { defaultManagerDeps, TaskManager } from '../task/task-manager.ts';
 import type { ListOptions as TaskListOptions } from '../task/task-store.ts';
 import { type ListOptions as ToolListOptions, ToolRegistry } from '../tools/tool-registry.ts';
+import { executeToolBridgeAdmin, TOOLBRIDGE_ADMIN_ACTIONS } from '../tools/toolbridge-admin.ts';
 import { type AuthVars, authMiddleware } from './auth.ts';
 import { forbiddenResponse, wattErrorResponse } from './errors.ts';
 
@@ -82,6 +83,7 @@ const RES_EVENT = 'platform://event';
 const RES_CHANNEL = 'platform://channel';
 const RES_CONTEXT = 'platform://context';
 const RES_TOOL = 'platform://tool';
+const RES_TOOLBRIDGE = 'platform://toolbridge';
 const RES_AGENT = 'platform://agent';
 const RES_PROVIDER = 'platform://provider';
 const RES_TASK = 'platform://task';
@@ -782,6 +784,43 @@ export function platformRoutes(): Hono<{ Bindings: Bindings; Variables: AuthVars
         return c.json({ mount: result });
       }
     }
+  });
+
+  // ── POST /htbp/platform/toolbridge → Tool Bridge Admin SDK 管理面 ───────
+  // 覆盖 Tool Bridge SDK 管理能力：providers/publications/placements/hosts/endpoints/
+  // command policies/audit/legacy servers/bridge/tree。Watt 只做平台鉴权与错误形状转换，
+  // 真实操作通过 Admin SDK 走 TOOLBRIDGE service binding。
+  app.post('/htbp/platform/toolbridge', async (c) => {
+    const claims = c.get('claims');
+    const authorizer = newAuthorizer(c.env, c.get('callContext').traceId);
+
+    let call: HtbpCall;
+    try {
+      call = (await c.req.json()) as HtbpCall;
+    } catch {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', 'request body must be JSON', false),
+      );
+    }
+    const tool = call.tool;
+    const args = call.arguments ?? {};
+
+    const action = tool ? TOOLBRIDGE_ADMIN_ACTIONS[tool] : undefined;
+    if (action === undefined) {
+      return wattErrorResponse(
+        c,
+        wattError('invalid_argument', `unknown tool: ${String(tool)}`, false),
+      );
+    }
+    const decision = await authorizer.check(claims, RES_TOOLBRIDGE, action);
+    if (!decision.allow) {
+      return forbiddenResponse(c, decision.reason ?? 'access denied on platform://toolbridge');
+    }
+
+    const result = await executeToolBridgeAdmin(c.env, tool as string, args);
+    if (isWattError(result)) return wattErrorResponse(c, result);
+    return c.json(result);
   });
 
   // ── POST /htbp/platform/agent → AgentRegistry（§3.1）+ AgentRuntime（§3.2）────────

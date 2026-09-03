@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * check-vendor-patches.mjs — vendored 上游 patch 漂移守卫。
+ * check-vendor-patches.mjs — legacy vendored 上游 patch 漂移守卫。
  *
- * watt-toolbridge 的 vendor/ 源码整体照抄自上游 TokenRollAI/tool-bridge，唯一偏离是标注
- * `WATT VENDOR PATCH` 的 headless 部署改动（ASSETS 绑定可选：vendor/index.ts 的 fetch 兜底 +
- * vendor/types.d.ts 的 Env.ASSETS?）。重新 vendor（升级上游）时若 patch 被覆盖冲掉，headless
- * 部署会退回上游"必有 ASSETS"假设 → 运行时崩。此脚本锁定 patch 标记数量恒定，冲掉即 CI/verify 红。
+ * 当前 watt-toolbridge 运行时代码来自 npm 包 @tokenroll/tool-bridge；vendor/ 目录仅作为历史拷贝保留。
+ * 若后续重新启用 vendor 模式，此脚本用于确认 `WATT VENDOR PATCH` 的 headless 部署改动仍存在
+ * （ASSETS 绑定可选：vendor/index.ts 的 fetch 兜底 + vendor/types.d.ts 的 Env.ASSETS?）。
  *
  * 期望：vendor 代码内（index.ts + types.d.ts）恰好 EXPECTED_MARKS 处标记。改动 patch 时同步改常量。
  */

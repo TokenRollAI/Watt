@@ -17,3 +17,4 @@ minimumReleaseAgeExclude:
   - wrangler@4.107.0
   - '@ai-sdk/gateway@3.0.143'
   - ai@6.0.219
+  - '@tokenroll/tool-bridge@0.1.0'

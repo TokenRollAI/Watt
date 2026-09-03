@@ -15,5 +15,5 @@
     "noEmit": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*.ts", "vendor/**/*.ts", "vendor/**/*.d.ts"]
+  "include": ["src/**/*.ts"]
 }

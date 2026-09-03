@@ -107,6 +107,17 @@ export interface Bindings {
   ANTHROPIC_BASE_URL?: string;
   /** lurker scratch namespace TTL 秒（正整数串）——缺省 120（保 E2E 分钟级过期断言）；生产设 3600。 */
   LURKER_SCRATCH_TTL_SEC?: string;
+  /** Tool Bridge Host SDK 注册的 host id；缺省 watt。 */
+  WATT_TOOLBRIDGE_HOST_ID?: string;
+  /**
+   * Tool Bridge SDK key。默认只配这一把，用于 Host SDK 同步/调用与 Admin SDK 管理面。
+   * 若需要最小权限隔离，可改用下面两个分离 key。
+   */
+  WATT_TOOLBRIDGE_KEY?: string;
+  /** 可选：仅用于 Host SDK mounts.sync 与 /htbp 调用的 S2S key。 */
+  WATT_TOOLBRIDGE_HOST_KEY?: string;
+  /** 可选：仅用于 /htbp/platform/toolbridge 管理面的 Admin SDK key。 */
+  WATT_TOOLBRIDGE_ADMIN_KEY?: string;
   /** Root Key 的 SHA-256 摘要（hex，§6.5e）——明文永不进平台；缺省则 /oauth/root/token 报未启用。
    *  设置：scripts/set-root-key.mjs（生成/覆写，明文仅展示一次）或 watt init 向导。 */
   WATT_ROOT_KEY_HASH?: string;
